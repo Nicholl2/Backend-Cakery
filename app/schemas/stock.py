@@ -1,6 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from decimal import Decimal
 from enum import Enum
+from datetime import datetime
+from typing import Optional
 
 
 class SatuanEnum(str, Enum):
@@ -11,26 +13,37 @@ class SatuanEnum(str, Enum):
     liter = "liter"
 
 
+class KategoriEnum(str, Enum):
+    bahan_baku = "bahan_baku"
+    kemasan = "kemasan"
+
+
 class StockCreate(BaseModel):
-    nama_bahan: str
+    nama_item: str = Field(..., min_length=1, max_length=100)
     satuan: SatuanEnum
-    harga_per_satuan: Decimal
-    stok_tersedia: Decimal
+    kategori: KategoriEnum = KategoriEnum.bahan_baku
+    harga_per_satuan: Decimal = Field(..., ge=0, decimal_places=4)
+    stok_tersedia: Decimal = Field(..., ge=0, decimal_places=4)
 
 
 class StockUpdate(BaseModel):
-    nama_bahan: str | None = None
-    satuan: SatuanEnum | None = None
-    harga_per_satuan: Decimal | None = None
-    stok_tersedia: Decimal | None = None
+    nama_item: Optional[str] = Field(None, min_length=1, max_length=100)
+    satuan: Optional[SatuanEnum] = None
+    kategori: Optional[KategoriEnum] = None
+    harga_per_satuan: Optional[Decimal] = Field(None, ge=0)
+    stok_tersedia: Optional[Decimal] = Field(None, ge=0)
 
 
 class StockOut(BaseModel):
     id: int
-    nama_bahan: str
+    nama_item: str
     satuan: SatuanEnum
+    kategori: KategoriEnum
     harga_per_satuan: Decimal
     stok_tersedia: Decimal
+    version: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

@@ -1,0 +1,1 @@
+"""Toti Cakery Backend Application."""

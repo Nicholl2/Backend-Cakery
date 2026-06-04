@@ -1,4 +1,6 @@
-from sqlalchemy import Column, Integer, ForeignKey, Numeric
+from sqlalchemy import Column, Integer, ForeignKey, Numeric, DateTime
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 from app.core.database import Base
 
 
@@ -6,6 +8,13 @@ class Recipe(Base):
     __tablename__ = "recipes"
 
     id = Column(Integer, primary_key=True)
-    product_id = Column(Integer, ForeignKey("products.id"))
-    stock_item_id = Column(Integer, ForeignKey("stock_items.id"))
-    jumlah_dibutuhkan = Column(Numeric(10,2))
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    stock_item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False)
+    jumlah_dibutuhkan = Column(Numeric(10, 4), nullable=False)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    product = relationship("Product", back_populates="recipes")
+    stock_item = relationship("StockItem", back_populates="recipes")
