@@ -24,7 +24,7 @@ Follow the instructions below step-by-step via terminal (Terminal on Mac or Powe
 git clone [https://github.com/nicholl2/backend-cakery.git](https://github.com/nicholl2/backend-cakery.git)
 cd backend-cakery/Backend
 
-**### 2. Setup Virtual Environment (venv)**
+### 2. Setup Virtual Environment (venv)**
 python3 -m venv venv
 
 # Mac/Linux
@@ -33,11 +33,11 @@ source venv/bin/activate
 # Windows (PowerShell)
 .\venv\Scripts\Activate.ps1
 
-**### 3. Installing Library Dependencies**
+### 3. Installing Library Dependencies**
 pip install --upgrade pip
 pip install -r requirements.txt
 
-**### 4. Setup Local PostgreSQL 17 Database**
+### 4. Setup Local PostgreSQL 17 Database**
 # Install Postgres 17
 brew install postgresql@17
 
@@ -52,13 +52,13 @@ CREATE USER postgres WITH PASSWORD 'yourpassword' SUPERUSER;
 CREATE DATABASE toti_cakery OWNER postgres;
 \q
 
-**### 5. Environment (.env) File Configuration**
+### 5. Environment (.env) File Configuration**
 DATABASE_URL=copy-your-url
 SECRET_KEY=your-super-secret-key-change-this-in-production-
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=480
 
-**### 6. Run FastAPI Server**
+### 6. Run FastAPI Server**
 uvicorn app.main:app --reload
 
 ---
