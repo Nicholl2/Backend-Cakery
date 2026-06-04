@@ -1,22 +1,39 @@
-from app.models import *
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
+
+# Import database core & paksa muat semua skema model secara aman
 from app.core.database import Base, engine
+from app import models  # <-- Tambahkan ini untuk memicu pemuatan __all__ dari folder models
+
+# Import routers
+from app.api.routes import auth, faq, expense
 from app.api.routes.stock import router as stock_router
 from app.api.routes.pricing import router as pricing_router
 from app.api.routes.product import router as product_router
 from app.api.routes.recipe import router as recipe_router
 from app.api.routes.purchasing import router as purchasing_router
 
-app = FastAPI(title="Toti Cakery API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Sekarang Base.metadata sudah mengantongi daftar tabel dari __all__ dengan aman
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    pass
 
-app.include_router(pricing_router)
-app.include_router(stock_router)
-app.include_router(product_router)
-app.include_router(recipe_router)
-app.include_router(purchasing_router)
+app = FastAPI(
+    title="Toti Cakery API",
+    description="Bakery management system with inventory, products, and financial tracking",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
-Base.metadata.create_all(bind=engine)
-
-@app.get("/")
-def root():
-    return {"status": "ok", "app": "Toti Cakery Backend"}
+# Include routers
+app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+app.include_router(faq.router, prefix="/faq", tags=["FAQ Management"])
+app.include_router(expense.router, prefix="/expenses", tags=["Expenses"])
+app.include_router(stock_router, prefix="/stock", tags=["Stock Items"])
+app.include_router(pricing_router, prefix="/pricing", tags=["Pricing"])
+app.include_router(product_router, prefix="/products", tags=["Products"])
+app.include_router(recipe_router, prefix="/recipes", tags=["Recipes"])
+app.include_router(purchasing_router, prefix="/purchases", tags=["Purchasing"])
