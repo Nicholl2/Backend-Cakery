@@ -103,7 +103,7 @@ class PurchaseDetailOut(BaseModel):
     total_harga: Decimal
     catatan: Optional[str] = None
     is_received: bool
-    items: list[PurchaseItemOut]
+    items: list[PurchaseItemOut] = Field(validation_alias="purchase_items")
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

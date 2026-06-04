@@ -20,12 +20,11 @@ async def create_faq(
     )
     await db.commit()
 
-    # Refresh to load relationship
-    await db.refresh(faq)
+    faq_with_creator = await faq_repo.get_faq_by_id(db, faq.id)
 
     return FaqDetailResponse(
-        **faq.__dict__,
-        created_by_username=faq.created_by_user.username if faq.created_by_user else "Unknown"
+        **faq_with_creator.__dict__,
+        created_by_username=faq_with_creator.created_by_user.username if faq_with_creator.created_by_user else "Unknown"
     )
 
 

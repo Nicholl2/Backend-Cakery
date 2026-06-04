@@ -1,5 +1,7 @@
 from decimal import Decimal
-from sqlalchemy.orm import Session
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.models.recipe import Recipe
 from app.models.stock_item import StockItem
 from app.models.product import Product
@@ -8,58 +10,60 @@ from typing import Optional
 
 # ── Query dasar ──────────────────────────────────────────────────────────────
 
-def get_by_product(db: Session, product_id: int) -> list[Recipe]:
-    return (
-        db.query(Recipe)
-        .filter(Recipe.product_id == product_id)
-        .all()
+async def get_by_product(db: AsyncSession, product_id: int) -> list[Recipe]:
+    result = await db.execute(
+        select(Recipe)
+        .where(Recipe.product_id == product_id)
+        .options(selectinload(Recipe.stock_item))
     )
+    return result.scalars().all()
 
 
-def get_by_id(db: Session, recipe_id: int) -> Optional[Recipe]:
-    return db.query(Recipe).filter(Recipe.id == recipe_id).first()
+async def get_by_id(db: AsyncSession, recipe_id: int) -> Optional[Recipe]:
+    result = await db.execute(select(Recipe).where(Recipe.id == recipe_id))
+    return result.scalars().first()
 
 
-def get_by_product_and_stock(
-    db: Session, product_id: int, stock_item_id: int
+async def get_by_product_and_stock(
+    db: AsyncSession, product_id: int, stock_item_id: int
 ) -> Optional[Recipe]:
-    return (
-        db.query(Recipe)
-        .filter(
+    result = await db.execute(
+        select(Recipe)
+        .where(
             Recipe.product_id == product_id,
             Recipe.stock_item_id == stock_item_id,
         )
-        .first()
     )
+    return result.scalars().first()
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────
 
-def create(db: Session, product_id: int, stock_item_id: int, jumlah: Decimal) -> Recipe:
+async def create(db: AsyncSession, product_id: int, stock_item_id: int, jumlah: Decimal) -> Recipe:
     recipe = Recipe(
         product_id=product_id,
         stock_item_id=stock_item_id,
         jumlah_dibutuhkan=jumlah,
     )
     db.add(recipe)
-    db.flush()   # dapat id sebelum commit
+    await db.flush()   # dapat id sebelum commit
     return recipe
 
 
-def update_qty(db: Session, recipe: Recipe, jumlah: Decimal) -> Recipe:
+async def update_qty(db: AsyncSession, recipe: Recipe, jumlah: Decimal) -> Recipe:
     recipe.jumlah_dibutuhkan = jumlah
-    db.flush()
+    await db.flush()
     return recipe
 
 
-def delete(db: Session, recipe: Recipe) -> None:
-    db.delete(recipe)
-    db.flush()
+async def delete(db: AsyncSession, recipe: Recipe) -> None:
+    await db.delete(recipe)
+    await db.flush()
 
 
 # ── HPP Calculation ──────────────────────────────────────────────────────────
 
-def calculate_hpp(db: Session, product_id: int) -> tuple[Decimal, list[dict]]:
+async def calculate_hpp(db: AsyncSession, product_id: int) -> tuple[Decimal, list[dict]]:
     """
     Hitung HPP dari seluruh bahan dalam resep produk.
     Menggunakan harga_per_satuan terkini (average costing) dari stock_items.
@@ -67,8 +71,8 @@ def calculate_hpp(db: Session, product_id: int) -> tuple[Decimal, list[dict]]:
     Returns:
         (hpp_total, breakdown_list)
     """
-    rows = (
-        db.query(
+    result = await db.execute(
+        select(
             Recipe.jumlah_dibutuhkan,
             StockItem.harga_per_satuan,
             StockItem.nama_item,
@@ -77,9 +81,9 @@ def calculate_hpp(db: Session, product_id: int) -> tuple[Decimal, list[dict]]:
             Recipe.stock_item_id,
         )
         .join(StockItem, Recipe.stock_item_id == StockItem.id)
-        .filter(Recipe.product_id == product_id)
-        .all()
+        .where(Recipe.product_id == product_id)
     )
+    rows = result.all()
 
     total = Decimal("0")
     detail = []
@@ -98,14 +102,15 @@ def calculate_hpp(db: Session, product_id: int) -> tuple[Decimal, list[dict]]:
     return total, detail
 
 
-def sync_hpp_to_product(db: Session, product_id: int) -> Decimal:
+async def sync_hpp_to_product(db: AsyncSession, product_id: int) -> Decimal:
     """
     Hitung ulang HPP lalu simpan ke products.hpp_total.
     Dipanggil setiap kali resep berubah ATAU harga bahan berubah.
     """
-    hpp, _ = calculate_hpp(db, product_id)
-    db.query(Product).filter(Product.id == product_id).update(
-        {"hpp_total": hpp},
-        synchronize_session="fetch",
+    hpp, _ = await calculate_hpp(db, product_id)
+    await db.execute(
+        update(Product)
+        .where(Product.id == product_id)
+        .values(hpp_total=hpp)
     )
     return hpp

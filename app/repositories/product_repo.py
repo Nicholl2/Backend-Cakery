@@ -1,52 +1,55 @@
 from decimal import Decimal
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.product import Product
 from app.models.price_history import PriceHistory
 from app.schemas.product import ProductCreate, ProductUpdate
 from typing import Optional
 
 
-def create(db: Session, data: ProductCreate) -> Product:
+async def create(db: AsyncSession, data: ProductCreate) -> Product:
     product = Product(**data.model_dump())
     db.add(product)
-    db.commit()
-    db.refresh(product)
+    await db.commit()
+    await db.refresh(product)
     return product
 
 
-def get_by_id(db: Session, product_id: int) -> Optional[Product]:
-    return db.query(Product).filter(Product.id == product_id).first()
+async def get_by_id(db: AsyncSession, product_id: int) -> Optional[Product]:
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    return result.scalars().first()
 
 
-def get_all(
-    db: Session,
+async def get_all(
+    db: AsyncSession,
     only_active: bool = False,
     kategori: Optional[str] = None,
 ) -> list[Product]:
-    q = db.query(Product)
+    q = select(Product)
     if only_active:
-        q = q.filter(Product.is_active == True)
+        q = q.where(Product.is_active == True)
     if kategori:
-        q = q.filter(Product.kategori == kategori)
-    return q.order_by(Product.nama_produk).all()
+        q = q.where(Product.kategori == kategori)
+    result = await db.execute(q.order_by(Product.nama_produk))
+    return result.scalars().all()
 
 
-def update(db: Session, product: Product, data: ProductUpdate) -> Product:
+async def update(db: AsyncSession, product: Product, data: ProductUpdate) -> Product:
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(product, field, value)
-    db.commit()
-    db.refresh(product)
+    await db.commit()
+    await db.refresh(product)
     return product
 
 
-def delete(db: Session, product: Product) -> bool:
-    db.delete(product)
-    db.commit()
+async def delete(db: AsyncSession, product: Product) -> bool:
+    await db.delete(product)
+    await db.commit()
     return True
 
 
-def set_price(
-    db: Session,
+async def set_price(
+    db: AsyncSession,
     product: Product,
     harga_jual_baru: Decimal,
     changed_by: Optional[str] = None,
@@ -65,15 +68,15 @@ def set_price(
     db.add(history)
 
     product.harga_jual = harga_jual_baru
-    db.commit()
-    db.refresh(product)
+    await db.commit()
+    await db.refresh(product)
     return product
 
 
-def get_price_history(db: Session, product_id: int) -> list[PriceHistory]:
-    return (
-        db.query(PriceHistory)
-        .filter(PriceHistory.product_id == product_id)
+async def get_price_history(db: AsyncSession, product_id: int) -> list[PriceHistory]:
+    result = await db.execute(
+        select(PriceHistory)
+        .where(PriceHistory.product_id == product_id)
         .order_by(PriceHistory.created_at.desc())
-        .all()
     )
+    return result.scalars().all()

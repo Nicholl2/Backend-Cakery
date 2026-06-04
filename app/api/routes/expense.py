@@ -67,18 +67,6 @@ async def list_expenses(
     )
 
 
-@router.get("/{expense_id}", response_model=ExpenseDetailResponse, status_code=status.HTTP_200_OK)
-async def get_expense(
-    expense_id: int,
-    user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db)
-) -> ExpenseDetailResponse:
-    """
-    Get single expense by ID (Authenticated users only).
-    """
-    return await expense_service.get_expense(db, expense_id)
-
-
 @router.get("/summary/dashboard", status_code=status.HTTP_200_OK)
 async def get_expenses_summary(
     start_date: Optional[datetime] = Query(None),
@@ -95,3 +83,15 @@ async def get_expenses_summary(
     - **end_date**: Optional period end date
     """
     return await expense_service.get_expenses_summary(db, start_date, end_date)
+
+
+@router.get("/{expense_id}", response_model=ExpenseDetailResponse, status_code=status.HTTP_200_OK)
+async def get_expense(
+    expense_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db)
+) -> ExpenseDetailResponse:
+    """
+    Get single expense by ID (Authenticated users only).
+    """
+    return await expense_service.get_expense(db, expense_id)

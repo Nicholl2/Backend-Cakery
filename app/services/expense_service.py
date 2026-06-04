@@ -22,12 +22,11 @@ async def create_expense(
     )
     await db.commit()
 
-    # Refresh to load relationship
-    await db.refresh(expense)
+    expense_with_recorder = await expense_repo.get_expense_by_id(db, expense.id)
 
     return ExpenseDetailResponse(
-        **expense.__dict__,
-        recorded_by_username=expense.recorded_by_user.username if expense.recorded_by_user else "Unknown"
+        **expense_with_recorder.__dict__,
+        recorded_by_username=expense_with_recorder.recorded_by_user.username if expense_with_recorder.recorded_by_user else "Unknown"
     )
 
 

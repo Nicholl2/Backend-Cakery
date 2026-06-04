@@ -1,45 +1,52 @@
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.models.stock_item import StockItem
 from app.schemas.stock import StockCreate, StockUpdate
 from typing import Optional
 
 
-def create(db: Session, data: StockCreate) -> StockItem:
+async def create(db: AsyncSession, data: StockCreate) -> StockItem:
     item = StockItem(**data.model_dump())
     db.add(item)
-    db.commit()
-    db.refresh(item)
+    await db.commit()
+    await db.refresh(item)
     return item
 
 
-def get_by_id(db: Session, stock_id: int) -> Optional[StockItem]:
-    return db.query(StockItem).filter(StockItem.id == stock_id).first()
+async def get_by_id(db: AsyncSession, stock_id: int) -> Optional[StockItem]:
+    result = await db.execute(
+        select(StockItem)
+        .where(StockItem.id == stock_id)
+        .options(selectinload(StockItem.recipes))
+    )
+    return result.scalars().first()
 
 
-def get_all(db: Session, kategori: Optional[str] = None) -> list[StockItem]:
-    q = db.query(StockItem)
+async def get_all(db: AsyncSession, kategori: Optional[str] = None) -> list[StockItem]:
+    q = select(StockItem)
     if kategori:
-        q = q.filter(StockItem.kategori == kategori)
-    return q.order_by(StockItem.nama_bahan).all()
+        q = q.where(StockItem.kategori == kategori)
+    result = await db.execute(q.order_by(StockItem.nama_item))
+    return result.scalars().all()
 
 
-def update(db: Session, item: StockItem, data: StockUpdate) -> StockItem:
+async def update(db: AsyncSession, item: StockItem, data: StockUpdate) -> StockItem:
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(item, field, value)
-    db.commit()
-    db.refresh(item)
+    await db.commit()
+    await db.refresh(item)
     return item
 
 
-def delete(db: Session, item: StockItem) -> bool:
-    db.delete(item)
-    db.commit()
+async def delete(db: AsyncSession, item: StockItem) -> bool:
+    await db.delete(item)
+    await db.commit()
     return True
 
 
-def update_average_cost(
-    db: Session,
+async def update_average_cost(
+    db: AsyncSession,
     stock_id: int,
     qty_masuk: float,
     harga_beli_total: float,
@@ -51,7 +58,12 @@ def update_average_cost(
         harga_baru = (stok_lama * harga_lama + qty_masuk * harga_satuan_baru)
                      / (stok_lama + qty_masuk)
     """
-    item = db.query(StockItem).with_for_update().filter(StockItem.id == stock_id).first()
+    result = await db.execute(
+        select(StockItem)
+        .where(StockItem.id == stock_id)
+        .with_for_update()
+    )
+    item = result.scalars().first()
     if not item:
         return None
 
@@ -71,6 +83,6 @@ def update_average_cost(
     item.stok_tersedia = stok_lama + qty_masuk
     item.version += 1
 
-    db.commit()
-    db.refresh(item)
+    await db.commit()
+    await db.refresh(item)
     return item

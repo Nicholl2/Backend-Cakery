@@ -21,6 +21,8 @@ class User(Base):
     role = relationship("Role")
     faq_items = relationship("FaqItem", back_populates="created_by_user", foreign_keys="FaqItem.created_by")
     expenses = relationship("Expense", back_populates="recorded_by_user")
+    stock_items_updated = relationship("StockItem", back_populates="last_updated_by_user")
+    purchase_orders = relationship("Purchase", back_populates="created_by_user")
 
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username}, role_id={self.role_id})>"
