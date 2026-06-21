@@ -7,7 +7,6 @@ from app.api.dependencies import get_current_user_id, require_admin_or_owner
 from typing import List
 
 router = APIRouter(
-    prefix="/faq",
     tags=["FAQ Items"],
     responses={
         401: {"description": "Unauthorized - missing or invalid token"},

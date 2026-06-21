@@ -6,7 +6,7 @@ from app.core.database import get_db
 from app.schemas.stock import StockCreate, StockUpdate, StockOut
 from app.services import stock_service
 
-router = APIRouter(prefix="/stock-items", tags=["Stock Items"])
+router = APIRouter( tags=["Stock Items"])
 
 
 @router.post("/", response_model=StockOut, status_code=201,

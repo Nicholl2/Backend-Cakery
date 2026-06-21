@@ -8,7 +8,6 @@ from typing import List, Optional
 from datetime import datetime
 
 router = APIRouter(
-    prefix="/expenses",
     tags=["Expenses"],
     responses={
         401: {"description": "Unauthorized - missing or invalid token"},

@@ -1,11 +1,9 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
-# Import database core & paksa muat semua skema model secara aman
+# Import database core
 from app.core.database import Base, engine
-from app import models  # <-- Tambahkan ini untuk memicu pemuatan __all__ dari folder models
-
-# Import routers
+from app import models  
 from app.api.routes import auth, faq, expense
 from app.api.routes.stock import router as stock_router
 from app.api.routes.pricing import router as pricing_router
@@ -15,7 +13,6 @@ from app.api.routes.purchasing import router as purchasing_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Sekarang Base.metadata sudah mengantongi daftar tabel dari __all__ dengan aman
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield

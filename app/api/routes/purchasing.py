@@ -14,7 +14,7 @@ from app.schemas.purchasing import (
 )
 from app.services import purchasing_service
 
-router = APIRouter(prefix="/purchasing", tags=["Purchasing"])
+router = APIRouter(tags=["Purchasing"])
 
 
 # ── SUPPLIER ROUTES ──────────────────────────────────────────────────────────

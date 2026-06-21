@@ -5,7 +5,6 @@ from app.schemas.auth import UserLogin, Token
 from app.services import auth_service
 
 router = APIRouter(
-    prefix="/auth",
     tags=["Authentication"],
     responses={
         401: {"description": "Invalid credentials or unauthorized"},

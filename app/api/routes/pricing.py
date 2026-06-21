@@ -4,7 +4,7 @@ from app.core.database import get_db
 from app.services.pricing_service import calculate_hpp, apply_margin
 from app.schemas.pricing import PricingResponse
 
-router = APIRouter(prefix="/pricing", tags=["Pricing"])
+router = APIRouter( tags=["Pricing"])
 
 
 @router.get("/product/{product_id}")

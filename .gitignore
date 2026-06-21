@@ -2,6 +2,7 @@
 venv/
 .venv/
 env/
+CONTEXT.md
 
 
 **/__pycache__/

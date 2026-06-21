@@ -6,7 +6,7 @@ from app.schemas.recipe import RecipeCreate, RecipeUpdate, RecipeSummary
 from app.services import recipe_service
 
 router = APIRouter(
-    prefix="/products/{product_id}/recipes",
+    prefix="/{product_id}/recipes",
     tags=["Recipes (BOM)"],
 )
 
