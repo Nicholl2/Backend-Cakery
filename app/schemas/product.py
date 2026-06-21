@@ -1,8 +1,12 @@
-from pydantic import BaseModel, Field
-from decimal import Decimal
+from pydantic import BaseModel, Field, field_validator
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from datetime import datetime
 
+def _round2(v) -> Optional[Decimal]:
+    if v is None:
+        return None
+    return Decimal(str(v)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 # ── CREATE ──────────────────────────────────────────────────────────────────
 class ProductCreate(BaseModel):
@@ -38,7 +42,10 @@ class SetPriceResponse(BaseModel):
         False,
         description="True jika harga_jual < hpp_total (peringatan ke Owner)"
     )
-
+    @field_validator('hpp_total', 'harga_jual_baru', mode='before')
+    @classmethod
+    def round_money(cls, v):
+        return _round2(v)
 
 # ── OUT ──────────────────────────────────────────────────────────────────────
 class ProductOut(BaseModel):
@@ -54,6 +61,18 @@ class ProductOut(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+    @field_validator('hpp_total', 'harga_jual', mode='before')
+    @classmethod
+    def round_money(cls, v):
+        return _round2(v)
+
+    @field_validator('markup_percentage', mode='before')
+    @classmethod
+    def round_markup(cls, v):
+        if v is None:
+            return None
+        return Decimal(str(v)).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+
     class Config:
         from_attributes = True
 
@@ -65,6 +84,12 @@ class CostDetail(BaseModel):
     qty: float
     unit_price: float
     cost: float
+    @field_validator('unit_price', 'cost', mode='before')
+    @classmethod
+    def round_float(cls, v):
+        if v is None:
+            return v
+        return round(float(v), 2)
 
 
 class PricingResponse(BaseModel):
@@ -75,6 +100,10 @@ class PricingResponse(BaseModel):
     margin_persen: Optional[float] = None
     warning_below_hpp: bool = False
     breakdown: list[CostDetail]
+    @field_validator('hpp', 'harga_jual', mode='before')
+    @classmethod
+    def round_money(cls, v):
+        return _round2(v)
 
 
 # ── PRICE HISTORY OUT ────────────────────────────────────────────────────────
