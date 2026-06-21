@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from decimal import Decimal
+from pydantic import BaseModel, Field, field_validator
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from datetime import datetime
 from typing import Optional
@@ -44,6 +44,14 @@ class StockOut(BaseModel):
     version: int
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    @field_validator('harga_per_satuan', mode='before')
+    @classmethod
+    def round_money(cls, v):
+        return Decimal(str(v)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    @field_validator('stok_tersedia', mode='before')
+    @classmethod
+    def round_stock(cls, v):
+        return Decimal(str(v)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
 
     class Config:
         from_attributes = True

@@ -71,7 +71,7 @@ class ProductOut(BaseModel):
     def round_markup(cls, v):
         if v is None:
             return None
-        return Decimal(str(v)).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+        return Decimal(str(v)).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP)
 
     class Config:
         from_attributes = True
