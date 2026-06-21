@@ -8,12 +8,13 @@ class Settings(BaseSettings):
     secret_key: str = "your-secret-key-change-in-production"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 480
+    service_api_key: str = "change-this-service-key"
 
     # Menggunakan model_config (Standar Pydantic v2 untuk membaca .env)
     model_config = SettingsConfigDict(
         env_file=".env", 
         env_file_encoding="utf-8", 
-        extra="ignore" # Mengabaikan variabel lain di .env yang tidak dideklarasikan di sini
+        extra="ignore"
     )
 
 

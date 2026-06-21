@@ -50,6 +50,7 @@ class ProductOut(BaseModel):
     harga_jual: Optional[Decimal] = None
     markup_percentage: Optional[Decimal] = None
     is_active: bool
+    image_url: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

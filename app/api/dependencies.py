@@ -1,3 +1,5 @@
+from fastapi import Header
+from app.core.config import settings
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer
 from fastapi.security.http import HTTPAuthorizationCredentials
@@ -40,6 +42,16 @@ async def get_current_user_role_level(
 ) -> int:
     """Extract role level from token"""
     return int(payload.get("role_level", 3))
+
+async def require_service_key(
+    x_service_key: str = Header(None, alias="X-Service-Key")
+) -> None:
+    """Validate internal service key untuk chatbot / service-to-service calls."""
+    if not x_service_key or x_service_key != settings.service_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid service key"
+        )
 
 
 def require_role(required_level: int):
