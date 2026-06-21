@@ -1,7 +1,3 @@
-"""
-Purchasing service for managing suppliers and purchase orders.
-"""
-
 from decimal import Decimal
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,12 +9,10 @@ from app.schemas.purchasing import (
     SupplierCreate, SupplierUpdate,
     PurchaseCreate, PurchaseUpdate,
 )
-from app.repositories import stock_repo
+from app.repositories import stock_repo, product_repo
 from app.utils.pricing import calculate_product_price
+from app.models.recipe import Recipe
 from typing import Optional
-
-
-# ── SUPPLIER SERVICE ────────────────────────────────────────────────────────
 
 async def create_supplier(db: AsyncSession, data: SupplierCreate) -> Supplier:
     """Create a new supplier."""
@@ -96,15 +90,8 @@ async def create_purchase(
     data: PurchaseCreate,
     created_by_user_id: int,
 ) -> Purchase:
-    """
-    Create a purchase order with items.
-    
-    After saving, triggers price recalculation for affected products.
-    """
-    # Verify supplier exists
     await get_supplier_or_404(db, data.supplier_id)
-    
-    # Create purchase
+
     purchase = Purchase(
         supplier_id=data.supplier_id,
         created_by=created_by_user_id,
@@ -113,14 +100,12 @@ async def create_purchase(
         total_harga=Decimal("0"),
     )
     db.add(purchase)
-    await db.flush()  # Get purchase ID before adding items
-    
+    await db.flush()
+
     total_harga = Decimal("0")
-    affected_stock_items = set()
-    
-    # Add purchase items
+    affected_stock_ids: set[int] = set()
+
     for item_data in data.items:
-        # Verify stock item exists
         result = await db.execute(select(StockItem).where(StockItem.id == item_data.stock_item_id))
         stock_item = result.scalars().first()
         if not stock_item:
@@ -129,31 +114,33 @@ async def create_purchase(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Stock item {item_data.stock_item_id} tidak ditemukan.",
             )
-        
-        # Calculate total price for this item
+
         harga_total = item_data.jumlah * item_data.harga_satuan
-        
-        # Create purchase item
-        purchase_item = PurchaseItem(
+        db.add(PurchaseItem(
             purchase_id=purchase.id,
             stock_item_id=item_data.stock_item_id,
             jumlah=item_data.jumlah,
             harga_satuan=item_data.harga_satuan,
             harga_total=harga_total,
-        )
-        db.add(purchase_item)
+        ))
         total_harga += harga_total
-        affected_stock_items.add(item_data.stock_item_id)
-    
-    # Update purchase total
+        affected_stock_ids.add(item_data.stock_item_id)
+
     purchase.total_harga = total_harga
     await db.commit()
     await db.refresh(purchase)
-    
-    # Trigger price recalculation for affected products
-    # This would be done via a task queue in production
-    # For now, we'll skip it as it's an async operation
-    
+
+    # ── TRIGGER: recalculate HPP semua produk yang pakai bahan yang dibeli ──
+    for stock_id in affected_stock_ids:
+        rows = await db.execute(
+            select(Recipe.product_id)
+            .where(Recipe.stock_item_id == stock_id)
+            .distinct()
+        )
+        for (pid,) in rows.all():
+            await product_repo.calculate_and_update_product_price(db, pid)
+    # ─────────────────────────────────────────────────────────────────────────
+
     return purchase
 
 
@@ -162,7 +149,6 @@ async def get_all_purchases(
     only_received: Optional[bool] = None,
     supplier_id: Optional[int] = None,
 ) -> list[Purchase]:
-    """Get all purchases with optional filters."""
     q = select(Purchase)
     if only_received is not None:
         q = q.where(Purchase.is_received == only_received)
@@ -173,7 +159,6 @@ async def get_all_purchases(
 
 
 async def get_purchase_or_404(db: AsyncSession, purchase_id: int) -> Purchase:
-    """Get purchase by ID or raise 404."""
     result = await db.execute(
         select(Purchase)
         .where(Purchase.id == purchase_id)
@@ -181,41 +166,38 @@ async def get_purchase_or_404(db: AsyncSession, purchase_id: int) -> Purchase:
     )
     purchase = result.scalars().first()
     if not purchase:
-        raise HTTPException(status_code=404, detail="Pemesanan tidak ditemukan.")
+        raise HTTPException(404, "Pemesanan tidak ditemukan.")
     return purchase
 
 
 async def update_purchase(
     db: AsyncSession, purchase_id: int, data: PurchaseUpdate
 ) -> Purchase:
-    """Update a purchase."""
     purchase = await get_purchase_or_404(db, purchase_id)
-    
-    # Don't allow editing of received purchases
+
     if purchase.is_received and data.is_received is False:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Tidak dapat mengubah status pemesanan yang sudah diterima.",
         )
-    
+
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(purchase, field, value)
-    
+
     await db.commit()
     await db.refresh(purchase)
     return purchase
 
 
 async def delete_purchase(db: AsyncSession, purchase_id: int) -> bool:
-    """Delete a purchase if it hasn't been received."""
     purchase = await get_purchase_or_404(db, purchase_id)
-    
+
     if purchase.is_received:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Tidak dapat menghapus pemesanan yang sudah diterima.",
         )
-    
+
     await db.delete(purchase)
     await db.commit()
     return True

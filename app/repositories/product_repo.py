@@ -1,7 +1,9 @@
-from decimal import Decimal
-from sqlalchemy import select
+from decimal import Decimal, ROUND_HALF_UP
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.product import Product
+from app.models.recipe import Recipe
+from app.models.stock_item import StockItem
 from app.models.price_history import PriceHistory
 from app.schemas.product import ProductCreate, ProductUpdate
 from typing import Optional
@@ -80,3 +82,47 @@ async def get_price_history(db: AsyncSession, product_id: int) -> list[PriceHist
         .order_by(PriceHistory.created_at.desc())
     )
     return result.scalars().all()
+
+async def calculate_and_update_product_price(
+    db: AsyncSession,
+    product_id: int,
+) -> Optional[Product]:
+    """
+    Hitung ulang HPP + harga_jual lalu simpan ke DB.
+    Sumber harga: harga_per_satuan terkini dari stock_items (average costing).
+    Dipanggil setiap kali resep atau harga bahan berubah.
+    """
+    # 1. Ambil product
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    product = result.scalars().first()
+    if not product:
+        return None
+
+    # 2. Hitung HPP dari resep × harga_per_satuan terkini
+    hpp_result = await db.execute(
+        select(
+            func.sum(Recipe.jumlah_dibutuhkan * StockItem.harga_per_satuan)
+        )
+        .join(StockItem, Recipe.stock_item_id == StockItem.id)
+        .where(Recipe.product_id == product_id)
+    )
+    hpp_total = hpp_result.scalar() or Decimal("0")
+    hpp_total = Decimal(str(hpp_total)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    # 3. Hitung harga_jual jika markup tersedia
+    markup = product.markup_percentage or Decimal("0")
+    harga_jual = (hpp_total * (Decimal("1") + Decimal(str(markup)))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    ) if markup else product.harga_jual  # jaga harga manual jika markup = 0
+
+    # 4. Update & commit
+    await db.execute(
+        update(Product)
+        .where(Product.id == product_id)
+        .values(hpp_total=hpp_total, harga_jual=harga_jual)
+    )
+    await db.commit()
+
+    product.hpp_total = hpp_total
+    product.harga_jual = harga_jual
+    return product
