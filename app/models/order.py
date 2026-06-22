@@ -52,7 +52,6 @@ class Order(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Relationships
     customer = relationship("Customer", back_populates="orders")
     order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     invoice = relationship("Invoice", back_populates="order", uselist=False, cascade="all, delete-orphan")
@@ -72,7 +71,6 @@ class OrderItem(Base):
     subtotal = Column(Numeric(10, 2), nullable=False)
     hpp_snapshot = Column(Numeric(10, 2), nullable=False)
 
-    # Relationships
     order = relationship("Order", back_populates="order_items")
     product = relationship("Product")
 
@@ -96,8 +94,8 @@ class Invoice(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Relationships
     order = relationship("Order", back_populates="invoice")
+    payments = relationship("Payment", back_populates="invoice")
 
     def __repr__(self):
         return f"<Invoice(id={self.id}, nomor_invoice={self.nomor_invoice}, status={self.status})>"

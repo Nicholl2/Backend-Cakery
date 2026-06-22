@@ -3,6 +3,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 
 from app.models.order import Order, OrderItem, Invoice, OrderStatusEnum, InvoiceStatusEnum
+from app.models.customer import Customer
 from typing import Optional
 
 

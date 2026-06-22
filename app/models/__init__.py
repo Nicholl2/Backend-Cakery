@@ -10,6 +10,7 @@ from .faq_item import FaqItem
 from .expense import Expense
 from .customer import Customer
 from .order import Order, OrderItem, Invoice
+from .payment import Payment
 
 __all__ = [
     "Base",
@@ -27,5 +28,7 @@ __all__ = [
     "Customer",
     "Order",
     "OrderItem",
-    "Invoice"
+    "Invoice",
+    "Payment",
+
 ]
