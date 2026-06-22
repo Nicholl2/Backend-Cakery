@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
 from sqlalchemy.sql import func
 from app.core.database import Base
+from sqlalchemy.orm import relationship
 
 
 class Customer(Base):
@@ -15,9 +16,9 @@ class Customer(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Human Takeover
     human_takeover_active = Column(Boolean, default=False, nullable=False)
     takeover_expires_at = Column(DateTime(timezone=True), nullable=True)
+    orders = relationship("Order", back_populates="customer")
 
     def __repr__(self):
         return f"<Customer(id={self.id}, nomor_wa={self.nomor_wa}, takeover={self.human_takeover_active})>"

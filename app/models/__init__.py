@@ -9,6 +9,7 @@ from .user import User
 from .faq_item import FaqItem
 from .expense import Expense
 from .customer import Customer
+from .order import Order, OrderItem, Invoice
 
 __all__ = [
     "Base",
@@ -24,4 +25,7 @@ __all__ = [
     "FaqItem",
     "Expense",
     "Customer",
+    "Order",
+    "OrderItem",
+    "Invoice"
 ]

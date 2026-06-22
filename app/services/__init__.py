@@ -5,6 +5,7 @@ from . import recipe_service
 from . import pricing_service
 from . import purchasing_service
 from . import customer_service
+from . import order_service
 
 __all__ = [
     "stock_service",
@@ -13,4 +14,5 @@ __all__ = [
     "pricing_service",
     "purchasing_service",
     "customer_service",
+    "order_service",
 ]
