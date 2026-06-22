@@ -5,11 +5,11 @@ from .stock_item import StockItem
 from .price_history import PriceHistory
 from .purchasing import Supplier, Purchase, PurchaseItem
 from .role import Role
-from .user import User  # Amankan satu sumber model User di sini
+from .user import User  
 from .faq_item import FaqItem
 from .expense import Expense
+from .customer import Customer
 
-# Pastikan SEMUA model masuk ke sini agar otomatis ter-generate saat startup aplikasi
 __all__ = [
     "Base",
     "Product",
@@ -22,5 +22,6 @@ __all__ = [
     "Role",
     "User",
     "FaqItem",
-    "Expense"
+    "Expense",
+    "Customer",
 ]

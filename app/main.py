@@ -10,6 +10,7 @@ from app.api.routes.pricing import router as pricing_router
 from app.api.routes.product import router as product_router
 from app.api.routes.recipe import router as recipe_router
 from app.api.routes.purchasing import router as purchasing_router
+from app.api.routes.customer import router as customer_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,3 +35,4 @@ app.include_router(pricing_router, prefix="/pricing", tags=["Pricing"])
 app.include_router(product_router, prefix="/products", tags=["Products"])
 app.include_router(recipe_router, prefix="/recipes", tags=["Recipes"])
 app.include_router(purchasing_router, prefix="/purchases", tags=["Purchasing"])
+app.include_router(customer_router, prefix="/customers", tags=["Customers"])
