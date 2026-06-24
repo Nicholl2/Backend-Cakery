@@ -9,7 +9,7 @@ try:
     from app.models.stock_item import StockItem
     from app.models.product import Product
     from app.models.recipe import Recipe
-    from app.models.auth import User
+    from app.models.user import User
     from app.models.price_history import PriceHistory
     from app.models.purchasing import Supplier, Purchase, PurchaseItem
     print("✓ All models imported successfully")

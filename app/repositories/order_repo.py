@@ -56,3 +56,30 @@ async def get_order_with_details(db: AsyncSession, order_id: int) -> Optional[Or
         )
     )
     return result.scalars().first()
+
+
+async def get_latest_order_by_wa(db: AsyncSession, nomor_wa: str) -> Optional[Order]:
+    result = await db.execute(
+        select(Order)
+        .join(Customer, Customer.id == Order.customer_id)
+        .where(Customer.nomor_wa == nomor_wa)
+        .order_by(Order.created_at.desc())
+        .options(
+            selectinload(Order.customer),
+            selectinload(Order.invoice),
+            selectinload(Order.order_items),
+        )
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def get_order_by_id(db: AsyncSession, order_id: int) -> Optional[Order]:
+    result = await db.execute(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(
+            selectinload(Order.invoice),
+        )
+    )
+    return result.scalars().first()

@@ -1,12 +1,18 @@
 from datetime import datetime
 from decimal import Decimal
+import logging
+import httpx
 
 from fastapi import HTTPException, status
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.models.order import Order, OrderItem, Invoice, MetodePengirimanEnum, OrderStatusEnum, InvoiceStatusEnum
 from app.models.product import Product
+from app.models.payment import Payment, PaymentStatusEnum
 from app.repositories import order_repo
 
 
@@ -113,3 +119,77 @@ async def create_new_order(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Gagal membuat order: {str(e)}",
         )
+
+
+async def get_customer_latest_order(db: AsyncSession, nomor_wa: str) -> Order:
+    order = await order_repo.get_latest_order_by_wa(db, nomor_wa)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pelanggan belum memiliki pesanan",
+        )
+    
+    amount_paid = Decimal("0.00")
+    if order.invoice:
+        payment_query = await db.execute(
+            select(func.sum(Payment.jumlah_bayar))
+            .where(
+                Payment.invoice_id == order.invoice.id,
+                Payment.payment_status == PaymentStatusEnum.success,
+            )
+        )
+        sum_result = payment_query.scalar()
+        if sum_result is not None:
+            amount_paid = Decimal(str(sum_result))
+            
+    if order.invoice:
+        amount_due = Decimal(str(order.invoice.total_tagihan)) - amount_paid
+    else:
+        amount_due = Decimal("0.00")
+        
+    order.amount_paid = amount_paid
+    order.amount_due = amount_due
+    
+    return order
+
+
+async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
+    order = await order_repo.get_order_by_id(db, order_id)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order tidak ditemukan",
+        )
+        
+    if not order.invoice or order.invoice.status != InvoiceStatusEnum.unpaid:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Pesanan yang sudah dibayar atau dicicil tidak dapat dibatalkan secara otomatis",
+        )
+        
+    order.status = OrderStatusEnum.cancelled
+    await db.commit()
+    
+    return {"status": "success", "message": "Pesanan berhasil dibatalkan"}
+
+
+async def update_order_status(db: AsyncSession, order_id: int, new_status: OrderStatusEnum) -> Order:
+    order = await order_repo.get_order_by_id(db, order_id)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order tidak ditemukan",
+        )
+        
+    order.status = new_status
+    await db.commit()
+    
+    if new_status == OrderStatusEnum.ready:
+        try:
+            url = f"{settings.chatbot_url}/webhook/internal/orders/{order.id}/ready"
+            async with httpx.AsyncClient() as client:
+                await client.post(url, json={})
+        except Exception as e:
+            logger.error(f"Failed to send webhook push notification for order {order.id}: {e}")
+            
+    return order

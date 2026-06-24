@@ -5,6 +5,7 @@ from . import recipe_repo
 from . import pricing_repo
 from . import customer_repo
 from . import order_repo
+from . import payment_repo
 
 __all__ = [
     "stock_repo",
@@ -13,4 +14,5 @@ __all__ = [
     "pricing_repo",
     "customer_repo",
     "order_repo",
+    "payment_repo",
 ]

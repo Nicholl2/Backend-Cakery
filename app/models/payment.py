@@ -1,7 +1,7 @@
 import enum
 from decimal import Decimal
 
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, DateTime, Enum as SAEnum
+from sqlalchemy import Column, Integer, String, Text, Numeric, ForeignKey, DateTime, Enum as SAEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -40,6 +40,8 @@ class Payment(Base):
         default=PaymentTypeEnum.final,
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    va_number = Column(String(50), nullable=True)
+    qris_url = Column(Text, nullable=True)
 
     # Relationships
     invoice = relationship("Invoice", back_populates="payments")

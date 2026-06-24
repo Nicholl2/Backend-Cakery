@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -31,3 +31,22 @@ async def create_order(
         created_via=data.created_via,
     )
     return OrderOut.model_validate(order)
+
+
+@router.get("/latest", response_model=OrderOut, dependencies=[Depends(require_service_key)],
+            summary="Ambil order terbaru customer berdasarkan nomor WA")
+async def get_latest_order(
+    nomor_wa: str = Query(..., description="Nomor WhatsApp customer"),
+    db: AsyncSession = Depends(get_db),
+) -> OrderOut:
+    order = await order_service.get_customer_latest_order(db, nomor_wa)
+    return OrderOut.model_validate(order)
+
+
+@router.post("/{order_id}/cancel", dependencies=[Depends(require_service_key)],
+             summary="Batalkan order customer")
+async def cancel_order(
+    order_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    return await order_service.cancel_order_by_customer(db, order_id)

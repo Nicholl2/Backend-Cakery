@@ -71,8 +71,10 @@ class OrderOut(BaseModel):
     updated_at: Optional[datetime] = None
     items: list[OrderItemOut] = Field(validation_alias="order_items")
     invoice: Optional[InvoiceOut] = None
+    amount_paid: Optional[Decimal] = None
+    amount_due: Optional[Decimal] = None
 
-    @field_validator("total_harga_pesanan", mode="before")
+    @field_validator("total_harga_pesanan", "amount_paid", "amount_due", mode="before")
     @classmethod
     def round_money(cls, v):
         return _round2(v)
