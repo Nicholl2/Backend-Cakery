@@ -16,6 +16,16 @@ router = APIRouter(
 )
 
 
+admin_router = APIRouter(
+    prefix="/admin",
+    tags=["Admin Takeover"],
+    dependencies=[Depends(require_service_key)],
+    responses={
+        401: {"description": "Invalid or missing X-Service-Key header"},
+    },
+)
+
+
 @router.get("", response_model=CustomerOut)
 async def get_customer(
     nomor_wa: str = Query(..., description="Nomor WhatsApp customer"),
@@ -77,3 +87,13 @@ async def get_takeover_status(
     `human_takeover_active=true` DAN `is_expired=false`.
     """
     return await customer_service.get_takeover_status(db, nomor_wa)
+
+
+@admin_router.get("/takeover-handlers", summary="Ambil daftar nomor WA admin yang siap takeover")
+async def get_admin_takeover_handlers(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Ambil daftar nomor WhatsApp admin yang siap untuk takeover live-chat.
+    """
+    return await customer_service.get_takeover_handlers(db)

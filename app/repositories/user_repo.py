@@ -38,3 +38,10 @@ async def is_user_active(db: AsyncSession, user_id: int) -> bool:
     )
     is_active = result.scalar()
     return is_active if is_active is not None else False
+
+
+async def get_takeover_handlers(db: AsyncSession) -> list[User]:
+    """Get active users who handle takeover"""
+    stmt = select(User).where(User.is_active == True, User.handles_takeover == True)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())

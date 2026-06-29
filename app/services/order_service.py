@@ -173,18 +173,17 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
     return {"status": "success", "message": "Pesanan berhasil dibatalkan"}
 
 
-async def update_order_status(db: AsyncSession, order_id: int, new_status: OrderStatusEnum) -> Order:
-    order = await order_repo.get_order_by_id(db, order_id)
+async def update_order_status(db: AsyncSession, order_id: int, new_status: str) -> Order:
+    order = await order_repo.update_order_status(db, order_id, new_status)
     if not order:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Order tidak ditemukan",
         )
         
-    order.status = new_status
     await db.commit()
     
-    if new_status == OrderStatusEnum.ready:
+    if new_status == "ready":
         try:
             url = f"{settings.chatbot_url}/webhook/internal/orders/{order.id}/ready"
             async with httpx.AsyncClient() as client:

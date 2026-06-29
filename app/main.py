@@ -10,7 +10,7 @@ from app.api.routes.pricing import router as pricing_router
 from app.api.routes.product import router as product_router
 from app.api.routes.recipe import router as recipe_router
 from app.api.routes.purchasing import router as purchasing_router
-from app.api.routes.customer import router as customer_router
+from app.api.routes.customer import router as customer_router, admin_router as customer_admin_router
 from app.api.routes.order import router as order_router
 from app.api.routes.payment import router as payment_router
 
@@ -38,5 +38,6 @@ app.include_router(product_router, prefix="/products", tags=["Products"])
 app.include_router(recipe_router, prefix="/recipes", tags=["Recipes"])
 app.include_router(purchasing_router, prefix="/purchases", tags=["Purchasing"])
 app.include_router(customer_router, prefix="/customers", tags=["Customers"])
+app.include_router(customer_admin_router)
 app.include_router(order_router, prefix="/orders", tags=["Orders"])
 app.include_router(payment_router, prefix="/payments", tags=["Payments"])

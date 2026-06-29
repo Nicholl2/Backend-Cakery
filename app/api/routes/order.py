@@ -2,22 +2,22 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.api.dependencies import require_service_key
-from app.schemas.order import OrderCreate, OrderOut
+from app.api.dependencies import require_service_key, require_admin_or_owner
+from app.schemas.order import OrderCreate, OrderOut, OrderStatusUpdate
 from app.services import order_service
 
 router = APIRouter(
     tags=["Orders"],
-    dependencies=[Depends(require_service_key)],
     responses={
-        401: {"description": "Invalid or missing X-Service-Key header"},
-        409: {"description": "Customer masih memiliki tagihan aktif"},
-        422: {"description": "Produk tidak ditemukan / tidak aktif / belum ada harga"},
+        401: {"description": "Unauthorized"},
+        409: {"description": "Conflict/Customer masih memiliki tagihan aktif"},
+        422: {"description": "Unprocessable Entity"},
     },
 )
 
 
 @router.post("", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_service_key)],
              summary="Buat order baru — dipanggil oleh chatbot")
 async def create_order(
     data: OrderCreate,
@@ -50,3 +50,19 @@ async def cancel_order(
     db: AsyncSession = Depends(get_db),
 ):
     return await order_service.cancel_order_by_customer(db, order_id)
+
+
+@router.patch("/{order_id}/status", response_model=OrderOut,
+              dependencies=[Depends(require_admin_or_owner)],
+              summary="Update status order oleh admin")
+async def update_order_status(
+    order_id: int,
+    data: OrderStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> OrderOut:
+    """
+    Update status order oleh Admin/Owner. Nilai status: pending, in_process, ready, delivered, picked_up, cancelled.
+    Jika status diubah menjadi 'ready', memicu push notification webhook ke Chatbot Service.
+    """
+    order = await order_service.update_order_status(db, order_id, data.status)
+    return OrderOut.model_validate(order)

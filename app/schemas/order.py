@@ -82,3 +82,9 @@ class OrderOut(BaseModel):
     class Config:
         from_attributes = True
         populate_by_name = True
+
+
+from app.models.order import OrderStatusEnum
+
+class OrderStatusUpdate(BaseModel):
+    status: OrderStatusEnum

@@ -83,3 +83,18 @@ async def get_order_by_id(db: AsyncSession, order_id: int) -> Optional[Order]:
         )
     )
     return result.scalars().first()
+
+
+async def update_order_status(db: AsyncSession, order_id: int, status: str) -> Optional[Order]:
+    result = await db.execute(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(
+            selectinload(Order.invoice),
+        )
+    )
+    order = result.scalars().first()
+    if order:
+        order.status = status
+        await db.flush()
+    return order

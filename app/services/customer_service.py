@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.repositories import customer_repo
+from app.repositories import customer_repo, user_repo
 from app.schemas.customer import CustomerUpsert, CustomerOut, TakeoverSet, TakeoverStatus
 
 
@@ -59,3 +59,9 @@ def _build_takeover_status(customer) -> TakeoverStatus:
         takeover_expires_at=customer.takeover_expires_at,
         is_expired=is_expired,
     )
+
+
+async def get_takeover_handlers(db: AsyncSession) -> dict:
+    users = await user_repo.get_takeover_handlers(db)
+    numbers = [user.nomor_wa_admin for user in users if user.nomor_wa_admin]
+    return {"numbers": numbers}
