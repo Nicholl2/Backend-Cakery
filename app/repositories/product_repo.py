@@ -1,6 +1,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.models.product import Product
 from app.models.recipe import Recipe
 from app.models.stock_item import StockItem
@@ -18,7 +19,11 @@ async def create(db: AsyncSession, data: ProductCreate) -> Product:
 
 
 async def get_by_id(db: AsyncSession, product_id: int) -> Optional[Product]:
-    result = await db.execute(select(Product).where(Product.id == product_id))
+    result = await db.execute(
+        select(Product)
+        .where(Product.id == product_id)
+        .options(selectinload(Product.recipes).selectinload(Recipe.stock_item))
+    )
     return result.scalars().first()
 
 
@@ -27,7 +32,7 @@ async def get_all(
     only_active: bool = False,
     kategori: Optional[str] = None,
 ) -> list[Product]:
-    q = select(Product)
+    q = select(Product).options(selectinload(Product.recipes).selectinload(Recipe.stock_item))
     if only_active:
         q = q.where(Product.is_active == True)
     if kategori:

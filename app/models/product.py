@@ -23,3 +23,19 @@ class Product(Base):
     # Relationships
     recipes = relationship("Recipe", back_populates="product", cascade="all, delete-orphan")
     price_histories = relationship("PriceHistory", back_populates="product", cascade="all, delete-orphan")
+
+    @property
+    def is_available(self) -> bool:
+        from sqlalchemy.orm import attributes
+        state = attributes.instance_state(self)
+        if "recipes" in state.unloaded:
+            return True
+        if not self.recipes:
+            return True
+        for r in self.recipes:
+            r_state = attributes.instance_state(r)
+            if "stock_item" in r_state.unloaded:
+                continue
+            if r.stock_item and r.stock_item.stok_tersedia < r.jumlah_dibutuhkan:
+                return False
+        return True

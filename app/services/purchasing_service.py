@@ -10,7 +10,6 @@ from app.schemas.purchasing import (
     PurchaseCreate, PurchaseUpdate,
 )
 from app.repositories import stock_repo, product_repo
-from app.utils.pricing import calculate_product_price
 from app.models.recipe import Recipe
 from typing import Optional
 

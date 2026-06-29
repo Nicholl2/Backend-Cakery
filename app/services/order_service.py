@@ -8,11 +8,14 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
+from sqlalchemy.orm import selectinload
 
 from app.models.order import Order, OrderItem, Invoice, MetodePengirimanEnum, OrderStatusEnum, InvoiceStatusEnum
 from app.models.product import Product
 from app.models.payment import Payment, PaymentStatusEnum
+from app.models.stock_item import StockItem
+from app.models.recipe import Recipe
 from app.repositories import order_repo
 
 
@@ -35,10 +38,13 @@ async def create_new_order(
         # ── 2. Validasi & kalkulasi item ─────────────────────────────────────
         total_harga_pesanan = Decimal("0.00")
         item_data_list: list[dict] = []
+        stock_item_requirements = {}
 
         for item in items:
             result = await db.execute(
-                select(Product).where(Product.id == item["product_id"])
+                select(Product)
+                .where(Product.id == item["product_id"])
+                .options(selectinload(Product.recipes).selectinload(Recipe.stock_item))
             )
             product = result.scalars().first()
 
@@ -70,7 +76,52 @@ async def create_new_order(
                 "custom_decoration_charge": Decimal(str(item.get("custom_decoration_charge", "0.00"))),
             })
 
-        # ── 3. Buat Order ────────────────────────────────────────────────────
+            # Kumpulkan kebutuhan bahan baku untuk product ini
+            if product.recipes:
+                for recipe in product.recipes:
+                    stock_item = recipe.stock_item
+                    if not stock_item:
+                        continue
+                    
+                    qty_needed = Decimal(str(jumlah)) * Decimal(str(recipe.jumlah_dibutuhkan))
+                    if stock_item.id not in stock_item_requirements:
+                        stock_item_requirements[stock_item.id] = {
+                            "total_needed": Decimal("0"),
+                            "product_name": product.nama_produk,
+                            "stock_item_obj": stock_item
+                        }
+                    stock_item_requirements[stock_item.id]["total_needed"] += qty_needed
+
+        # ── 3. Validasi & Kurangi Stok (Optimistic Locking) ──────────────────
+        for stock_id, req in stock_item_requirements.items():
+            stock_item = req["stock_item_obj"]
+            total_needed = req["total_needed"]
+            product_name = req["product_name"]
+
+            # Validasi stok bahan baku
+            if stock_item.stok_tersedia < total_needed:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Stok bahan baku tidak mencukupi untuk memproses pesanan {product_name}",
+                )
+
+            # Kurangi stok & terapkan Optimistic Locking dengan filter version
+            stmt = (
+                update(StockItem)
+                .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
+                .values(
+                    stok_tersedia=StockItem.stok_tersedia - total_needed,
+                    version=StockItem.version + 1
+                )
+            )
+            res = await db.execute(stmt)
+            if res.rowcount == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Terjadi kegagalan validasi stok karena transaksi bersamaan. Silakan coba lagi.",
+                )
+
+        # ── 4. Buat Order ────────────────────────────────────────────────────
         order_obj = Order(
             customer_id=customer_id,
             status=OrderStatusEnum.pending,
@@ -80,7 +131,7 @@ async def create_new_order(
         )
         await order_repo.create_order(db, order_obj)  # flush → dapat order.id
 
-        # ── 4. Buat OrderItems ───────────────────────────────────────────────
+        # ── 5. Buat OrderItems ───────────────────────────────────────────────
         for d in item_data_list:
             await order_repo.create_order_item(
                 db,
@@ -94,7 +145,7 @@ async def create_new_order(
                 ),
             )
 
-        # ── 5. Generate nomor invoice & buat Invoice ─────────────────────────
+        # ── 6. Generate nomor invoice & buat Invoice ─────────────────────────
         nomor_invoice = f"INV-{datetime.now().strftime('%Y%m%d')}-{order_obj.id}"
         await order_repo.create_invoice(
             db,
@@ -106,7 +157,7 @@ async def create_new_order(
             ),
         )
 
-        # ── 6. Commit & return dengan relasi ter-load ─────────────────────────
+        # ── 7. Commit & return dengan relasi ter-load ─────────────────────────
         await db.commit()
         return await order_repo.get_order_with_details(db, order_obj.id)
 
