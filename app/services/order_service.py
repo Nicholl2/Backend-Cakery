@@ -205,23 +205,80 @@ async def get_customer_latest_order(db: AsyncSession, nomor_wa: str) -> Order:
 
 
 async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
-    order = await order_repo.get_order_by_id(db, order_id)
-    if not order:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Order tidak ditemukan",
+    try:
+        result = await db.execute(
+            select(Order)
+            .where(Order.id == order_id)
+            .options(
+                selectinload(Order.invoice),
+                selectinload(Order.order_items)
+                .selectinload(OrderItem.product)
+                .selectinload(Product.recipes)
+                .selectinload(Recipe.stock_item)
+            )
         )
-        
-    if not order.invoice or order.invoice.status != InvoiceStatusEnum.unpaid:
+        order = result.scalars().first()
+        if not order:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Order tidak ditemukan",
+            )
+            
+        if not order.invoice or order.invoice.status != InvoiceStatusEnum.unpaid:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Pesanan yang sudah dibayar atau dicicil tidak dapat dibatalkan secara otomatis",
+            )
+            
+        # Restore stock items
+        stock_item_returns = {}
+        for item in order.order_items:
+            if item.product and item.product.recipes:
+                for recipe in item.product.recipes:
+                    stock_item = recipe.stock_item
+                    if not stock_item:
+                        continue
+                    kembalikan = Decimal(str(recipe.jumlah_dibutuhkan)) * Decimal(str(item.jumlah))
+                    if stock_item.id not in stock_item_returns:
+                        stock_item_returns[stock_item.id] = {
+                            "qty_return": Decimal("0.00"),
+                            "stock_item_obj": stock_item
+                        }
+                    stock_item_returns[stock_item.id]["qty_return"] += kembalikan
+
+        # Execute updates with optimistic locking check
+        for stock_id, data in stock_item_returns.items():
+            stock_item = data["stock_item_obj"]
+            qty_return = data["qty_return"]
+            
+            stmt = (
+                update(StockItem)
+                .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
+                .values(
+                    stok_tersedia=StockItem.stok_tersedia + qty_return,
+                    version=StockItem.version + 1
+                )
+            )
+            res = await db.execute(stmt)
+            if res.rowcount == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Terjadi kegagalan pemulihan stok karena transaksi bersamaan. Silakan coba lagi.",
+                )
+
+        order.status = OrderStatusEnum.cancelled
+        await db.commit()
+        return {"status": "success", "message": "Pesanan berhasil dibatalkan"}
+
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Pesanan yang sudah dibayar atau dicicil tidak dapat dibatalkan secara otomatis",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal membatalkan order: {str(e)}",
         )
-        
-    order.status = OrderStatusEnum.cancelled
-    await db.commit()
-    
-    return {"status": "success", "message": "Pesanan berhasil dibatalkan"}
 
 
 async def update_order_status(db: AsyncSession, order_id: int, new_status: str) -> Order:
@@ -233,13 +290,21 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
         )
         
     await db.commit()
+
+    # Re-query order with details to avoid lazy loading issues
+    result = await db.execute(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(selectinload(Order.order_items), selectinload(Order.invoice))
+    )
+    order_refetched = result.scalars().first()
     
     if new_status == "ready":
         try:
-            url = f"{settings.chatbot_url}/webhook/internal/orders/{order.id}/ready"
+            url = f"{settings.chatbot_url}/webhook/internal/orders/{order_id}/ready"
             async with httpx.AsyncClient() as client:
                 await client.post(url, json={})
         except Exception as e:
-            logger.error(f"Failed to send webhook push notification for order {order.id}: {e}")
+            logger.error(f"Failed to send webhook push notification for order {order_id}: {e}")
             
-    return order
+    return order_refetched
