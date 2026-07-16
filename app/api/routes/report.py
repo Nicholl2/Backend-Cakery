@@ -3,11 +3,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from decimal import Decimal
 from datetime import datetime, time
-from typing import List
+from typing import List, Optional
 
 from app.core.database import get_db
-from app.api.dependencies import require_service_key
-from app.schemas.report import FinancialReportSummary, TopProductSummary
+from app.api.dependencies import require_service_key, require_owner
+from app.schemas.report import FinancialReportSummary, TopProductSummary, FinancialReportDetail, AnalyticsReport
+from app.services import report_service
 from app.models.payment import Payment, PaymentStatusEnum
 from app.models.expense import Expense
 from app.models.order import Order, OrderItem, OrderStatusEnum
@@ -114,3 +115,29 @@ async def get_report_summary(
         avg_order_value=avg_order_value,
         top_products=top_products
     )
+
+
+@router.get("/financial", response_model=FinancialReportDetail)
+async def get_financial_report(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: AsyncSession = Depends(get_db),
+    _ = Depends(require_owner)
+) -> FinancialReportDetail:
+    """
+    Get internal financial report for Owner.
+    """
+    return await report_service.get_financial_report(db, start_date, end_date)
+
+
+@router.get("/analytics", response_model=AnalyticsReport)
+async def get_analytics_report(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: AsyncSession = Depends(get_db),
+    _ = Depends(require_owner)
+) -> AnalyticsReport:
+    """
+    Get sales and product review analytics for Owner.
+    """
+    return await report_service.get_analytics_report(db, start_date, end_date)

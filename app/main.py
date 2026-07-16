@@ -1,6 +1,16 @@
 from contextlib import asynccontextmanager
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+try:
+    from fastapi.staticfiles import StaticFiles
+except ImportError:
+    raise RuntimeError("fastapi.staticfiles is required to serve static files.")
+
+# Ensure static directories exist
+os.makedirs("static", exist_ok=True)
+os.makedirs("static/products", exist_ok=True)
 
 # Import database core
 from app.core.database import Base, engine
@@ -30,6 +40,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 origins = [
     "http://localhost:5173",

@@ -1,0 +1,154 @@
+==============================================================================
+ TO-DO BACKEND UNTUK NICHOLAS — dari Kevin (Chatbot/AI)
+==============================================================================
+ SEMUA endpoint chatbot (B1-B5, C1-C5) SUDAH JADI & LOLOS TES LIVE. 🎉🎉
+ Tinggal: 1 ENDPOINT BARU (no. 4 — laporan Owner, GET /reports/summary)
+ + 3 perbaikan kecil (no. 1-3). Tiap item ada kriteria "SELESAI JIKA" biar
+ gampang ngecek sendiri.
+
+ SUDAH DIBUAT & TERVERIFIKASI LIVE (Neon + Midtrans sandbox):
+   - Fix double-prefix routing (path bersih /products/, /faq, /customers, /orders)
+   - image_url di ProductOut
+   - require_service_key (X-Service-Key) + SERVICE_API_KEY
+   - B1: Customers          -> GET /customers?nomor_wa= , POST /customers
+   - B2: Create order        -> POST /orders (cek stok resep + kurangi stok,
+                                optimistic locking — mantap!)
+   - B3: Status pesanan      -> GET /orders/latest?nomor_wa=
+   - B4: Cancel order        -> POST /orders/{order_id}/cancel
+   - B5: Payment + Midtrans  -> POST /payments , GET /payments/{order_id}/status ,
+                                POST /payments/notify (charge Midtrans asli)
+   - C1: Human takeover      -> POST & GET /customers/{nomor_wa}/takeover
+   - C2: Takeover handlers   -> GET /admin/takeover-handlers  {"numbers":[...]}
+   - C3: is_available        -> di ProductOut (resep vs stok) + POST /orders
+                                menolak stok kurang (400)
+   - C4: Push "ready"        -> POST {CHATBOT_URL}/webhook/internal/orders/{id}/ready
+   - C5: Ubah status order   -> PATCH /orders/{order_id}/status (admin JWT)
+     * Chain C5->C4 SUDAH DITES LIVE: PATCH status "ready" -> chatbot terima
+       push -> pelanggan dinotif. Berfungsi! (order tes id=4)
+
+==============================================================================
+ YANG DIMINTA: 3 FIX KECIL (no. 1-3) + 1 ENDPOINT BARU (no. 4)
+==============================================================================
+
+ 1. [BUG] PATCH /orders/{id}/status balas 500 (padahal aksinya SUKSES)
+    Gejala : status di DB berubah & push C4 terkirim, tapi response 500.
+    Sebab  : di app/services/order_service.py -> update_order_status(),
+             setelah await db.commit() objek `order` di-expire; waktu route
+             memanggil OrderOut.model_validate(order), pydantic menyentuh
+             order.order_items / updated_at -> lazy-load async meledak
+             (MissingGreenlet).
+    Fix    : setelah commit, JANGAN return objek lama — re-query dulu:
+
+               result = await db.execute(
+                   select(Order)
+                   .where(Order.id == order_id)
+                   .options(selectinload(Order.order_items),
+                            selectinload(Order.invoice))
+               )
+               return result.scalars().first()
+
+             (pola yang sama sudah kamu pakai di get_customer_latest_order.)
+    SELESAI JIKA: PATCH /orders/{id}/status {"status":"in_process"} balas 200
+             berisi OrderOut lengkap (items + invoice), bukan 500.
+
+ 2. [BUG] Cancel order tidak mengembalikan stok bahan
+    Gejala : POST /orders sudah MENGURANGI stok bahan (bagus), tapi
+             POST /orders/{id}/cancel cuma set status=cancelled — bahan yang
+             sudah dipotong tidak dikembalikan. Order batal = stok bocor,
+             lama-lama stok sistem < stok fisik.
+    Fix    : di cancel_order_by_customer() (app/services/order_service.py),
+             sebelum/bersamaan set cancelled:
+             a. Muat order.order_items beserta product.recipes + stock_item
+                (selectinload berantai, seperti di create_new_order).
+             b. Untuk tiap item x tiap resep produknya:
+                  kembalikan = recipe.jumlah_dibutuhkan * item.jumlah
+                  UPDATE stock_items
+                     SET stok_tersedia = stok_tersedia + kembalikan,
+                         version = version + 1
+                   WHERE id = recipe.stock_item_id
+             c. Commit bareng perubahan status (satu transaksi).
+    SELESAI JIKA: catat stok bahan -> buat order (stok turun) -> cancel order
+             -> stok kembali persis ke angka semula.
+
+ 3. [CONFIG] Set env CHATBOT_URL di backend
+    Default config chatbot_url = http://localhost:8001 — itu port backend
+    SENDIRI, jadi push C4 nembak dirinya. Tambah di .env backend:
+        CHATBOT_URL=http://localhost:8000
+    (di deployment nanti: alamat Chatbot Service yang sebenarnya).
+    SELESAI JIKA: PATCH order jadi "ready" -> log backend TIDAK ada error
+    "Failed to send webhook push notification".
+
+ 4. [ENDPOINT BARU — SATU-SATUNYA YANG MASIH DITUNGGU CHATBOT]
+    Guna: fitur chatbot untuk Owner — tanya "laporan keuangan" / "produk
+    terlaris" via WA -> bot balas angka REAL. Sisi chatbot SUDAH SELESAI &
+    sudah dites (dengan endpoint ini di-mock); begitu kamu deploy, fitur
+    langsung hidup tanpa perubahan apa pun di chatbot.
+
+      GET /reports/summary?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+      (Depends(require_service_key) — sama seperti endpoint chatbot lain)
+
+      Response 200:
+      {
+        "revenue": 12500000.0,
+        "expenses": 7300000.0,
+        "order_count": 34,
+        "avg_order_value": 185000.0,
+        "top_products": [
+          {"nama_produk": "Brownies Coklat", "qty": 12, "revenue": 600000.0}
+        ]
+      }
+
+    Cara hitung tiap field (nama kolom sudah kucocokkan dengan modelmu):
+      revenue         = SUM(payments.jumlah_bayar)
+                        WHERE payment_status = 'Success'
+                          AND created_at antara start_date..end_date
+      expenses        = SUM(expenses.jumlah)
+                        WHERE tanggal antara start_date..end_date
+                        (logika /expenses/summary/dashboard kamu sudah ada —
+                         tinggal dipakai ulang, bedanya auth service-key)
+      order_count     = COUNT(orders) WHERE created_at di periode
+                          AND status != 'cancelled'
+      avg_order_value = AVG(orders.total_harga_pesanan), filter sama
+      top_products    = JOIN order_items -> orders (filter periode &
+                        non-cancelled) GROUP BY product_id:
+                          qty     = SUM(order_items.jumlah)
+                          revenue = SUM(order_items.subtotal)
+                        ORDER BY qty DESC LIMIT 5, ambil products.nama_produk
+    Periode kosong -> nilai 0 / list kosong (jangan 404).
+    SELESAI JIKA: curl -H "X-Service-Key: <key>"
+      "http://localhost:8001/reports/summary?start_date=2026-06-01&end_date=2026-06-30"
+      balas angka yang cocok dengan isi DB. (Chatbot memanggil dengan rentang
+      bulan berjalan.)
+
+ 5. [UNTUK ADMIN SITE] Endpoint Owner mengatur penerima notifikasi takeover
+    Buat apa: saat pelanggan minta kue custom, chatbot mengirim notifikasi WA
+    ke semua admin yang kolom users.handles_takeover-nya true (dibaca lewat
+    GET /admin/takeover-handlers — sudah jalan). Masalahnya: BELUM ADA cara
+    mengubah flag itu selain SQL manual ke database. Padahal skenario nyatanya:
+    ganti admin jaga -> Owner harusnya tinggal klik toggle di Admin Site.
+
+        PATCH /users/{user_id}/takeover-handler   (require_owner, JWT)
+          Request : { "handles_takeover": true }
+          Response: { "user_id": 5, "handles_takeover": true }
+
+    Catatan: chatbot TIDAK terblokir oleh ini — dia cuma membaca daftarnya
+    (plus fallback ADMIN_WA_NUMBER kalau kosong). Endpoint ini pasangannya
+    tombol di Admin Site (koordinasi dengan Ainaya untuk UI-nya).
+    SELESAI JIKA: Owner toggle admin X dari Admin Site -> nomor X muncul/
+    hilang di GET /admin/takeover-handlers tanpa sentuh SQL.
+
+==============================================================================
+ CATATAN
+ - Chatbot 100% pakai endpoint asli — tidak ada mock/data dummy sama sekali.
+   Untuk laporan Owner (no. 4), selama endpoint-nya belum ada bot menjawab
+   jujur "laporan belum tersedia".
+ - Log percakapan sengaja disimpan lokal di Chatbot Service (bukan tabel
+   chatbot_conversations di Postgres) karena tidak ada fitur yang membacanya
+   dari pusat — jadi TIDAK perlu bikin endpoint/tabel itu. (Catatan revisi
+   kecil untuk dokumen C300 sudah ditangani Kevin.)
+ - Kontrak yang sudah jalan JANGAN diubah tanpa kabar-kabari: field `id`
+   di CustomerOut/OrderOut, invoice nested di OrderOut.invoice.nomor_invoice,
+   POST /payments body {order_id, payment_type(bank_transfer|qris), amount},
+   GET /payments/{order_id}/status shape {order_id, invoice_status,
+   amount_paid, amount_due, payments[]} — chatbot bergantung pada semuanya.
+==============================================================================

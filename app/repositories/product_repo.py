@@ -131,3 +131,14 @@ async def calculate_and_update_product_price(
     product.hpp_total = hpp_total
     product.harga_jual = harga_jual
     return product
+
+
+async def update_image_url(
+    db: AsyncSession,
+    product: Product,
+    image_url: Optional[str]
+) -> Product:
+    product.image_url = image_url
+    await db.commit()
+    await db.refresh(product)
+    return product

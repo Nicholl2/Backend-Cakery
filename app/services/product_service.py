@@ -1,5 +1,7 @@
 from decimal import Decimal
-from fastapi import HTTPException, status
+import os
+import anyio
+from fastapi import HTTPException, status, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories import product_repo, recipe_repo
@@ -116,3 +118,71 @@ async def get_price_history(db: AsyncSession, product_id: int) -> list[PriceHist
     await get_product_or_404(db, product_id)
     history = await product_repo.get_price_history(db, product_id)
     return [PriceHistoryOut.model_validate(h) for h in history]
+
+
+async def upload_product_image(
+    db: AsyncSession,
+    product_id: int,
+    file: UploadFile
+) -> ProductOut:
+    """
+    Upload product image: validates type and size, saves file asynchronously,
+    and updates image_url to the relative path in the database.
+    """
+    # 1. Ambil data produk, error 404 jika tidak ditemukan
+    product = await get_product_or_404(db, product_id)
+
+    # 2. Validasi tipe file (Content-Type)
+    ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tipe file tidak didukung. Hanya JPEG, PNG, dan WEBP yang diperbolehkan."
+        )
+
+    # 3. Validasi ukuran file (Maksimal 5 MB)
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    file.file.seek(0)
+    if file_size > 5 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ukuran file melebihi batas maksimal 5 MB."
+        )
+
+    # 4. Ambil ekstensi berkas secara aman
+    filename = file.filename or ""
+    _, ext = os.path.splitext(filename)
+    ext = ext.lower()
+    if not ext:
+        content_type_map = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp"
+        }
+        ext = content_type_map.get(file.content_type, ".jpg")
+
+    # 5. Definisikan relative dan absolute paths
+    relative_path = f"/static/products/{product_id}{ext}"
+    dest_dir = "static/products"
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_path = os.path.join(dest_dir, f"{product_id}{ext}")
+
+    # 6. Hapus berkas lama di disk jika tipenya/ekstensinya berbeda untuk menghindari berkas yatim (orphan)
+    if product.image_url:
+        old_rel_path = product.image_url.lstrip("/")
+        if os.path.exists(old_rel_path) and old_rel_path != dest_path:
+            try:
+                os.remove(old_rel_path)
+            except Exception:
+                pass
+
+    # 7. Simpan file secara asinkronus menggunakan anyio
+    content = await file.read()
+    async with await anyio.open_file(dest_path, "wb") as f:
+        await f.write(content)
+
+    # 8. Update database
+    updated_product = await product_repo.update_image_url(db, product, relative_path)
+    return ProductOut.model_validate(updated_product)
+

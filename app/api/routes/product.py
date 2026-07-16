@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from app.core.database import get_db
+from app.api.dependencies import require_admin_or_owner
 from app.schemas.product import (
     ProductCreate, ProductUpdate, ProductOut,
     SetPriceRequest, SetPriceResponse,
@@ -47,6 +48,17 @@ async def update_product(product_id: int, data: ProductUpdate, db: AsyncSession 
                summary="Hapus produk beserta semua resep dan riwayat harganya")
 async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     return await product_service.delete_product(db, product_id)
+
+
+@router.post("/{product_id}/image", response_model=ProductOut,
+             summary="Upload foto produk (Admin/Owner) — format JPEG, PNG, WEBP, maks 5MB")
+async def upload_product_image(
+    product_id: int,
+    file: UploadFile = File(..., description="File gambar produk (JPEG/PNG/WEBP)"),
+    db: AsyncSession = Depends(get_db),
+    _ = Depends(require_admin_or_owner),
+):
+    return await product_service.upload_product_image(db, product_id, file)
 
 
 # ── Pricing — khusus Owner ────────────────────────────────────────────────────

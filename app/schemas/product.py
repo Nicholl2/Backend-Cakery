@@ -24,6 +24,7 @@ class ProductUpdate(BaseModel):
     kategori: Optional[str] = Field(None, max_length=50)
     markup_percentage: Optional[Decimal] = Field(None, ge=0, decimal_places=4)
     is_active: Optional[bool] = None
+    image_url: Optional[str] = None
 
 
 # ── SET PRICE (khusus Owner — Use Case 2 / TOTI-02) ─────────────────────────

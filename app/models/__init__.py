@@ -11,6 +11,7 @@ from .expense import Expense
 from .customer import Customer
 from .order import Order, OrderItem, Invoice
 from .payment import Payment
+from .review import Review
 
 __all__ = [
     "Base",
@@ -30,5 +31,5 @@ __all__ = [
     "OrderItem",
     "Invoice",
     "Payment",
-
+    "Review",
 ]
