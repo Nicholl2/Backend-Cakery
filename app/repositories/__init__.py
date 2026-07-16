@@ -6,6 +6,8 @@ from . import pricing_repo
 from . import customer_repo
 from . import order_repo
 from . import payment_repo
+from . import buyer_repo
+from . import otp_repo
 
 __all__ = [
     "stock_repo",
@@ -15,4 +17,6 @@ __all__ = [
     "customer_repo",
     "order_repo",
     "payment_repo",
+    "buyer_repo",
+    "otp_repo",
 ]

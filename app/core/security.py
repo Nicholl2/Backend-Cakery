@@ -27,7 +27,8 @@ def create_access_token(
     user_id: int,
     role_level: int,
     username: str,
-    expires_delta: Optional[timedelta] = None
+    expires_delta: Optional[timedelta] = None,
+    role: Optional[str] = None
 ) -> str:
     """Create JWT access token"""
     if expires_delta:
@@ -41,6 +42,11 @@ def create_access_token(
         "username": username,
         "exp": expire
     }
+    
+    if role:
+        to_encode["role"] = role
+    elif role_level == 0:
+        to_encode["role"] = "buyer"
 
     encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm=ALGORITHM)
     return encoded_jwt

@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean
+from typing import Optional
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -17,8 +18,21 @@ class Product(Base):
     is_active = Column(Boolean, default=True)
     image_url = Column(String(500), nullable=True)
     
+    # New catalog fields requested by Frontend
+    slug = Column(String(100), unique=True, index=True, nullable=True)
+    rating = Column(Float, default=0.0, nullable=False)
+    review_count = Column(Integer, default=0, nullable=False)
+    sold_count = Column(Integer, default=0, nullable=False)
+    is_featured = Column(Boolean, default=False, nullable=False)
+    rasa = Column(String(100), nullable=True)
+    ukuran_atau_isi = Column(String(100), nullable=True)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    @property
+    def parent_category(self) -> Optional[str]:
+        return self.kategori
     
     # Relationships
     recipes = relationship("Recipe", back_populates="product", cascade="all, delete-orphan")

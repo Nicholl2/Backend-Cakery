@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from datetime import datetime
@@ -25,6 +25,10 @@ class ProductUpdate(BaseModel):
     markup_percentage: Optional[Decimal] = Field(None, ge=0, decimal_places=4)
     is_active: Optional[bool] = None
     image_url: Optional[str] = None
+    slug: Optional[str] = Field(None, max_length=100)
+    is_featured: Optional[bool] = None
+    rasa: Optional[str] = Field(None, max_length=100)
+    ukuran_atau_isi: Optional[str] = Field(None, max_length=100)
 
 
 # ── SET PRICE (khusus Owner — Use Case 2 / TOTI-02) ─────────────────────────
@@ -60,8 +64,27 @@ class ProductOut(BaseModel):
     is_active: bool
     is_available: bool
     image_url: Optional[str] = None
+    
+    # New catalog fields requested by Frontend
+    slug: Optional[str] = None
+    rating: float = 0.0
+    review_count: int = 0
+    sold_count: int = 0
+    is_featured: bool = False
+    rasa: Optional[str] = None
+    ukuran_atau_isi: Optional[str] = None
+    parent_category: Optional[str] = None
+    
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def set_parent_category(cls, data):
+        if isinstance(data, dict):
+            if not data.get('parent_category') and data.get('kategori'):
+                data['parent_category'] = data['kategori']
+        return data
 
     @field_validator('hpp_total', 'harga_jual', mode='before')
     @classmethod

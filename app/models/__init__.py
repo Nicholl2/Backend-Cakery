@@ -12,6 +12,8 @@ from .customer import Customer
 from .order import Order, OrderItem, Invoice
 from .payment import Payment
 from .review import Review
+from .buyer import Buyer
+from .otp_code import OTPCode
 
 __all__ = [
     "Base",
@@ -32,4 +34,6 @@ __all__ = [
     "Invoice",
     "Payment",
     "Review",
+    "Buyer",
+    "OTPCode",
 ]
