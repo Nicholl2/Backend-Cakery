@@ -13,22 +13,18 @@ class ProductCreate(BaseModel):
     nama_produk: str = Field(..., min_length=1, max_length=100)
     deskripsi: Optional[str] = None
     kategori: Optional[str] = Field(None, max_length=50)
-    markup_percentage: Optional[Decimal] = Field(None, ge=0, decimal_places=4)
+    harga_jual: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     is_active: bool = True
+    minimum_order: int = Field(1, ge=1)
 
 
-# ── UPDATE (Admin/Owner boleh edit nama, deskripsi, kategori) ───────────────
+# ── UPDATE (Hanya edit deskripsi, harga_jual, is_active, image_url, minimum_order) ──
 class ProductUpdate(BaseModel):
-    nama_produk: Optional[str] = Field(None, min_length=1, max_length=100)
     deskripsi: Optional[str] = None
-    kategori: Optional[str] = Field(None, max_length=50)
-    markup_percentage: Optional[Decimal] = Field(None, ge=0, decimal_places=4)
+    harga_jual: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     is_active: Optional[bool] = None
     image_url: Optional[str] = None
-    slug: Optional[str] = Field(None, max_length=100)
-    is_featured: Optional[bool] = None
-    rasa: Optional[str] = Field(None, max_length=100)
-    ukuran_atau_isi: Optional[str] = Field(None, max_length=100)
+    minimum_order: Optional[int] = Field(None, ge=1)
 
 
 # ── SET PRICE (khusus Owner — Use Case 2 / TOTI-02) ─────────────────────────
@@ -71,8 +67,7 @@ class ProductOut(BaseModel):
     review_count: int = 0
     sold_count: int = 0
     is_featured: bool = False
-    rasa: Optional[str] = None
-    ukuran_atau_isi: Optional[str] = None
+    minimum_order: int = 1
     parent_category: Optional[str] = None
     
     created_at: Optional[datetime] = None
