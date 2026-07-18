@@ -88,6 +88,11 @@ class BuyerLoginRequest(BaseModel):
     password: str
 
 
+class BuyerLoginPhoneRequest(BaseModel):
+    phone_number: str
+    password: str
+
+
 class BuyerLoginOTPRequest(BaseModel):
     phone: str
     verify_token: str

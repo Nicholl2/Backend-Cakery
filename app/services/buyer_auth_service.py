@@ -238,6 +238,40 @@ async def login_buyer_password(db: AsyncSession, email: str, password: str) -> d
     }
 
 
+async def login_buyer_phone(db: AsyncSession, phone: str, password: str) -> dict:
+    """Login buyer via phone number and password"""
+    buyer = await buyer_repo.get_buyer_by_phone(db, phone)
+    if not buyer or not buyer.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid phone number or password"
+        )
+        
+    if not verify_password(password, buyer.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid phone number or password"
+        )
+        
+    # Generate JWT
+    access_token = create_access_token(
+        user_id=buyer.id,
+        role_level=0,
+        username=buyer.email,
+        role="buyer"
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": buyer.id,
+        "role": "buyer",
+        "name": buyer.name,
+        "email": buyer.email,
+        "phone": buyer.phone
+    }
+
+
 async def login_buyer_otp(db: AsyncSession, phone: str, verify_token: str) -> dict:
     """Login buyer via OTP verification token"""
     # Consume verify token with 'login' purpose

@@ -37,3 +37,16 @@ async def ensure_product_columns(conn: AsyncConnection):
     await conn.execute(text(
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_slug ON products (slug) WHERE slug IS NOT NULL;"
     ))
+
+
+async def ensure_buyer_columns(conn: AsyncConnection):
+    """
+    Ensure is_active column is present in the 'buyers' table on PostgreSQL database.
+    """
+    # Only run on PostgreSQL dialect
+    if conn.dialect.name != "postgresql":
+        return
+
+    await conn.execute(text("ALTER TABLE buyers ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
+    await conn.execute(text("UPDATE buyers SET is_active = COALESCE(is_active, TRUE) WHERE is_active IS NULL;"))
+    await conn.execute(text("ALTER TABLE buyers ALTER COLUMN is_active SET NOT NULL;"))

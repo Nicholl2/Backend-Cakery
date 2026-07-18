@@ -31,8 +31,9 @@ from app.api.routes.user import router as user_router
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        from app.core.migrations import ensure_product_columns
+        from app.core.migrations import ensure_product_columns, ensure_buyer_columns
         await ensure_product_columns(conn)
+        await ensure_buyer_columns(conn)
     yield
     pass
 

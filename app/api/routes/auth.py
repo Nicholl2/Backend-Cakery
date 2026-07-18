@@ -6,7 +6,7 @@ from app.schemas.auth import (
     OTPSendRequest, OTPSendResponse,
     OTPVerifyRequest, OTPVerifyResponse,
     BuyerRegisterRequest, BuyerAuthResponse,
-    BuyerLoginRequest, BuyerLoginOTPRequest,
+    BuyerLoginRequest, BuyerLoginPhoneRequest, BuyerLoginOTPRequest,
     BuyerResetPasswordRequest, SellerForgotPasswordRequest,
     SellerForgotPasswordVerifyRequest, SellerResetPasswordRequest
 )
@@ -87,6 +87,15 @@ async def buyer_login(
 ):
     """Login buyer using email and password"""
     return await buyer_auth_service.login_buyer_password(db, data.email, data.password)
+
+
+@router.post("/buyer/login-phone", response_model=BuyerAuthResponse, status_code=status.HTTP_200_OK)
+async def buyer_login_phone(
+    data: BuyerLoginPhoneRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Login buyer using phone number and password"""
+    return await buyer_auth_service.login_buyer_phone(db, data.phone_number, data.password)
 
 
 @router.post("/buyer/login/otp", response_model=BuyerAuthResponse, status_code=status.HTTP_200_OK)
