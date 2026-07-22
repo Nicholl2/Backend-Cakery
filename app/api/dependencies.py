@@ -37,6 +37,28 @@ async def get_current_user_id(
     return user_id
 
 
+async def get_current_buyer_id(
+    payload: dict = Depends(get_current_user_payload),
+    db: AsyncSession = Depends(get_db)
+) -> int:
+    """Get current buyer ID from token and verify buyer is active/exists"""
+    if payload.get("role") != "buyer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User is not a buyer"
+        )
+    buyer_id = int(payload.get("sub"))
+    
+    from app.repositories import buyer_repo
+    buyer = await buyer_repo.get_buyer_by_id(db, buyer_id)
+    if not buyer or not buyer.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Buyer account is inactive or not found"
+        )
+    return buyer_id
+
+
 async def get_current_user_role_level(
     payload: dict = Depends(get_current_user_payload)
 ) -> int:

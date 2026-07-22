@@ -50,3 +50,35 @@ async def ensure_buyer_columns(conn: AsyncConnection):
     await conn.execute(text("ALTER TABLE buyers ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
     await conn.execute(text("UPDATE buyers SET is_active = COALESCE(is_active, TRUE) WHERE is_active IS NULL;"))
     await conn.execute(text("ALTER TABLE buyers ALTER COLUMN is_active SET NOT NULL;"))
+
+
+async def ensure_stock_item_columns(conn: AsyncConnection):
+    """
+    Ensure alert_min_stok and supplier_id columns are present in the 'stock_items' table on PostgreSQL database.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    await conn.execute(text("ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS alert_min_stok NUMERIC(10, 2) DEFAULT 0;"))
+    await conn.execute(text("ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES suppliers(id);"))
+    await conn.execute(text("UPDATE stock_items SET alert_min_stok = COALESCE(alert_min_stok, 0) WHERE alert_min_stok IS NULL;"))
+    await conn.execute(text("ALTER TABLE stock_items ALTER COLUMN alert_min_stok SET NOT NULL;"))
+
+
+async def ensure_recipe_columns(conn: AsyncConnection):
+    """
+    Ensure quantity_required and unit columns are present in the 'recipes' table on PostgreSQL database.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    await conn.execute(text("ALTER TABLE recipes ADD COLUMN IF NOT EXISTS quantity_required NUMERIC(10, 4);"))
+    await conn.execute(text("ALTER TABLE recipes ADD COLUMN IF NOT EXISTS unit VARCHAR(20);"))
+    
+    # Update quantity_required to jumlah_dibutuhkan if null
+    await conn.execute(text("UPDATE recipes SET quantity_required = COALESCE(quantity_required, jumlah_dibutuhkan) WHERE quantity_required IS NULL;"))
+    
+    # Update unit to match the stock item's satuan if null
+    await conn.execute(text(
+        "UPDATE recipes SET unit = s.satuan FROM stock_items s WHERE recipes.stock_item_id = s.id AND recipes.unit IS NULL;"
+    ))

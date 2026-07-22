@@ -27,6 +27,8 @@ class StockItem(Base):
     kategori = Column(Enum(KategoriEnum), nullable=False, default=KategoriEnum.bahan_baku)
     harga_per_satuan = Column(Numeric(10, 4), nullable=False)
     stok_tersedia = Column(Numeric(10, 2), nullable=False)
+    alert_min_stok = Column(Numeric(10, 2), nullable=False, default=0)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     version = Column(Integer, default=0, nullable=False)
     
     last_updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -36,5 +38,6 @@ class StockItem(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
-    recipes = relationship("Recipe", back_populates="stock_item")
-    last_updated_by_user = relationship("User", back_populates="stock_items_updated")
+    recipes = relationship("Recipe", back_populates="stock_item", lazy="selectin")
+    last_updated_by_user = relationship("User", back_populates="stock_items_updated", lazy="selectin")
+    supplier = relationship("Supplier", lazy="selectin")

@@ -34,8 +34,8 @@ class Product(Base):
         return self.kategori
     
     # Relationships
-    recipes = relationship("Recipe", back_populates="product", cascade="all, delete-orphan")
-    price_histories = relationship("PriceHistory", back_populates="product", cascade="all, delete-orphan")
+    recipes = relationship("Recipe", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
+    price_histories = relationship("PriceHistory", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
 
     @property
     def is_available(self) -> bool:

@@ -3,6 +3,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from datetime import datetime
 from typing import Optional
+from app.schemas.purchasing import SupplierOut
 
 
 class SatuanEnum(str, Enum):
@@ -24,6 +25,8 @@ class StockCreate(BaseModel):
     kategori: KategoriEnum = KategoriEnum.bahan_baku
     harga_per_satuan: Decimal = Field(..., ge=0, decimal_places=4)
     stok_tersedia: Decimal = Field(..., ge=0, decimal_places=4)
+    alert_min_stok: Optional[Decimal] = Field(Decimal("0.00"), ge=0, decimal_places=4)
+    supplier_id: Optional[int] = Field(None, ge=1)
 
 
 class StockUpdate(BaseModel):
@@ -32,6 +35,8 @@ class StockUpdate(BaseModel):
     kategori: Optional[KategoriEnum] = None
     harga_per_satuan: Optional[Decimal] = Field(None, ge=0)
     stok_tersedia: Optional[Decimal] = Field(None, ge=0)
+    alert_min_stok: Optional[Decimal] = Field(None, ge=0)
+    supplier_id: Optional[int] = Field(None, ge=1)
 
 
 class StockOut(BaseModel):
@@ -41,17 +46,29 @@ class StockOut(BaseModel):
     kategori: KategoriEnum
     harga_per_satuan: Decimal
     stok_tersedia: Decimal
+    alert_min_stok: Decimal
+    supplier_id: Optional[int] = None
+    supplier: Optional[SupplierOut] = None
     version: int
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
     @field_validator('harga_per_satuan', mode='before')
     @classmethod
     def round_money(cls, v):
         return Decimal(str(v)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
     @field_validator('stok_tersedia', mode='before')
     @classmethod
     def round_stock(cls, v):
         return Decimal(str(v)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+
+    @field_validator('alert_min_stok', mode='before')
+    @classmethod
+    def round_alert(cls, v):
+        if v is None:
+            return Decimal("0.00")
+        return Decimal(str(v)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
     class Config:
         from_attributes = True

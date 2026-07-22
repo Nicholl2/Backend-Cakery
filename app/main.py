@@ -26,14 +26,17 @@ from app.api.routes.order import router as order_router
 from app.api.routes.payment import router as payment_router
 from app.api.routes.report import router as report_router
 from app.api.routes.user import router as user_router
+from app.api.routes.review import router as review_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        from app.core.migrations import ensure_product_columns, ensure_buyer_columns
+        from app.core.migrations import ensure_product_columns, ensure_buyer_columns, ensure_stock_item_columns, ensure_recipe_columns
         await ensure_product_columns(conn)
         await ensure_buyer_columns(conn)
+        await ensure_stock_item_columns(conn)
+        await ensure_recipe_columns(conn)
     yield
     pass
 
@@ -74,3 +77,4 @@ app.include_router(order_router, prefix="/orders", tags=["Orders"])
 app.include_router(payment_router, prefix="/payments", tags=["Payments"])
 app.include_router(report_router, prefix="/reports", tags=["Reports"])
 app.include_router(user_router, prefix="/users", tags=["Users"])
+app.include_router(review_router, prefix="/reviews", tags=["Reviews"])

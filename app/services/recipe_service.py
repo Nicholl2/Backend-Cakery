@@ -12,6 +12,9 @@ def _recipe_to_out(recipe, stock_item) -> RecipeOut:
         product_id=recipe.product_id,
         stock_item_id=recipe.stock_item_id,
         jumlah_dibutuhkan=recipe.jumlah_dibutuhkan,
+        quantity_required=getattr(recipe, 'quantity_required', None) or recipe.jumlah_dibutuhkan,
+        unit=getattr(recipe, 'unit', None) or stock_item.satuan,
+        stock_item=stock_item,
         nama_bahan=stock_item.nama_item,
         satuan=stock_item.satuan,
         harga_per_satuan=stock_item.harga_per_satuan,
@@ -68,7 +71,7 @@ async def add_ingredient(db: AsyncSession, product_id: int, data: RecipeCreate) 
             detail=f"Item '{stock.nama_item}' sudah ada dalam resep produk ini. Gunakan endpoint update.",
         )
 
-    await recipe_repo.create(db, product_id, data.stock_item_id, data.jumlah_dibutuhkan)
+    await recipe_repo.create(db, product_id, data.stock_item_id, data.jumlah_dibutuhkan, data.quantity_required, data.unit)
 
     # ── Recalculate & simpan HPP ke tabel products ──
     await recipe_repo.sync_hpp_to_product(db, product_id)
@@ -92,7 +95,7 @@ async def update_ingredient(
     if not recipe or recipe.product_id != product_id:
         raise HTTPException(404, "Resep/bahan tidak ditemukan pada produk ini.")
 
-    await recipe_repo.update_qty(db, recipe, data.jumlah_dibutuhkan)
+    await recipe_repo.update_qty(db, recipe, data.jumlah_dibutuhkan, data.quantity_required, data.unit)
     await recipe_repo.sync_hpp_to_product(db, product_id)
     await db.commit()
 

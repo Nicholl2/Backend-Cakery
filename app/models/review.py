@@ -15,8 +15,8 @@ class Review(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
-    product = relationship("Product")
-    customer = relationship("Customer")
+    product = relationship("Product", lazy="selectin")
+    customer = relationship("Customer", lazy="selectin")
 
     def __repr__(self):
         return f"<Review(id={self.id}, product_id={self.product_id}, rating={self.rating})>"

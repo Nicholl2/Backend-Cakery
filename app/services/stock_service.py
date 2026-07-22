@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.stock_item import StockItem
 from app.schemas.stock import StockCreate, StockUpdate
 from app.repositories import stock_repo
+from app.services.purchasing_service import get_supplier_or_404
 from typing import Optional
 
 
@@ -16,6 +17,8 @@ async def create_stock(db: AsyncSession, data: StockCreate) -> StockItem:
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Item '{data.nama_item}' sudah terdaftar di database.",
         )
+    if data.supplier_id is not None:
+        await get_supplier_or_404(db, data.supplier_id)
     return await stock_repo.create(db, data)
 
 
@@ -32,6 +35,8 @@ async def get_stock_or_404(db: AsyncSession, stock_id: int) -> StockItem:
 
 async def update_stock(db: AsyncSession, stock_id: int, data: StockUpdate) -> StockItem:
     item = await get_stock_or_404(db, stock_id)
+    if data.supplier_id is not None:
+        await get_supplier_or_404(db, data.supplier_id)
     return await stock_repo.update(db, item, data)
 
 

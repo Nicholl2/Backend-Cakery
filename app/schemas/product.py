@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from datetime import datetime
+from app.schemas.recipe import RecipeOut
 
 def _round2(v) -> Optional[Decimal]:
     if v is None:
@@ -69,6 +70,7 @@ class ProductOut(BaseModel):
     is_featured: bool = False
     minimum_order: int = 1
     parent_category: Optional[str] = None
+    recipes: Optional[list[RecipeOut]] = None
     
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

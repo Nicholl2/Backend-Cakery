@@ -39,19 +39,37 @@ async def get_by_product_and_stock(
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────
 
-async def create(db: AsyncSession, product_id: int, stock_item_id: int, jumlah: Decimal) -> Recipe:
+async def create(
+    db: AsyncSession,
+    product_id: int,
+    stock_item_id: int,
+    jumlah: Decimal,
+    quantity_required: Optional[Decimal] = None,
+    unit: Optional[str] = None
+) -> Recipe:
     recipe = Recipe(
         product_id=product_id,
         stock_item_id=stock_item_id,
         jumlah_dibutuhkan=jumlah,
+        quantity_required=quantity_required or jumlah,
+        unit=unit,
     )
     db.add(recipe)
     await db.flush()   # dapat id sebelum commit
     return recipe
 
 
-async def update_qty(db: AsyncSession, recipe: Recipe, jumlah: Decimal) -> Recipe:
+async def update_qty(
+    db: AsyncSession,
+    recipe: Recipe,
+    jumlah: Decimal,
+    quantity_required: Optional[Decimal] = None,
+    unit: Optional[str] = None
+) -> Recipe:
     recipe.jumlah_dibutuhkan = jumlah
+    recipe.quantity_required = quantity_required or jumlah
+    if unit is not None:
+        recipe.unit = unit
     await db.flush()
     return recipe
 
