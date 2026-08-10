@@ -8,9 +8,11 @@ try:
 except ImportError:
     raise RuntimeError("fastapi.staticfiles is required to serve static files.")
 
-# Ensure static directories exist
-os.makedirs("static", exist_ok=True)
-os.makedirs("static/products", exist_ok=True)
+# Safe creation of static directories (Aman untuk Vercel Read-Only System)
+try:
+    os.makedirs("static/products", exist_ok=True)
+except OSError:
+    pass  # Abaikan error di lingkungan serverless read-only
 
 # Import database core
 from app.core.database import Base, engine
@@ -47,11 +49,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Hanya mount static jika direktori static benar-benar ada
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
 
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "*"  # Membuka akses untuk Vercel Frontend & Testing Postman
 ]
 
 app.add_middleware(
