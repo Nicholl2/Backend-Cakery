@@ -1,5 +1,8 @@
-# api/index.py
-from app.main import app
+import os
+import sys
 
-# Vercel Serverless Handler
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app.main import app  # noqa: E402
+
 handler = app
