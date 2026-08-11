@@ -9,7 +9,8 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 480
     service_api_key: str = "change-this-service-key"
-    chatbot_url: str = "http://localhost:8001"
+    chatbot_url: str = "http://localhost:8000"
+    chatbot_internal_key: str = ""
     midtrans_server_key: str = ""
     midtrans_is_production: bool = False
 

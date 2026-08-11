@@ -19,7 +19,8 @@ router = APIRouter(
 
 class PaymentChargeRequest(BaseModel):
     order_id: int
-    payment_type: str = Field(..., pattern="^(bank_transfer|qris)$")
+    payment_method: str = Field(..., pattern="^(bank_transfer|qris)$")
+    payment_type: str = Field(..., pattern="^(full|dp)$")
     amount: Decimal = Field(..., gt=0)
 
 # 1. Endpoint POST /payments (secured)
@@ -31,11 +32,12 @@ async def create_midtrans_payment(
 ):
     """
     Buat request charge baru ke Midtrans Core API (headless).
-    Mengmengembalikan data transaksi Midtrans (seperti nomor VA atau QRIS string).
+    Mengembalikan data transaksi Midtrans (seperti nomor VA atau QRIS string).
     """
     return await payment_service.create_midtrans_charge(
         db,
         order_id=data.order_id,
+        payment_method=data.payment_method,
         payment_type=data.payment_type,
         amount=data.amount
     )

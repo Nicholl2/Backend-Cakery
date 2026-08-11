@@ -303,7 +303,11 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
         try:
             url = f"{settings.chatbot_url}/webhook/internal/orders/{order_id}/ready"
             async with httpx.AsyncClient() as client:
-                await client.post(url, json={})
+                await client.post(
+                    url,
+                    json={},
+                    headers={"X-Internal-Key": settings.chatbot_internal_key}
+                )
         except Exception as e:
             logger.error(f"Failed to send webhook push notification for order {order_id}: {e}")
             

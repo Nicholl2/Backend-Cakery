@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 async def create_midtrans_charge(
     db: AsyncSession,
     order_id: int,
+    payment_method: str,
     payment_type: str,
     amount: Decimal
 ) -> dict:
@@ -34,6 +35,27 @@ async def create_midtrans_charge(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Invoice tidak ditemukan"
         )
+
+    # Validasi Nominal Payment (Anti-Tampering)
+    from decimal import ROUND_HALF_UP
+    if payment_type == "full":
+        valid_amount = order.total_harga_pesanan
+    elif payment_type == "dp":
+        valid_amount = order.total_harga_pesanan * Decimal("0.5")
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid payment type. Must be 'full' or 'dp'."
+        )
+
+    valid_amount_rounded = valid_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    amount_rounded = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    if amount_rounded != valid_amount_rounded:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid payment amount. Amount does not match order calculation."
+        )
         
     invoice = order.invoice
     
@@ -42,14 +64,14 @@ async def create_midtrans_charge(
     order_id_midtrans = f"{invoice.nomor_invoice}-PAY-{int(datetime.now().timestamp())}"
     
     payload = {
-        "payment_type": payment_type,
+        "payment_type": payment_method,
         "transaction_details": {
             "order_id": order_id_midtrans,
             "gross_amount": int(amount)
         }
     }
     
-    if payment_type == "bank_transfer":
+    if payment_method == "bank_transfer":
         payload["bank_transfer"] = {"bank": "bca"}
         
     url = f"{settings.midtrans_api_url}/charge"
@@ -78,9 +100,9 @@ async def create_midtrans_charge(
     va_number = None
     qris_url = None
     
-    if payment_type == "bank_transfer" and "va_numbers" in res_json:
+    if payment_method == "bank_transfer" and "va_numbers" in res_json:
         va_number = res_json["va_numbers"][0].get("va_number")
-    elif payment_type == "qris" and "actions" in res_json:
+    elif payment_method == "qris" and "actions" in res_json:
         for action in res_json["actions"]:
             if action.get("name") == "generate-qr-code":
                 qris_url = action.get("url")
@@ -91,15 +113,14 @@ async def create_midtrans_charge(
     pg_transaction_id = res_json.get("transaction_id")
     
     # Tentukan tipe pembayaran (DP/Final) berdasarkan perbandingan tagihan
-    # Jika bayar kurang dari total tagihan, tandai sebagai DP
-    model_payment_type = PaymentTypeEnum.final if amount >= invoice.total_tagihan else PaymentTypeEnum.dp
+    model_payment_type = PaymentTypeEnum.dp if payment_type == "dp" else PaymentTypeEnum.final
     
     # 4. Simpan record baru di tabel payments dengan status "Pending"
     payment_obj = Payment(
         invoice_id=invoice.id,
         pg_transaction_id=pg_transaction_id,
         jumlah_bayar=amount,
-        payment_method=payment_type,
+        payment_method=payment_method,
         payment_status=PaymentStatusEnum.pending,
         payment_type=model_payment_type,
         va_number=va_number,
