@@ -1,0 +1,143 @@
+name: CI
+
+# Dua hal yang dijaga setiap perubahan:
+#   1. test  — integration test master data jalan di PostgreSQL bersih
+#   2. docker — image bisa di-build dan benar-benar mau start (smoke test)
+# Push image ke GHCR hanya terjadi di branch main. Tidak ada deploy otomatis.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  test:
+    name: Integration test (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: python app/test_master_data.py
+        env:
+          DATABASE_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci
+          SECRET_KEY: dummy
+          SERVICE_API_KEY: dummy
+        run: python app/test_master_data.py
+
+  docker:
+    name: Build image + smoke test
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      packages: write        # untuk push ke GHCR; tidak butuh secret tambahan
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Selalu build ke daemon lokal dulu supaya yang di-smoke-test persis
+      # artefak yang nanti di-push.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        env:
+          # Lewat env, bukan interpolasi langsung di dalam run: — nilai yang
+          # berasal dari nama branch/PR tidak boleh menyentuh shell mentah-mentah.
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          TAG=$(echo "$TAGS" | head -n1)
+          docker run -d --name api --network host \
+            -e DATABASE_URL=postgresql+asyncpg://ci:ci@localhost:5432/ci \
+            -e SECRET_KEY=dummy \
+            -e SERVICE_API_KEY=dummy \
+            "$TAG"
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/openapi.json > /dev/null; then
+              echo "app menjawab /openapi.json"
+              curl -fsS http://localhost:8000/products/ | head -c 200; echo
+              docker rm -f api > /dev/null
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::container tidak melayani /openapi.json dalam 60 detik"
+          docker logs api
+          exit 1
+
+      # Hanya di main: PR (apalagi dari fork) tidak punya izin tulis ke registry.
+      - name: Login ke GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          echo "$TAGS" | while read -r tag; do
+            # if-fi, bukan "[ -n ] && ...": runner menjalankan run: dengan `set -e`,
+            # jadi baris kosong di akhir daftar tag akan menggagalkan step.
+            if [ -n "$tag" ]; then
+              docker push "$tag"
+            fi
+          done
