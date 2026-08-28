@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     chatbot_internal_key: str = ""
     midtrans_server_key: str = ""
     midtrans_is_production: bool = False
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    chatbot_wa_number: str = "6282283088019"
 
     @property
     def midtrans_api_url(self) -> str:

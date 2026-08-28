@@ -139,43 +139,7 @@ async def create_midtrans_charge(
         "midtrans_response": res_json
     }
 
-async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
-    order_id = payload.get("order_id")
-    status_code = payload.get("status_code")
-    gross_amount = payload.get("gross_amount")
-    signature_from_payload = payload.get("signature_key")
-    
-    # 1. Validasi integritas request menggunakan SHA512 Signature Key
-    raw_string = f"{order_id}{status_code}{gross_amount}{settings.midtrans_server_key}"
-    calculated_signature = hashlib.sha512(raw_string.encode('utf-8')).hexdigest()
-    
-    if calculated_signature != signature_from_payload:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid Signature"
-        )
-        
-    pg_transaction_id = payload.get("transaction_id")
-    
-    # 2. Cari data payment berdasarkan pg_transaction_id atau parsing order_id
-    payment = await payment_repo.get_payment_by_pg_id(db, pg_transaction_id)
-    if not payment:
-        if order_id and "-PAY-" in order_id:
-            inv_num = order_id.split("-PAY-")[0]
-            result = await db.execute(
-                select(Payment)
-                .join(Invoice, Payment.invoice_id == Invoice.id)
-                .where(Invoice.nomor_invoice == inv_num)
-                .order_by(Payment.id.desc())
-            )
-            payment = result.scalars().first()
-            
-    if not payment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Data pembayaran tidak ditemukan"
-        )
-        
+async def _apply_transaction_status(db: AsyncSession, payment: Payment, payload: dict) -> None:
     # 3. Lakukan mapping status Midtrans ke PaymentStatusEnum
     txn_status = payload.get("transaction_status")
     status_map = {
@@ -222,9 +186,72 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
                     order.status = OrderStatusEnum.in_process
             else:
                 invoice.status = InvoiceStatusEnum.partial
-                
+
+
+async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
+    order_id = payload.get("order_id")
+    status_code = payload.get("status_code")
+    gross_amount = payload.get("gross_amount")
+    signature_from_payload = payload.get("signature_key")
+    
+    # 1. Validasi integritas request menggunakan SHA512 Signature Key
+    raw_string = f"{order_id}{status_code}{gross_amount}{settings.midtrans_server_key}"
+    calculated_signature = hashlib.sha512(raw_string.encode('utf-8')).hexdigest()
+    
+    if calculated_signature != signature_from_payload:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Signature"
+        )
+        
+    pg_transaction_id = payload.get("transaction_id")
+    
+    # 2. Cari data payment berdasarkan pg_transaction_id atau parsing order_id
+    payment = await payment_repo.get_payment_by_pg_id(db, pg_transaction_id)
+    if not payment:
+        if order_id and "-PAY-" in order_id:
+            inv_num = order_id.split("-PAY-")[0]
+            result = await db.execute(
+                select(Payment)
+                .join(Invoice, Payment.invoice_id == Invoice.id)
+                .where(Invoice.nomor_invoice == inv_num)
+                .order_by(Payment.id.desc())
+            )
+            payment = result.scalars().first()
+            
+    if not payment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Data pembayaran tidak ditemukan"
+        )
+        
+    await _apply_transaction_status(db, payment, payload)
     await db.commit()
     return {"status": "success", "payment_status": payment.payment_status}
+
+
+async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
+    """Check payment status via Midtrans API and apply if success"""
+    if payment.payment_status == PaymentStatusEnum.pending:
+        url = f"{settings.midtrans_api_url}/{payment.pg_transaction_id}/status"
+        encoded_key = base64.b64encode(f"{settings.midtrans_server_key}:".encode()).decode()
+        headers = {
+            "Authorization": f"Basic {encoded_key}",
+            "Accept": "application/json"
+        }
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers=headers)
+                if response.status_code == 200:
+                    payload = response.json()
+                    await _apply_transaction_status(db, payment, payload)
+                    await db.commit()
+                    await db.refresh(payment)
+        except Exception as e:
+            logger.error(f"Failed to refresh pending payment {payment.id} status: {e}")
+            # Ignored and fallback to original payment object
+    return payment
+
 
 async def get_payments_by_order(db: AsyncSession, order_id: int) -> List[Payment]:
     return await payment_repo.get_payments_by_order_id(db, order_id)

@@ -68,7 +68,8 @@ class OTPVerifyResponse(BaseModel):
 class BuyerRegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     email: str = Field(..., max_length=100)
-    phone: str = Field(..., max_length=20)
+    phone: Optional[str] = Field(None, max_length=20)
+    phone_number: Optional[str] = Field(None, max_length=20)
     password: str = Field(..., min_length=6)
     verify_token: str
 
@@ -84,8 +85,11 @@ class BuyerAuthResponse(BaseModel):
 
 
 class BuyerLoginRequest(BaseModel):
-    email: str
-    password: str
+    email: Optional[str] = None
+    password: Optional[str] = None
+    phone: Optional[str] = None
+    phone_number: Optional[str] = None
+    verify_token: Optional[str] = None
 
 
 class BuyerLoginPhoneRequest(BaseModel):
@@ -94,7 +98,8 @@ class BuyerLoginPhoneRequest(BaseModel):
 
 
 class BuyerLoginOTPRequest(BaseModel):
-    phone: str
+    phone: Optional[str] = None
+    phone_number: Optional[str] = None
     verify_token: str
 
 
@@ -115,3 +120,25 @@ class SellerForgotPasswordVerifyRequest(BaseModel):
 class SellerResetPasswordRequest(BaseModel):
     verify_token: str
     new_password: str = Field(..., min_length=6)
+
+
+# ── WA DEEP LINK OTP SCHEMAS ────────────────────────────────────────────────
+
+class WAVerifyStartRequest(BaseModel):
+    phone_number: str
+
+
+class WAVerifyStartResponse(BaseModel):
+    nonce: str
+    deeplink: str
+    expires_in: int
+
+
+class WAVerifyConfirmRequest(BaseModel):
+    nonce: str
+    sender_phone: str
+
+
+class WAVerifyStatusResponse(BaseModel):
+    status: str
+    verify_token: Optional[str] = None

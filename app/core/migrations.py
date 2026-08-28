@@ -82,3 +82,24 @@ async def ensure_recipe_columns(conn: AsyncConnection):
     await conn.execute(text(
         "UPDATE recipes SET unit = s.satuan FROM stock_items s WHERE recipes.stock_item_id = s.id AND recipes.unit IS NULL;"
     ))
+
+
+async def ensure_otp_columns(conn: AsyncConnection):
+    """
+    Ensure new WA deep link OTP columns are present in the 'otp_codes' table on PostgreSQL database.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    await conn.execute(text("ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS nonce VARCHAR(50);"))
+    await conn.execute(text("ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);"))
+    await conn.execute(text("ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;"))
+    await conn.execute(text("ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS verify_token VARCHAR(36);"))
+    
+    # Update existing NULL records for is_verified to FALSE
+    await conn.execute(text("UPDATE otp_codes SET is_verified = COALESCE(is_verified, FALSE) WHERE is_verified IS NULL;"))
+    await conn.execute(text("ALTER TABLE otp_codes ALTER COLUMN is_verified SET NOT NULL;"))
+
+    # Create indices
+    await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_otp_codes_nonce ON otp_codes (nonce) WHERE nonce IS NOT NULL;"))
+    await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_otp_codes_verify_token ON otp_codes (verify_token) WHERE verify_token IS NOT NULL;"))

@@ -65,6 +65,12 @@ async def create_new_order(
                 )
 
             jumlah = item["jumlah"]
+            if product.minimum_order and jumlah < product.minimum_order:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Jumlah pesanan untuk '{product.nama_produk}' ({jumlah}) kurang dari minimum order ({product.minimum_order}).",
+                )
+
             subtotal = Decimal(str(product.harga_jual)) * jumlah
             total_harga_pesanan += subtotal
 

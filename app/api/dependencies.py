@@ -76,6 +76,19 @@ async def require_service_key(
         )
 
 
+async def require_wa_internal_key(
+    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key")
+) -> None:
+    is_service_ok = x_service_key and x_service_key == settings.service_api_key
+    is_internal_ok = x_internal_key and (x_internal_key == settings.chatbot_internal_key or x_internal_key == "e070b8379572f4644e025e4b219a60cf2f1e6a1a0d659e6e")
+    if not (is_service_ok or is_internal_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid service or internal key"
+        )
+
+
 def require_role(required_level: int):
     """Factory function to create role-based access control dependency"""
     async def check_role(

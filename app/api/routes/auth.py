@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
+from app.api.dependencies import require_wa_internal_key
 from app.schemas.auth import (
     UserLogin, Token,
     OTPSendRequest, OTPSendResponse,
@@ -8,9 +9,12 @@ from app.schemas.auth import (
     BuyerRegisterRequest, BuyerAuthResponse,
     BuyerLoginRequest, BuyerLoginPhoneRequest, BuyerLoginOTPRequest,
     BuyerResetPasswordRequest, SellerForgotPasswordRequest,
-    SellerForgotPasswordVerifyRequest, SellerResetPasswordRequest
+    SellerForgotPasswordVerifyRequest, SellerResetPasswordRequest,
+    WAVerifyStartRequest, WAVerifyStartResponse,
+    WAVerifyConfirmRequest, WAVerifyStatusResponse
 )
-from app.services import auth_service, buyer_auth_service
+from app.schemas.user import UserBootstrap, UserOut
+from app.services import auth_service, buyer_auth_service, user_service
 
 router = APIRouter(
     tags=["Authentication"],
@@ -19,6 +23,18 @@ router = APIRouter(
         422: {"description": "Unprocessable entity - user inactive"}
     }
 )
+
+
+@router.post("/bootstrap", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+async def bootstrap(
+    data: UserBootstrap,
+    db: AsyncSession = Depends(get_db)
+) -> UserOut:
+    """
+    Bootstrap the first Owner user in the system if the users table is empty.
+    """
+    user = await user_service.bootstrap_owner(db, data)
+    return UserOut.model_validate(user)
 
 
 @router.post("/login", response_model=Token, status_code=status.HTTP_200_OK)
@@ -42,6 +58,35 @@ async def login(
     - **username**: Authenticated username
     """
     return await auth_service.authenticate_user(db, login_data)
+
+
+# ── WA DEEP LINK OTP ENDPOINTS ──────────────────────────────────────────────
+
+@router.post("/verify/wa/start", response_model=WAVerifyStartResponse, status_code=status.HTTP_201_CREATED)
+async def verify_wa_start(
+    data: WAVerifyStartRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Start WhatsApp Deep Link OTP verification flow"""
+    return await buyer_auth_service.start_wa_verification(db, data.phone_number)
+
+
+@router.post("/verify/wa/confirm", status_code=status.HTTP_200_OK, dependencies=[Depends(require_wa_internal_key)])
+async def verify_wa_confirm(
+    data: WAVerifyConfirmRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Confirm verification of phone number by chatbot (requires service or internal key)"""
+    return await buyer_auth_service.confirm_wa_verification(db, data.nonce, data.sender_phone)
+
+
+@router.get("/verify/wa/status", response_model=WAVerifyStatusResponse, status_code=status.HTTP_200_OK)
+async def verify_wa_status(
+    nonce: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Check WhatsApp verification status by nonce (polling)"""
+    return await buyer_auth_service.check_wa_verification_status(db, nonce)
 
 
 # ── BUYER AUTHENTICATION ENDPOINTS ──────────────────────────────────────────
@@ -70,11 +115,17 @@ async def buyer_register(
     db: AsyncSession = Depends(get_db)
 ):
     """Register a new buyer account using verified token"""
+    phone = data.phone_number or data.phone
+    if not phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="phone or phone_number is required"
+        )
     return await buyer_auth_service.register_buyer(
         db=db,
         name=data.name,
         email=data.email,
-        phone=data.phone,
+        phone=phone,
         password=data.password,
         verify_token=data.verify_token
     )
@@ -85,8 +136,22 @@ async def buyer_login(
     data: BuyerLoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Login buyer using email and password"""
-    return await buyer_auth_service.login_buyer_password(db, data.email, data.password)
+    """Login buyer using email and password, or phone and verify_token"""
+    if data.verify_token:
+        phone = data.phone_number or data.phone
+        if not phone:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="phone_number is required for OTP login"
+            )
+        return await buyer_auth_service.login_buyer_otp(db, phone, data.verify_token)
+    else:
+        if not data.email or not data.password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="email and password are required for password login"
+            )
+        return await buyer_auth_service.login_buyer_password(db, data.email, data.password)
 
 
 @router.post("/buyer/login-phone", response_model=BuyerAuthResponse, status_code=status.HTTP_200_OK)
@@ -104,7 +169,13 @@ async def buyer_login_otp(
     db: AsyncSession = Depends(get_db)
 ):
     """Login buyer using phone number and verified token"""
-    return await buyer_auth_service.login_buyer_otp(db, data.phone, data.verify_token)
+    phone = data.phone_number or data.phone
+    if not phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="phone or phone_number is required"
+        )
+    return await buyer_auth_service.login_buyer_otp(db, phone, data.verify_token)
 
 
 @router.post("/buyer/reset-password", status_code=status.HTTP_200_OK)

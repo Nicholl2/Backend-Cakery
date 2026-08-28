@@ -53,6 +53,14 @@ async def get_order_payment_status(
     Mengambil summary status pembayaran terakhir dari suatu order untuk polling chatbot.
     """
     payments = await payment_service.get_payments_by_order(db, order_id)
+    
+    # Refresh status if any payment is pending
+    refreshed_payments = []
+    for p in payments:
+        refreshed = await payment_service.refresh_if_pending(db, p)
+        refreshed_payments.append(refreshed)
+    payments = refreshed_payments
+
     order = await order_repo.get_order_by_id(db, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order tidak ditemukan")

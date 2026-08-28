@@ -15,7 +15,13 @@ class OTPCode(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False)
     is_used = Column(Boolean, default=False, nullable=False)
     
+    # New columns for WA Deep Link OTP flow
+    nonce = Column(String(50), unique=True, nullable=True, index=True)
+    phone_number = Column(String(20), nullable=True)
+    is_verified = Column(Boolean, default=False, nullable=False)
+    verify_token = Column(String(36), unique=True, nullable=True, index=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     def __repr__(self):
-        return f"<OTPCode(id={self.id}, target={self.target}, purpose={self.purpose}, is_used={self.is_used})>"
+        return f"<OTPCode(id={self.id}, target={self.target}, purpose={self.purpose}, is_used={self.is_used}, nonce={self.nonce}, is_verified={self.is_verified})>"

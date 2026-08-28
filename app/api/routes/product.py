@@ -17,6 +17,7 @@ router = APIRouter(tags=["Products"])
 # ── CRUD ─────────────────────────────────────────────────────────────────────
 
 @router.post("/", response_model=ProductOut, status_code=201,
+             dependencies=[Depends(require_admin_or_owner)],
              summary="Buat produk baru — hpp_total dimulai dari 0, isi resep dulu")
 async def create_product(data: ProductCreate, db: AsyncSession = Depends(get_db)):
     return await product_service.create_product(db, data)
@@ -39,12 +40,14 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/{product_id}", response_model=ProductOut,
-            summary="Edit produk (Admin/Owner) — nama, deskripsi, kategori, is_active")
+             dependencies=[Depends(require_admin_or_owner)],
+             summary="Edit produk (Admin/Owner) — nama, deskripsi, kategori, is_active")
 async def update_product(product_id: int, data: ProductUpdate, db: AsyncSession = Depends(get_db)):
     return await product_service.update_product(db, product_id, data)
 
 
 @router.delete("/{product_id}",
+               dependencies=[Depends(require_admin_or_owner)],
                summary="Hapus produk beserta semua resep dan riwayat harganya")
 async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     return await product_service.delete_product(db, product_id)
@@ -64,6 +67,7 @@ async def upload_product_image(
 # ── Pricing — khusus Owner ────────────────────────────────────────────────────
 
 @router.patch("/{product_id}/price", response_model=SetPriceResponse,
+              dependencies=[Depends(require_admin_or_owner)],
               summary="Owner menetapkan harga jual — Use Case 2 (Set Product Prices). "
                       "Sistem beri warning jika harga < HPP. Riwayat perubahan dicatat otomatis.")
 async def set_price(product_id: int, data: SetPriceRequest, db: AsyncSession = Depends(get_db)):

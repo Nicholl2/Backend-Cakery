@@ -17,6 +17,7 @@ except OSError:
 # Import database core
 from app.core.database import Base, engine
 from app import models  
+from app.core.config import settings
 from app.api.routes import auth, faq, expense
 from app.api.routes.stock import router as stock_router
 from app.api.routes.pricing import router as pricing_router
@@ -34,11 +35,12 @@ from app.api.routes.review import router as review_router
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        from app.core.migrations import ensure_product_columns, ensure_buyer_columns, ensure_stock_item_columns, ensure_recipe_columns
+        from app.core.migrations import ensure_product_columns, ensure_buyer_columns, ensure_stock_item_columns, ensure_recipe_columns, ensure_otp_columns
         await ensure_product_columns(conn)
         await ensure_buyer_columns(conn)
         await ensure_stock_item_columns(conn)
         await ensure_recipe_columns(conn)
+        await ensure_otp_columns(conn)
     yield
     pass
 
@@ -53,11 +55,7 @@ app = FastAPI(
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "*"  # Membuka akses untuk Vercel Frontend & Testing Postman
-]
+origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip() and origin.strip() != "*"]
 
 app.add_middleware(
     CORSMiddleware,
