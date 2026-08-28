@@ -95,11 +95,18 @@ async def ensure_otp_columns(conn: AsyncConnection):
     await conn.execute(text("ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);"))
     await conn.execute(text("ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;"))
     await conn.execute(text("ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS verify_token VARCHAR(36);"))
+    await conn.execute(text("ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS attempt_count INTEGER DEFAULT 0;"))
     
     # Update existing NULL records for is_verified to FALSE
     await conn.execute(text("UPDATE otp_codes SET is_verified = COALESCE(is_verified, FALSE) WHERE is_verified IS NULL;"))
     await conn.execute(text("ALTER TABLE otp_codes ALTER COLUMN is_verified SET NOT NULL;"))
 
+    # Ensure attempt_count has NOT NULL constraint with default 0
+    await conn.execute(text("UPDATE otp_codes SET attempt_count = 0 WHERE attempt_count IS NULL;"))
+    await conn.execute(text("ALTER TABLE otp_codes ALTER COLUMN attempt_count SET NOT NULL;"))
+    await conn.execute(text("ALTER TABLE otp_codes ALTER COLUMN attempt_count SET DEFAULT 0;"))
+
     # Create indices
     await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_otp_codes_nonce ON otp_codes (nonce) WHERE nonce IS NOT NULL;"))
     await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_otp_codes_verify_token ON otp_codes (verify_token) WHERE verify_token IS NOT NULL;"))
+

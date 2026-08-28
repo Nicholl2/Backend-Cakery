@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime
+from sqlalchemy import Column, String, Boolean, DateTime, Integer
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -20,6 +20,8 @@ class OTPCode(Base):
     phone_number = Column(String(20), nullable=True)
     is_verified = Column(Boolean, default=False, nullable=False)
     verify_token = Column(String(36), unique=True, nullable=True, index=True)
+    # Number of failed confirm attempts (wrong sender phone)
+    attempt_count = Column(Integer, default=0, nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

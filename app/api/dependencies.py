@@ -80,8 +80,13 @@ async def require_wa_internal_key(
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
     x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key")
 ) -> None:
-    is_service_ok = x_service_key and x_service_key == settings.service_api_key
-    is_internal_ok = x_internal_key and (x_internal_key == settings.chatbot_internal_key or x_internal_key == "e070b8379572f4644e025e4b219a60cf2f1e6a1a0d659e6e")
+    """Validate chatbot/internal-service identity. Accepts X-Service-Key or X-Internal-Key."""
+    is_service_ok = bool(x_service_key and x_service_key == settings.service_api_key)
+    is_internal_ok = bool(
+        x_internal_key
+        and settings.chatbot_internal_key  # guard: reject if config is blank
+        and x_internal_key == settings.chatbot_internal_key
+    )
     if not (is_service_ok or is_internal_ok):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

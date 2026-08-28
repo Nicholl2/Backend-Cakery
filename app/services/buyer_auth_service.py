@@ -85,8 +85,13 @@ async def validate_and_consume_db_verify_token(db: AsyncSession, verify_token: s
             detail="Token verifikasi sudah digunakan."
         )
         
-    cleaned_phone = phone_number.strip().replace(" ", "").replace("+", "")
-    cleaned_otp_phone = otp.phone_number.strip().replace(" ", "").replace("+", "") if otp.phone_number else ""
+    try:
+        cleaned_phone = normalize_phone(phone_number)
+        cleaned_otp_phone = normalize_phone(otp.phone_number) if otp.phone_number else ""
+    except HTTPException:
+        cleaned_phone = phone_number.strip()
+        cleaned_otp_phone = (otp.phone_number or "").strip()
+        
     if cleaned_otp_phone != cleaned_phone:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -109,14 +114,48 @@ async def validate_and_consume_db_verify_token(db: AsyncSession, verify_token: s
     await db.refresh(otp)
 
 
+
+
+# ── PHONE NORMALIZATION ───────────────────────────────────────────────────────
+
+def normalize_phone(phone: str) -> str:
+    """
+    Normalize a WA phone number to E.164 format without '+' prefix.
+    Rules:
+      - Strip all non-digit characters.
+      - '0xxxxxxxxx'  → '62xxxxxxxxx'
+      - '620xxxxxxxxx' → '62xxxxxxxxx'  (remove redundant '0' after country code)
+    Raises HTTP 400 if the result is not 10–15 digits.
+    """
+    digits = "".join(c for c in phone if c.isdigit())
+    if digits.startswith("620"):
+        digits = "62" + digits[3:]
+    elif digits.startswith("0"):
+        digits = "62" + digits[1:]
+    if not (10 <= len(digits) <= 15):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Nomor telepon tidak valid: '{phone}'. Gunakan format E.164 (contoh: 628123456789)."
+        )
+    return digits
+
+
+# ── WA DEEP LINK OTP ──────────────────────────────────────────────────────────
+
 def generate_nonce(length: int = 6) -> str:
     alphabet = string.ascii_uppercase + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
 async def start_wa_verification(db: AsyncSession, phone_number: str) -> dict:
-    phone_number = phone_number.strip().replace(" ", "").replace("+", "")
+    phone_number = normalize_phone(phone_number)
     
+    if not settings.chatbot_wa_number:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Layanan verifikasi WA belum dikonfigurasi. Hubungi administrator."
+        )
+
     # Generate unique 6-char alphanumeric nonce
     nonce = generate_nonce(6)
     for _ in range(5):
@@ -127,9 +166,8 @@ async def start_wa_verification(db: AsyncSession, phone_number: str) -> dict:
         nonce = generate_nonce(6)
         
     otp_id = str(uuid.uuid4())
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10) # 10 minutes expiry
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
     
-    # Store in DB
     otp = OTPCode(
         id=otp_id,
         target=phone_number,
@@ -140,7 +178,8 @@ async def start_wa_verification(db: AsyncSession, phone_number: str) -> dict:
         expires_at=expires_at,
         is_used=False,
         nonce=nonce,
-        is_verified=False
+        is_verified=False,
+        attempt_count=0
     )
     db.add(otp)
     await db.commit()
@@ -153,39 +192,63 @@ async def start_wa_verification(db: AsyncSession, phone_number: str) -> dict:
     }
 
 
+_MAX_CONFIRM_ATTEMPTS = 3
+
+
 async def confirm_wa_verification(db: AsyncSession, nonce: str, sender_phone: str) -> dict:
-    sender_phone = sender_phone.strip().replace(" ", "").replace("+", "")
+    """
+    Called exclusively by the chatbot with X-Service-Key / X-Internal-Key.
+    Validates the nonce and that sender_phone matches the originating phone.
+    Does NOT overwrite otp.phone_number; only compares normalized values.
+    """
+    normalized_sender = normalize_phone(sender_phone)
     
     stmt = select(OTPCode).where(OTPCode.nonce == nonce)
     res = await db.execute(stmt)
     otp = res.scalars().first()
     
+    # ── 404: not found, already used, or expired ─────────────────────────────
     if not otp:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Nonce verifikasi tidak ditemukan."
         )
-        
-    if otp.is_used:
+    if otp.is_used or otp.is_verified:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Nonce ini sudah digunakan."
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nonce verifikasi sudah digunakan atau telah diverifikasi."
         )
-        
     otp_expires = otp.expires_at
     if otp_expires.tzinfo is None:
         otp_expires = otp_expires.replace(tzinfo=timezone.utc)
-        
     if otp_expires < datetime.now(timezone.utc):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="Nonce verifikasi telah kedaluwarsa."
         )
-        
-    # Valid, update DB
+    
+    # ── Phone mismatch: increment attempt counter ─────────────────────────────
+    normalized_original = normalize_phone(otp.phone_number) if otp.phone_number else ""
+    if normalized_sender != normalized_original:
+        otp.attempt_count = (otp.attempt_count or 0) + 1
+        await db.commit()
+        if otp.attempt_count >= _MAX_CONFIRM_ATTEMPTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Terlalu banyak percobaan konfirmasi. Silakan mulai ulang verifikasi."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Nomor pengirim tidak cocok dengan nomor yang mendaftarkan nonce ini. "
+                f"Sisa percobaan: {_MAX_CONFIRM_ATTEMPTS - otp.attempt_count}."
+            )
+        )
+    
+    # ── Success: mark verified and consumed ───────────────────────────────────
     verify_token = str(uuid.uuid4())
-    otp.phone_number = sender_phone
     otp.is_verified = True
+    otp.is_used = True
     otp.verify_token = verify_token
     await db.commit()
     await db.refresh(otp)
@@ -218,80 +281,6 @@ async def check_wa_verification_status(db: AsyncSession, nonce: str) -> dict:
         }
 
 
-# ── OTP FLOWS ────────────────────────────────────────────────────────────────
-
-async def send_otp(db: AsyncSession, target: str, channel: str, purpose: str) -> dict:
-    """Generate and store mock OTP code ('7777') for development"""
-    # Generate unique ID (UUID)
-    otp_id = str(uuid.uuid4())
-    
-    # Hash of "7777"
-    code_hash = hash_password("7777")
-    
-    # Expiry set to 5 minutes
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
-    
-    # Save in DB
-    await otp_repo.create_otp(
-        db=db,
-        otp_id=otp_id,
-        target=target,
-        channel=channel,
-        purpose=purpose,
-        code_hash=code_hash,
-        expires_at=expires_at
-    )
-    
-    return {
-        "otp_id": otp_id,
-        "expires_in": 300
-    }
-
-
-async def verify_otp(db: AsyncSession, otp_id: str, code: str) -> dict:
-    """Verify OTP (hardcoded '7777' check) and issue single-use verify_token"""
-    otp = await otp_repo.get_otp_by_id(db, otp_id)
-    
-    if not otp:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OTP request not found"
-        )
-        
-    if otp.is_used:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OTP code has already been used"
-        )
-        
-    # Ensure datetime has UTC timezone for comparison if needed
-    otp_expires = otp.expires_at
-    if otp_expires.tzinfo is None:
-        otp_expires = otp_expires.replace(tzinfo=timezone.utc)
-        
-    if otp_expires < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OTP code has expired"
-        )
-        
-    # Standard check: code must be "7777" (or verify hash if "7777" was hashed)
-    if code != "7777" and not verify_password(code, otp.code_hash):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid OTP code"
-        )
-        
-    # Mark OTP as used in database
-    await otp_repo.mark_otp_used(db, otp)
-    
-    # Generate single-use verify token
-    verify_token = generate_verify_token(otp.target, otp.purpose)
-    
-    return {
-        "verify_token": verify_token,
-        "target": otp.target
-    }
 
 
 # ── BUYER AUTH ───────────────────────────────────────────────────────────────

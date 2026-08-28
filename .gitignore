@@ -6,6 +6,8 @@ CONTEXT.md
 DATABASE_SCHEME.md
 API_ENDPOINT.md
 FEATURES_LOGIC.md
+TODO.txt
+test_master_data.py
 
 
 **/__pycache__/

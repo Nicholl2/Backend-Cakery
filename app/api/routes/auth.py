@@ -4,14 +4,14 @@ from app.core.database import get_db
 from app.api.dependencies import require_wa_internal_key
 from app.schemas.auth import (
     UserLogin, Token,
-    OTPSendRequest, OTPSendResponse,
-    OTPVerifyRequest, OTPVerifyResponse,
+    OTPVerifyResponse,
     BuyerRegisterRequest, BuyerAuthResponse,
     BuyerLoginRequest, BuyerLoginPhoneRequest, BuyerLoginOTPRequest,
     BuyerResetPasswordRequest, SellerForgotPasswordRequest,
     SellerForgotPasswordVerifyRequest, SellerResetPasswordRequest,
     WAVerifyStartRequest, WAVerifyStartResponse,
-    WAVerifyConfirmRequest, WAVerifyStatusResponse
+    WAVerifyConfirmRequest, WAVerifyStatusResponse,
+    OTPSendResponse, OTPSendRequest, OTPVerifyRequest,
 )
 from app.schemas.user import UserBootstrap, UserOut
 from app.services import auth_service, buyer_auth_service, user_service
@@ -90,23 +90,6 @@ async def verify_wa_status(
 
 
 # ── BUYER AUTHENTICATION ENDPOINTS ──────────────────────────────────────────
-
-@router.post("/buyer/otp/send", response_model=OTPSendResponse, status_code=status.HTTP_200_OK)
-async def buyer_otp_send(
-    data: OTPSendRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """Send OTP code (mock '7777' for development) to email or phone number"""
-    return await buyer_auth_service.send_otp(db, data.target, data.channel.value, data.purpose.value)
-
-
-@router.post("/buyer/otp/verify", response_model=OTPVerifyResponse, status_code=status.HTTP_200_OK)
-async def buyer_otp_verify(
-    data: OTPVerifyRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """Verify buyer OTP code (mock '7777') and get a single-use verification token"""
-    return await buyer_auth_service.verify_otp(db, data.otp_id, data.code)
 
 
 @router.post("/buyer/register", response_model=BuyerAuthResponse, status_code=status.HTTP_201_CREATED)
