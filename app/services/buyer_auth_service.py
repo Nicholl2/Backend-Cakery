@@ -235,7 +235,7 @@ async def confirm_wa_verification(db: AsyncSession, nonce: str, sender_phone: st
         if otp.attempt_count >= _MAX_CONFIRM_ATTEMPTS:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Terlalu banyak percobaan konfirmasi. Silakan mulai ulang verifikasi."
+                detail="Batas percobaan verifikasi tercapai (maksimal 3 kali). Silakan minta kode verifikasi baru."
             )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -245,10 +245,9 @@ async def confirm_wa_verification(db: AsyncSession, nonce: str, sender_phone: st
             )
         )
     
-    # ── Success: mark verified and consumed ───────────────────────────────────
+    # ── Success: mark verified ───────────────────────────────────────────────
     verify_token = str(uuid.uuid4())
     otp.is_verified = True
-    otp.is_used = True
     otp.verify_token = verify_token
     await db.commit()
     await db.refresh(otp)
