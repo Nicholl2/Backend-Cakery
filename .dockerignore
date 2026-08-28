@@ -1,0 +1,68 @@
+# Git
+.git
+.gitignore
+.gitattributes
+.github
+
+# Python bytecode & caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Secrets & local env (WAJIB: jangan pernah masuk image)
+.env
+.env.*
+!.env.example
+
+# Deployment config platform lain (tidak dipakai di container)
+vercel.json
+procfile
+Procfile
+.vercel/
+
+# Dokumentasi & catatan internal
+README.md
+TODO.txt
+CONTEXT.md
+DATABASE_SCHEME.md
+API_ENDPOINT.md
+FEATURES_LOGIC.md
+*.md
+
+# Test & script lokal
+app/test_*.py
+app/seed_admin.py
+tests/
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Artefak & data lokal
+*.zip
+app.zip
+*.log
+*.sqlite3
+*.db
+static/
+graphify-out/
