@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=appuser:appuser . .
 
-# app/main.py membuat static/products saat startup -> siapkan & pastikan writable
+# app/main.py membuat static/products saat startup
 RUN mkdir -p /app/static/products && chown -R appuser:appuser /app/static
 
 USER appuser
@@ -25,5 +25,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
   CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8000')+'/openapi.json')"
 
-# exec -> uvicorn jadi PID 1 dan menerima SIGTERM langsung saat container stop.
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
