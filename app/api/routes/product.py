@@ -54,12 +54,12 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{product_id}/image", response_model=ProductOut,
+             dependencies=[Depends(require_admin_or_owner)],
              summary="Upload foto produk (Admin/Owner) — format JPEG, PNG, WEBP, maks 5MB")
 async def upload_product_image(
     product_id: int,
     file: UploadFile = File(..., description="File gambar produk (JPEG/PNG/WEBP)"),
     db: AsyncSession = Depends(get_db),
-    _ = Depends(require_admin_or_owner),
 ):
     return await product_service.upload_product_image(db, product_id, file)
 
