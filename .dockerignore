@@ -31,6 +31,7 @@ vercel.json
 procfile
 Procfile
 .vercel/
+api/
 
 # Dokumentasi & catatan internal
 README.md
