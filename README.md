@@ -103,11 +103,25 @@ Exit PostgreSQL:
 Create a `.env` file in the project root directory and add the following configuration:
 
 ```env
-DATABASE_URL=postgresql+asyncpg://postgres:yourpassword
+DATABASE_URL=your-database-url
 SECRET_KEY=your-super-secret-key-change-this-in-production
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=480
+SERVICE_API_KEY=your-chatbot-service-key
+CHATBOT_URL=http://localhost:8000
+CHATBOT_INTERNAL_KEY=your-internal-key
+CHATBOT_WA_NUMBER=6281234567890
+MIDTRANS_SERVER_KEY=SB-Mid-server-...
+MIDTRANS_IS_PRODUCTION=...
+CORS_ORIGINS=http://your-cors-origin
+ENVIRONMENT=development
+WA_VERIFICATION_MODE=mock
 ```
+
+> **Catatan Pengujian WA & Keamanan Produksi:**
+> - `ENVIRONMENT`: `"development"` | `"production"`
+> - `WA_VERIFICATION_MODE`: `"mock"` | `"real"` (Jika `ENVIRONMENT="production"`, sistem secara otomatis memaksakan mode `"real"` untuk menjaga keamanan verifikasi).
+> - Default `CORS_ORIGINS` telah mendukung frontend produksi di Vercel (`https://toti-cakery.vercel.app`) dan development local (`localhost:5173`).
 
 ---
 
