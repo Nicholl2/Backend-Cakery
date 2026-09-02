@@ -92,6 +92,18 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ---
 
+### 5. `app/utils/phone.py` & DTO Schemas (Normalisasi Nomor Telepon Internasional E.164)
+- **Helper `normalize_phone(phone: str)`**:
+  - Membersihkan seluruh karakter non-digit (spasi, tanda `+`, tanda hubung `-`, kurung `()`).
+  - **Fallback Default Indonesia**: Jika diawali prefix `0`, otomatis diubah menjadi `62` (contoh: `08123456789` $\rightarrow$ `628123456789`).
+  - **Pembersihan Redundant Zero**: Jika diawali `620`, diubah menjadi `62` (contoh: `+62 0812...` $\rightarrow$ `62812...`).
+  - **Dukungan Internasional**: Jika diawali kode negara internasional lainnya (misal `1...` US, `60...` Malaysia, `65...` Singapura, `44...` UK, `81...` Jepang, dsb.), kode negara tetap dipertahankan.
+  - **Validasi Standar E.164**: Memastikan panjang digit bersih berada pada rentang **7 hingga 15 digit**.
+- **Pydantic Schemas Validator (`validate_phone_e164`)**:
+  - Diterapkan pada seluruh DTO/Schema terkait (`app/schemas/auth.py`, `app/schemas/customer.py`, `app/schemas/user.py`) agar otomatis menolak format tidak valid atau membersihkan input menjadi format E.164 sebelum masuk ke database.
+
+---
+
 ## 🧪 Panduan Cara Ngetest (Testing Guide)
 
 ### Skenario 1: Testing Mock WA Verification Mode (Local / Staging)
@@ -189,3 +201,27 @@ curl -I -X OPTIONS "http://127.0.0.1:8000/products/" \
 access-control-allow-origin: https://toti-cakery.vercel.app
 access-control-allow-methods: *
 ```
+
+---
+
+### Skenario 4: Testing Normalisasi Nomor Telepon Internasional (E.164)
+
+Uji berbagai variasi format nomor telepon melalui Python unit runner:
+```bash
+python3 -c "
+from app.utils.phone import normalize_phone
+
+# 1. Indonesia local prefix 0 -> 62
+assert normalize_phone('0812-3456-7890') == '6281234567890'
+assert normalize_phone('+62 0812 3456 7890') == '6281234567890'
+
+# 2. International numbers (US, Malaysia, Singapore, UK, Japan)
+assert normalize_phone('+1 (202) 555-0123') == '12025550123'
+assert normalize_phone('+60 12-345 6789') == '60123456789'
+assert normalize_phone('+65 9123 4567') == '6591234567'
+assert normalize_phone('+44 7911 123456') == '447911123456'
+
+print('✅ Seluruh pengujian normalisasi nomor telepon internasional SUKSES!')
+"
+```
+

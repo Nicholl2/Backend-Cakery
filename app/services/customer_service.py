@@ -3,9 +3,11 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories import customer_repo, user_repo
 from app.schemas.customer import CustomerUpsert, CustomerOut, TakeoverSet, TakeoverStatus
+from app.utils.phone import normalize_phone
 
 
 async def get_customer(db: AsyncSession, nomor_wa: str) -> CustomerOut:
+    nomor_wa = normalize_phone(nomor_wa)
     customer = await customer_repo.get_by_nomor_wa(db, nomor_wa)
     if not customer:
         raise HTTPException(status_code=404, detail="Customer tidak ditemukan.")
@@ -13,8 +15,9 @@ async def get_customer(db: AsyncSession, nomor_wa: str) -> CustomerOut:
 
 
 async def upsert_customer(db: AsyncSession, data: CustomerUpsert) -> tuple[CustomerOut, bool]:
+    nomor_wa = normalize_phone(data.nomor_wa)
     customer, created = await customer_repo.upsert(
-        db, nomor_wa=data.nomor_wa, nama=data.nama, alamat=data.alamat
+        db, nomor_wa=nomor_wa, nama=data.nama, alamat=data.alamat
     )
     await db.commit()
     await db.refresh(customer)
@@ -22,6 +25,7 @@ async def upsert_customer(db: AsyncSession, data: CustomerUpsert) -> tuple[Custo
 
 
 async def set_takeover(db: AsyncSession, nomor_wa: str, data: TakeoverSet) -> TakeoverStatus:
+    nomor_wa = normalize_phone(nomor_wa)
     if data.active and not data.expires_at:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -40,6 +44,7 @@ async def set_takeover(db: AsyncSession, nomor_wa: str, data: TakeoverSet) -> Ta
 
 
 async def get_takeover_status(db: AsyncSession, nomor_wa: str) -> TakeoverStatus:
+    nomor_wa = normalize_phone(nomor_wa)
     customer = await customer_repo.get_by_nomor_wa(db, nomor_wa)
     if not customer:
         raise HTTPException(status_code=404, detail="Customer tidak ditemukan.")

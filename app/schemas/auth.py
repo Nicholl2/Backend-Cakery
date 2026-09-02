@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from decimal import Decimal
 from typing import Optional
 from enum import Enum
+from app.utils.phone import validate_phone_e164
 
 
 class UserLogin(BaseModel):
@@ -68,10 +69,15 @@ class OTPVerifyResponse(BaseModel):
 class BuyerRegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     email: str = Field(..., max_length=100)
-    phone: Optional[str] = Field(None, max_length=20)
-    phone_number: Optional[str] = Field(None, max_length=20)
+    phone: Optional[str] = Field(None, max_length=25)
+    phone_number: Optional[str] = Field(None, max_length=25)
     password: str = Field(..., min_length=6)
     verify_token: str
+
+    @field_validator("phone", "phone_number", mode="before")
+    @classmethod
+    def validate_phones(cls, v):
+        return validate_phone_e164(v)
 
 
 class BuyerAuthResponse(BaseModel):
@@ -91,16 +97,31 @@ class BuyerLoginRequest(BaseModel):
     phone_number: Optional[str] = None
     verify_token: Optional[str] = None
 
+    @field_validator("phone", "phone_number", mode="before")
+    @classmethod
+    def validate_phones(cls, v):
+        return validate_phone_e164(v)
+
 
 class BuyerLoginPhoneRequest(BaseModel):
-    phone_number: str
+    phone_number: str = Field(..., description="Nomor telepon E.164 (7-15 digit)")
     password: str
+
+    @field_validator("phone_number", mode="before")
+    @classmethod
+    def validate_phone(cls, v):
+        return validate_phone_e164(v)
 
 
 class BuyerLoginOTPRequest(BaseModel):
     phone: Optional[str] = None
     phone_number: Optional[str] = None
     verify_token: str
+
+    @field_validator("phone", "phone_number", mode="before")
+    @classmethod
+    def validate_phones(cls, v):
+        return validate_phone_e164(v)
 
 
 class BuyerResetPasswordRequest(BaseModel):
@@ -125,7 +146,12 @@ class SellerResetPasswordRequest(BaseModel):
 # ── WA DEEP LINK OTP SCHEMAS ────────────────────────────────────────────────
 
 class WAVerifyStartRequest(BaseModel):
-    phone_number: str
+    phone_number: str = Field(..., description="Nomor telepon E.164 (7-15 digit)")
+
+    @field_validator("phone_number", mode="before")
+    @classmethod
+    def validate_phone(cls, v):
+        return validate_phone_e164(v)
 
 
 class WAVerifyStartResponse(BaseModel):
@@ -138,7 +164,12 @@ class WAVerifyStartResponse(BaseModel):
 
 class WAVerifyConfirmRequest(BaseModel):
     nonce: str
-    sender_phone: str
+    sender_phone: str = Field(..., description="Nomor telepon pengirim pesan WA")
+
+    @field_validator("sender_phone", mode="before")
+    @classmethod
+    def validate_sender(cls, v):
+        return validate_phone_e164(v)
 
 
 class WAVerifyStatusResponse(BaseModel):

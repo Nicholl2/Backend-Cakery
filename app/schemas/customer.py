@@ -1,12 +1,18 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 from typing import Optional
+from app.utils.phone import validate_phone_e164
 
 
 class CustomerUpsert(BaseModel):
     nama: str = Field(..., min_length=1, max_length=100)
-    nomor_wa: str = Field(..., min_length=5, max_length=20)
+    nomor_wa: str = Field(..., description="Nomor WhatsApp customer E.164 (7-15 digit)")
     alamat: Optional[str] = None
+
+    @field_validator("nomor_wa", mode="before")
+    @classmethod
+    def validate_nomor_wa(cls, v):
+        return validate_phone_e164(v)
 
 
 class CustomerOut(BaseModel):

@@ -17,6 +17,7 @@ from app.models.payment import Payment, PaymentStatusEnum
 from app.models.stock_item import StockItem
 from app.models.recipe import Recipe
 from app.repositories import order_repo
+from app.utils.phone import normalize_phone
 
 
 async def create_new_order(
@@ -179,6 +180,7 @@ async def create_new_order(
 
 
 async def get_customer_latest_order(db: AsyncSession, nomor_wa: str) -> Order:
+    nomor_wa = normalize_phone(nomor_wa)
     order = await order_repo.get_latest_order_by_wa(db, nomor_wa)
     if not order:
         raise HTTPException(

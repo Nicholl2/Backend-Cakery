@@ -12,6 +12,7 @@ from app.repositories import buyer_repo, otp_repo, user_repo
 from app.core.security import hash_password, verify_password, create_access_token
 from app.models.otp_code import OTPCode
 from app.core.config import settings
+from app.utils.phone import normalize_phone
 
 # In-memory store for single-use verified tokens (verify_token)
 # Format: { token_str: { "target": str, "purpose": str, "expires_at": datetime } }
@@ -114,30 +115,6 @@ async def validate_and_consume_db_verify_token(db: AsyncSession, verify_token: s
     await db.refresh(otp)
 
 
-
-
-# ── PHONE NORMALIZATION ───────────────────────────────────────────────────────
-
-def normalize_phone(phone: str) -> str:
-    """
-    Normalize a WA phone number to E.164 format without '+' prefix.
-    Rules:
-      - Strip all non-digit characters.
-      - '0xxxxxxxxx'  → '62xxxxxxxxx'
-      - '620xxxxxxxxx' → '62xxxxxxxxx'  (remove redundant '0' after country code)
-    Raises HTTP 400 if the result is not 10–15 digits.
-    """
-    digits = "".join(c for c in phone if c.isdigit())
-    if digits.startswith("620"):
-        digits = "62" + digits[3:]
-    elif digits.startswith("0"):
-        digits = "62" + digits[1:]
-    if not (10 <= len(digits) <= 15):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Nomor telepon tidak valid: '{phone}'. Gunakan format E.164 (contoh: 628123456789)."
-        )
-    return digits
 
 
 # ── WA DEEP LINK OTP ──────────────────────────────────────────────────────────
@@ -337,6 +314,7 @@ async def register_buyer(
     verify_token: str
 ) -> dict:
     """Register a new buyer if verification token is valid"""
+    phone = normalize_phone(phone)
     # Validate and consume verify token from DB
     await validate_and_consume_db_verify_token(db, verify_token, phone)
         
@@ -421,6 +399,7 @@ async def login_buyer_password(db: AsyncSession, email: str, password: str) -> d
 
 async def login_buyer_phone(db: AsyncSession, phone: str, password: str) -> dict:
     """Login buyer via phone number and password"""
+    phone = normalize_phone(phone)
     buyer = await buyer_repo.get_buyer_by_phone(db, phone)
     if not buyer or not buyer.is_active:
         raise HTTPException(
@@ -455,6 +434,7 @@ async def login_buyer_phone(db: AsyncSession, phone: str, password: str) -> dict
 
 async def login_buyer_otp(db: AsyncSession, phone: str, verify_token: str) -> dict:
     """Login buyer via OTP verification token"""
+    phone = normalize_phone(phone)
     # Validate and consume verify token from DB
     await validate_and_consume_db_verify_token(db, verify_token, phone)
         
