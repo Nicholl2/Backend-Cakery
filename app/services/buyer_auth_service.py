@@ -150,7 +150,9 @@ def generate_nonce(length: int = 6) -> str:
 async def start_wa_verification(db: AsyncSession, phone_number: str) -> dict:
     phone_number = normalize_phone(phone_number)
     
-    if not settings.chatbot_wa_number:
+    is_mock = (settings.WA_VERIFICATION_MODE == "mock")
+    
+    if not is_mock and not settings.chatbot_wa_number:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Layanan verifikasi WA belum dikonfigurasi. Hubungi administrator."
@@ -167,6 +169,33 @@ async def start_wa_verification(db: AsyncSession, phone_number: str) -> dict:
         
     otp_id = str(uuid.uuid4())
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    
+    if is_mock:
+        verify_token = str(uuid.uuid4())
+        otp = OTPCode(
+            id=otp_id,
+            target=phone_number,
+            phone_number=phone_number,
+            channel="whatsapp",
+            purpose="login",
+            code_hash=hash_password(nonce),
+            expires_at=expires_at,
+            is_used=False,
+            nonce=nonce,
+            is_verified=True,
+            verify_token=verify_token,
+            attempt_count=0
+        )
+        db.add(otp)
+        await db.commit()
+        
+        return {
+            "nonce": nonce,
+            "deeplink": "",
+            "expires_in": 600,
+            "verify_token": verify_token,
+            "mock_mode": True
+        }
     
     otp = OTPCode(
         id=otp_id,
@@ -188,7 +217,9 @@ async def start_wa_verification(db: AsyncSession, phone_number: str) -> dict:
     return {
         "nonce": nonce,
         "deeplink": deeplink,
-        "expires_in": 600
+        "expires_in": 600,
+        "verify_token": None,
+        "mock_mode": False
     }
 
 
@@ -268,6 +299,19 @@ async def check_wa_verification_status(db: AsyncSession, nonce: str) -> dict:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Nonce verifikasi tidak ditemukan."
         )
+        
+    is_mock = (settings.WA_VERIFICATION_MODE == "mock")
+    if is_mock:
+        if not otp.is_verified:
+            otp.is_verified = True
+            if not otp.verify_token:
+                otp.verify_token = str(uuid.uuid4())
+            await db.commit()
+            await db.refresh(otp)
+        return {
+            "status": "verified",
+            "verify_token": otp.verify_token
+        }
         
     if otp.is_verified:
         return {

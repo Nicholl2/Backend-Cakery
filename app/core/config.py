@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +16,24 @@ class Settings(BaseSettings):
     midtrans_is_production: bool = False
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://toti-cakery.vercel.app"
     chatbot_wa_number: str = ""
+    environment: str = "development"
+    wa_verification_mode: str = "mock"  # "mock" | "real"
+
+    @model_validator(mode="after")
+    def enforce_production_security(self) -> "Settings":
+        if self.environment.lower() == "production":
+            self.wa_verification_mode = "real"
+        return self
+
+    @property
+    def ENVIRONMENT(self) -> str:
+        return self.environment
+
+    @property
+    def WA_VERIFICATION_MODE(self) -> str:
+        if self.environment.lower() == "production":
+            return "real"
+        return self.wa_verification_mode
 
     @property
     def midtrans_api_url(self) -> str:

@@ -130,8 +130,10 @@ class WAVerifyStartRequest(BaseModel):
 
 class WAVerifyStartResponse(BaseModel):
     nonce: str
-    deeplink: str
+    deeplink: str = ""
     expires_in: int
+    verify_token: Optional[str] = None
+    mock_mode: bool = False
 
 
 class WAVerifyConfirmRequest(BaseModel):
