@@ -55,7 +55,11 @@ app = FastAPI(
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
+origins = [
+    origin.strip().strip("'\"").rstrip("/")
+    for origin in settings.cors_origins.split(",")
+    if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
