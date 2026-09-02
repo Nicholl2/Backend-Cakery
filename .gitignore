@@ -2,13 +2,7 @@
 venv/
 .venv/
 env/
-CONTEXT.md
-DATABASE_SCHEME.md
-API_ENDPOINT.md
-FEATURES_LOGIC.md
 TODO.txt
-ARCHITECTURE_INTEGRATION.md
-WORKFLOW_SCENARIOS.md
 test_master_data.py
 
 
