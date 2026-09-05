@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     chatbot_wa_number: str = ""
     environment: str = "development"
     wa_verification_mode: str = "mock"  # "mock" | "real"
+    cloudinary_cloud_name: str = ""
+    cloudinary_api_key: str = ""
+    cloudinary_api_secret: str = ""
 
     @model_validator(mode="after")
     def enforce_production_security(self) -> "Settings":

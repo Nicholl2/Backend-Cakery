@@ -1,9 +1,12 @@
 from decimal import Decimal
 import os
 import anyio
+import cloudinary
+import cloudinary.uploader
 from fastapi import HTTPException, status, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.config import settings
 from app.repositories import product_repo, recipe_repo
 from app.schemas.product import (
     ProductCreate, ProductUpdate, ProductOut,
@@ -126,14 +129,14 @@ async def upload_product_image(
     file: UploadFile
 ) -> ProductOut:
     """
-    Upload product image: validates type and size, saves file asynchronously,
-    and updates image_url to the relative path in the database.
+    Upload product image to Cloudinary: validates type and size,
+    uploads directly from memory stream (file.file), and saves secure HTTPS URL to DB.
     """
     # 1. Ambil data produk, error 404 jika tidak ditemukan
     product = await get_product_or_404(db, product_id)
 
     # 2. Validasi tipe file (Content-Type)
-    ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+    ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -150,39 +153,48 @@ async def upload_product_image(
             detail="Ukuran file melebihi batas maksimal 5 MB."
         )
 
-    # 4. Ambil ekstensi berkas secara aman
-    filename = file.filename or ""
-    _, ext = os.path.splitext(filename)
-    ext = ext.lower()
-    if not ext:
-        content_type_map = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp"
-        }
-        ext = content_type_map.get(file.content_type, ".jpg")
+    # 4. Validasi konfigurasi Cloudinary
+    if not (settings.cloudinary_cloud_name and settings.cloudinary_api_key and settings.cloudinary_api_secret):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Konfigurasi Cloudinary belum lengkap di server backend."
+        )
 
-    # 5. Definisikan relative dan absolute paths
-    relative_path = f"/static/products/{product_id}{ext}"
-    dest_dir = "static/products"
-    os.makedirs(dest_dir, exist_ok=True)
-    dest_path = os.path.join(dest_dir, f"{product_id}{ext}")
+    # 5. Konfigurasi Cloudinary SDK
+    cloudinary.config(
+        cloud_name=settings.cloudinary_cloud_name,
+        api_key=settings.cloudinary_api_key,
+        api_secret=settings.cloudinary_api_secret,
+        secure=True
+    )
 
-    # 6. Hapus berkas lama di disk jika tipenya/ekstensinya berbeda untuk menghindari berkas yatim (orphan)
-    if product.image_url:
-        old_rel_path = product.image_url.lstrip("/")
-        if os.path.exists(old_rel_path) and old_rel_path != dest_path:
-            try:
-                os.remove(old_rel_path)
-            except Exception:
-                pass
+    # 6. Upload stream berkas langsung dari memory (file.file) ke folder Cloudinary
+    try:
+        def _sync_upload():
+            file.file.seek(0)
+            return cloudinary.uploader.upload(
+                file.file,
+                folder="toti-cakery/products",
+                resource_type="image",
+                overwrite=True,
+            )
 
-    # 7. Simpan file secara asinkronus menggunakan anyio
-    content = await file.read()
-    async with await anyio.open_file(dest_path, "wb") as f:
-        await f.write(content)
+        upload_result = await anyio.to_thread.run_sync(_sync_upload)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal mengunggah gambar ke Cloudinary: {str(e)}"
+        )
 
-    # 8. Update database
-    updated_product = await product_repo.update_image_url(db, product, relative_path)
+    # 7. Ambil URL HTTPS publik (secure_url)
+    secure_url = upload_result.get("secure_url")
+    if not secure_url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Gagal mendapatkan URL gambar dari Cloudinary."
+        )
+
+    # 8. Update database dengan URL Cloudinary
+    updated_product = await product_repo.update_image_url(db, product, secure_url)
     return ProductOut.model_validate(updated_product)
 

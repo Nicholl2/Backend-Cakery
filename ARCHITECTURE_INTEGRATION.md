@@ -24,6 +24,7 @@ flowchart TB
     subgraph ExternalLayer ["External Infrastructure & Cloud"]
         MidtransPG["💳 Midtrans Payment Gateway (Core API)"]
         NeonDB[("🐘 PostgreSQL Database (Neon.tech)")]
+        CloudinaryStorage["☁️ Cloudinary Media Storage (CDN)"]
     end
 
     %% Client to Services
@@ -39,6 +40,8 @@ flowchart TB
     BackendAPI <-->|"Async SQL (asyncpg)"| NeonDB
     BackendAPI -->|"Headless Charge (Basic Auth)"| MidtransPG
     MidtransPG -->|"Webhook Settlement (SHA-512 Signature)"| BackendAPI
+    BackendAPI -->|"Direct Memory Stream Upload"| CloudinaryStorage
+    BuyerWeb & AdminWeb -.->|"Load Images via HTTPS CDN"| CloudinaryStorage
 ```
 
 ---
@@ -66,6 +69,7 @@ flowchart TB
 | `CORS_ORIGINS` | Browser Clients | Backend API | Daftar domain yang diizinkan melakukan cross-origin request (`http://localhost:5173`, `http://127.0.0.1:5173`, `https://toti-cakery.vercel.app`). |
 | `ENVIRONMENT` | Environment Config | Backend API | Lingkungan aplikasi (`development` / `production`). Menjadi guardrail keamanan otomatis. |
 | `WA_VERIFICATION_MODE` | Environment Config | Backend API | Mode verifikasi WA (`mock` / `real`). Jika `ENVIRONMENT="production"`, selalu dipaksa bernilai `real`. |
+| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Cloudinary Dashboard | Backend API | Kredensial otorisasi upload media produk langsung ke storage Cloudinary. |
 
 ---
 
@@ -152,9 +156,9 @@ sequenceDiagram
 
 ## 5. Rencana Skalabilitas & Arsitektur Masa Depan (*Roadmap*)
 
-1. **Background Task & Asynchronous Message Broker**:
+1. **Cloud Media Storage (Cloudinary)**:
+   - Media dan gambar produk telah diintegrasikan menggunakan **Cloudinary** (`toti-cakery/products`) dengan memory stream upload untuk mendukung serverless environment (Vercel) tanpa filesystem disk lokal.
+2. **Background Task & Asynchronous Message Broker**:
    - Jika volume notifikasi webhook meningkat, transisi pengiriman notifikasi dari direct HTTP request menjadi *event queue* berbasis **Redis + ARQ / Celery** untuk mencegah latency spike pada proses checkout.
-2. **Object Storage Cloud (AWS S3 / Cloudflare R2)**:
-   - Saat ini gambar produk disimpan pada direktori `/static/products/` lokal. Untuk deployment serverless berskala besar, disiapkan adapter upload ke S3 / Cloudflare R2 dengan CDN Cloudflare.
 3. **Database Connection Pooling**:
    - Pemanfaatan koneksi pool asyncpg yang dioptimalkan untuk Neon Serverless Postgres via PgBouncer pooling mode.

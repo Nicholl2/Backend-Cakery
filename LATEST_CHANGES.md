@@ -1,10 +1,30 @@
-# Ringkasan Perubahan Terbaru & Panduan Testing (CORS & Mock WA Verification)
+# Ringkasan Perubahan Terbaru & Panduan Testing
 
 Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, penjelasan alur logika program, serta panduan langkah demi langkah untuk melakukan pengujian (*testing guide*).
 
 ---
 
 ## 📌 Daftar Perubahan Kode
+
+### 0. Refactoring Upload Gambar Produk (Cloudinary Integration — Fix Vercel Read-Only Filesystem)
+- **Latar Belakang & Masalah**:
+  - Runtime serverless Vercel memiliki sistem berkas *read-only* (`Read-only file system (os error 30)`).
+  - Penulisan berkas statis lokal ke `/static/products/` menyebabkan HTTP 500 saat di-deploy di Vercel.
+- **Solusi & Implementasi**:
+  1. **Direct Memory Stream Upload**:
+     - Memanfaatkan `UploadFile.file` (memory stream) langsung ke API Cloudinary tanpa pernah menulis ke filesystem lokal.
+     - Dijalankan secara non-blocking via `anyio.to_thread.run_sync` agar event loop FastAPI tetap responsif.
+  2. **Konfigurasi Environment Cloudinary (`app/core/config.py` & `.env.example`)**:
+     - `CLOUDINARY_CLOUD_NAME`
+     - `CLOUDINARY_API_KEY`
+     - `CLOUDINARY_API_SECRET`
+  3. **Folder Penyimpanan Terstruktur**:
+     - Folder default Cloudinary: `toti-cakery/products`.
+     - URL publik HTTPS (`secure_url`) disimpan ke kolom `products.image_url`.
+  4. **Dependencies**:
+     - Ditambahkan `cloudinary==1.46.2` ke `requirements.txt`.
+
+---
 
 ### 1. `app/core/config.py`
 - **Konfigurasi CORS Baru**: Default `cors_origins` diperbarui menyertakan domain frontend Vercel:
@@ -224,4 +244,50 @@ assert normalize_phone('+44 7911 123456') == '447911123456'
 print('✅ Seluruh pengujian normalisasi nomor telepon internasional SUKSES!')
 "
 ```
+
+---
+
+### Skenario 5: Testing Upload Foto Produk ke Cloudinary
+
+#### 1. Konfigurasi Environment di `.env`
+```env
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=your-api-key
+CLOUDINARY_API_SECRET=your-api-secret
+```
+
+#### 2. Test Eksekusi via cURL (Admin / Owner Token)
+```bash
+curl -X POST "http://127.0.0.1:8000/products/1/image" \
+     -H "Authorization: Bearer <ADMIN_OR_OWNER_JWT_TOKEN>" \
+     -F "file=@/path/to/sample_cake.jpg"
+```
+
+**Ekspektasi Output**:
+```json
+{
+  "id": 1,
+  "nama_produk": "Kue Cokelat Lumer",
+  "deskripsi": "Kue lezat premium",
+  "kategori": "Cakes",
+  "hpp_total": 45000.0,
+  "harga_jual": 65000.0,
+  "markup_percentage": 0.4444,
+  "is_active": true,
+  "is_available": true,
+  "image_url": "https://res.cloudinary.com/your-cloud-name/image/upload/v1234567890/toti-cakery/products/sample.jpg",
+  "slug": "kue-cokelat-lumer",
+  "rating": 5.0,
+  "review_count": 1,
+  "sold_count": 10,
+  "is_featured": true,
+  "minimum_order": 1,
+  "parent_category": "Cakes",
+  "recipes": [],
+  "created_at": "2026-09-05T10:00:00Z",
+  "updated_at": "2026-09-05T12:00:00Z"
+}
+```
+> URL gambar kini berupa HTTPS publik Cloudinary yang dapat diakses langsung oleh browser tanpa ketergantungan pada disk serverless lokal.
+
 

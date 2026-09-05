@@ -49,7 +49,7 @@ Dokumentasi lengkap seluruh endpoint REST API Backend Toti Cakery (FastAPI).
 | `GET` | `/products/{product_id}` | Public | Detail produk lengkap beserta ketersediaan stok bahan (`is_available`) |
 | `PUT` | `/products/{product_id}` | Admin / Owner | Update data produk (nama, deskripsi, kategori, is_active, slug, minimum_order, dll.) |
 | `DELETE` | `/products/{product_id}` | Admin / Owner | Hapus produk beserta seluruh relasi resep dan riwayat harganya |
-| `POST` | `/products/{product_id}/image` | Admin / Owner | Upload gambar produk (JPEG/PNG/WEBP maks 5MB) |
+| `POST` | `/products/{product_id}/image` | Admin / Owner | Upload gambar produk langsung ke Cloudinary (`toti-cakery/products`, maks 5MB, format JPEG/PNG/WEBP), simpan HTTPS secure_url ke DB |
 | `PATCH` | `/products/{product_id}/price` | Admin / Owner | Tetapkan/ubah harga jual produk (audit riwayat harga otomatis) |
 | `GET` | `/products/{product_id}/pricing` | Public / Internal | Lihat rincian breakdown HPP bahan + kalkulasi margin vs harga jual |
 | `GET` | `/products/{product_id}/price-history`| Public / Internal | Riwayat perubahan harga jual produk oleh Owner |
