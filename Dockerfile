@@ -25,4 +25,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/openapi.json')"
 
-  CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Dibatasi ke rentang bridge Docker, bukan "*": yang menghubungi container ini
+# selalu nginx dari dalam network compose, jadi tidak ada alasan mempercayai
+# X-Forwarded-* dari peer lain. 172.16.0.0/12 adalah address pool bawaan
+# Compose, cukup lebar untuk bertahan saat subnet-nya dialokasikan ulang.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='172.16.0.0/12'"]
