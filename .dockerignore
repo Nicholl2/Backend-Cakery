@@ -43,7 +43,6 @@ FEATURES_LOGIC.md
 
 # Test & script lokal
 app/test_*.py
-app/seed_admin.py
 tests/
 
 # Docker
