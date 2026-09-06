@@ -12,11 +12,16 @@ from app.schemas.product import ProductCreate
 from app.schemas.recipe import RecipeCreate
 from app.schemas.review import ReviewCreate, ReviewUpdate
 from app.repositories import buyer_repo, customer_repo, review_repo, product_repo, recipe_repo, stock_repo
+from app.core.security import get_password_hash, verify_password
 from app.models.review import Review
 from app.models.recipe import Recipe
 from app.models.stock_item import StockItem
 from app.models.purchasing import Supplier
 from app.models.product import Product
+from app.models.user import User
+from app.models.buyer import Buyer
+from app.models.role import Role
+from app.core.database import ensure_role, ensure_buyer, ensure_user
 
 
 async def run_tests():
@@ -245,7 +250,36 @@ async def run_tests():
             assert product.rating == 0.0
             assert product.review_count == 0
 
-            # --- 2.6 Clean Up ---
+            # --- 2.6 Test Buyer Seeder & Password Hash (aceng@gmail.com) ---
+            print("\nTesting Buyer Seeder with get_password_hash (aceng@gmail.com)...")
+            buyer_role = await ensure_role(db, "Buyer", 4)
+            assert buyer_role is not None
+            assert buyer_role.nama_role.lower() == "buyer"
+
+            seeded_buyer = await ensure_buyer(
+                db=db,
+                name="Aceng",
+                email="aceng@gmail.com",
+                phone="08123456789",
+                password_plain="Aceng_123",
+                role_id=buyer_role.id
+            )
+            await db.commit()
+
+            assert seeded_buyer is not None
+            assert seeded_buyer.email == "aceng@gmail.com"
+            assert verify_password("Aceng_123", seeded_buyer.password_hash) is True
+            print("✓ Buyer 'aceng@gmail.com' in 'buyers' table verified with get_password_hash('Aceng_123')")
+
+            # Verify linked user record with BUYER role
+            user_res = await db.execute(select(User).where((User.username == "aceng@gmail.com") | (User.email == "aceng@gmail.com")))
+            user_aceng = user_res.scalars().first()
+            assert user_aceng is not None
+            assert user_aceng.role_id == buyer_role.id
+            assert verify_password("Aceng_123", user_aceng.password_hash) is True
+            print(f"✓ User 'aceng@gmail.com' in 'users' table linked with role_id={user_aceng.role_id} (Role: {buyer_role.nama_role})")
+
+            # --- 2.7 Clean Up ---
             print("\nCleaning up test data...")
             # Re-query all entities to avoid expired state or database session issues
             product = await product_repo.get_by_id(db, prod_id)
@@ -277,7 +311,7 @@ async def run_tests():
                 
             await db.commit()
             print("Deleted buyer and customer")
-            print("\n🎉 ALL TESTS PASSED SUCCESSFULLY! Master Data is fully verified.")
+            print("\n🎉 ALL TESTS PASSED SUCCESSFULLY! Master Data & Buyer Seeder are fully verified.")
 
         except Exception as e:
             await db.rollback()

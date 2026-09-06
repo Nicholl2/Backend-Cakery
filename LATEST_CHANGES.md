@@ -37,7 +37,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - **Order Endpoints (`app/api/routes/order.py`)**:
     - `POST /orders/buyer`: Membuat pesanan khusus Buyer. `customer_id` didapatkan langsung dari token JWT (nomor HP Buyer yang sedang login).
     - `GET /orders/buyer`: Mengambil seluruh riwayat pesanan milik Buyer yang sedang login.
-    - `GET /orders/buyer/{order_id}`: Mengambil detail spesifik pesanan milik Buyer yang sedang login (dengan isolasi data aman 404 jika bukan pemilik).
+    - `GET /orders/buyer/{id}`: Mengambil detail spesifik pesanan milik Buyer yang sedang login (dengan isolasi data aman 404 jika bukan pemilik).
     - Mempertahankan `POST /orders`, `GET /orders/latest`, dan `POST /orders/{order_id}/cancel` untuk Chatbot (`require_service_key`).
   - **Payment Endpoints (`app/api/routes/payment.py`)**:
     - `POST /payments`: Dapat diakses oleh Chatbot (`X-Service-Key`) maupun Buyer JWT (`Authorization: Bearer <token>`). Jika diakses oleh Buyer JWT, sistem memvalidasi kepemilikan pesanan sebelum membuat transaksi Midtrans.

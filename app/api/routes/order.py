@@ -47,10 +47,10 @@ async def list_buyer_orders(
     return [OrderOut.model_validate(o) for o in orders]
 
 
-@router.get("/buyer/{order_id}", response_model=OrderOut,
+@router.get("/buyer/{id}", response_model=OrderOut,
             summary="Detail pesanan milik Buyer yang sedang login")
 async def get_buyer_order_detail(
-    order_id: int,
+    id: int,
     buyer: Buyer = Depends(get_current_buyer),
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
@@ -58,7 +58,7 @@ async def get_buyer_order_detail(
     Mengambil detail spesifik pesanan milik Buyer yang sedang login.
     Mengembalikan 404 jika pesanan tidak ditemukan atau bukan milik Buyer ini.
     """
-    order = await order_service.get_buyer_order_by_id(db, buyer, order_id)
+    order = await order_service.get_buyer_order_by_id(db, buyer, id)
     return OrderOut.model_validate(order)
 
 

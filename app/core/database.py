@@ -88,28 +88,55 @@ async def ensure_buyer(
     email: str,
     phone: str,
     password_plain: str,
+    role_id: int = None,
 ):
-    from app.core.security import hash_password
+    from app.core.security import get_password_hash
     from app.models.buyer import Buyer
+    from app.models.user import User
+
+    hashed_pw = get_password_hash(password_plain)
+
+    # 1. Ensure record in buyers table
     result = await db.execute(select(Buyer).where(Buyer.email == email))
     buyer = result.scalars().first()
     if buyer:
         buyer.name = name
         buyer.phone = phone
-        buyer.password_hash = hash_password(password_plain)
+        buyer.password_hash = hashed_pw
         buyer.is_verified = True
         buyer.is_active = True
-        return buyer
+    else:
+        buyer = Buyer(
+            name=name,
+            email=email,
+            phone=phone,
+            password_hash=hashed_pw,
+            is_verified=True,
+            is_active=True,
+        )
+        db.add(buyer)
 
-    buyer = Buyer(
-        name=name,
-        email=email,
-        phone=phone,
-        password_hash=hash_password(password_plain),
-        is_verified=True,
-        is_active=True,
-    )
-    db.add(buyer)
+    # 2. Also ensure record in users table linked with BUYER role if role_id provided
+    if role_id is not None:
+        user_res = await db.execute(select(User).where((User.username == email) | (User.email == email)))
+        user = user_res.scalars().first()
+        if user:
+            user.password_hash = hashed_pw
+            user.role_id = role_id
+            user.email = email
+            user.phone_number = phone
+            user.is_active = True
+        else:
+            user = User(
+                username=email,
+                password_hash=hashed_pw,
+                role_id=role_id,
+                email=email,
+                phone_number=phone,
+                is_active=True,
+            )
+            db.add(user)
+
     await db.flush()
     return buyer
 
@@ -312,6 +339,7 @@ async def seed_initial_data(db: AsyncSession) -> None:
         email="aceng@gmail.com",
         phone="08123456789",
         password_plain="Aceng_123",
+        role_id=buyer_role.id,
     )
 
     # 4. Default Suppliers
