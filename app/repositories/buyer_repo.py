@@ -61,3 +61,12 @@ async def verify_buyer(db: AsyncSession, buyer: Buyer) -> Buyer:
     await db.commit()
     await db.refresh(buyer)
     return buyer
+
+
+async def update_avatar_url(db: AsyncSession, buyer: Buyer, avatar_url: str) -> Buyer:
+    """Update buyer avatar URL"""
+    buyer.avatar_url = avatar_url
+    await db.commit()
+    await db.refresh(buyer)
+    return buyer
+

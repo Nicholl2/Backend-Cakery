@@ -3,15 +3,17 @@ import uuid
 import string
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.repositories import buyer_repo, otp_repo, user_repo
+from app.models.buyer import Buyer
 from app.core.security import hash_password, verify_password, create_access_token
 from app.models.otp_code import OTPCode
 from app.core.config import settings
 from app.utils.phone import normalize_phone
+from app.utils.cloudinary_helper import upload_image_to_cloudinary
 
 # ── GENERAL OTP HELPERS ───────────────────────────────────────────────────────
 
@@ -372,7 +374,8 @@ async def register_buyer(
         "role": "buyer",
         "name": buyer.name,
         "email": buyer.email,
-        "phone": buyer.phone
+        "phone": buyer.phone,
+        "avatar_url": buyer.avatar_url,
     }
 
 
@@ -406,7 +409,8 @@ async def login_buyer_password(db: AsyncSession, email: str, password: str) -> d
         "role": "buyer",
         "name": buyer.name,
         "email": buyer.email,
-        "phone": buyer.phone
+        "phone": buyer.phone,
+        "avatar_url": buyer.avatar_url,
     }
 
 
@@ -441,7 +445,8 @@ async def login_buyer_phone(db: AsyncSession, phone: str, password: str) -> dict
         "role": "buyer",
         "name": buyer.name,
         "email": buyer.email,
-        "phone": buyer.phone
+        "phone": buyer.phone,
+        "avatar_url": buyer.avatar_url,
     }
 
 
@@ -473,8 +478,19 @@ async def login_buyer_otp(db: AsyncSession, phone: str, verify_token: str) -> di
         "role": "buyer",
         "name": buyer.name,
         "email": buyer.email,
-        "phone": buyer.phone
+        "phone": buyer.phone,
+        "avatar_url": buyer.avatar_url,
     }
+
+
+async def upload_buyer_avatar(db: AsyncSession, buyer: Buyer, file: UploadFile) -> Buyer:
+    """
+    Upload and update buyer avatar image to Cloudinary (folder: toti-cakery/avatars).
+    """
+    secure_url = await upload_image_to_cloudinary(file, folder="toti-cakery/avatars")
+    updated_buyer = await buyer_repo.update_avatar_url(db, buyer, secure_url)
+    return updated_buyer
+
 
 
 async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password: str) -> dict:

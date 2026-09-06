@@ -6,7 +6,32 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
-### 0. Tiga Perbaikan Kritis Backend (Root Path Proxy, Seeder Otomatis, & Buyer JWT Endpoints)
+### 0. User & Buyer Avatar Upload via Cloudinary Direct Integration
+- **Direct Memory Stream Helper (`app/utils/cloudinary_helper.py`)**:
+  - Menyediakan helper `upload_image_to_cloudinary(file, folder="toti-cakery/avatars")` yang men-stream buffer memory berkas langsung ke Cloudinary API tanpa menyentuh disk lokal atau repositori Git.
+  - Memvalidasi MIME type berkas: hanya mengizinkan `image/jpeg`, `image/png`, dan `image/webp`.
+  - Memvalidasi ukuran berkas: membatasi maksimal 5 MB (menolak berkas lebih besar dengan HTTP 400).
+  - Menangani error upload Cloudinary dengan HTTP 502 Bad Gateway dan error konfigurasi dengan HTTP 500 Internal Server Error.
+- **Model & Database Persistence (`app/models/buyer.py`, `app/models/user.py`, `app/core/migrations.py`)**:
+  - Menambahkan kolom `avatar_url` (String 500, nullable=True) ke model `Buyer` dan `User`.
+  - Menambahkan migration otomatis di `ensure_buyer_columns` dan `ensure_user_columns` pada PostgreSQL database.
+- **Repositories (`app/repositories/buyer_repo.py`, `app/repositories/user_repo.py`)**:
+  - Menambahkan method `update_avatar_url` pada `buyer_repo` dan `user_repo` untuk menyimpan `secure_url` Cloudinary ke database.
+- **Services (`app/services/buyer_auth_service.py`, `app/services/user_service.py`)**:
+  - Menambahkan `upload_buyer_avatar` di `buyer_auth_service.py`.
+  - Menambahkan `upload_user_avatar` di `user_service.py`.
+  - Memasukkan `avatar_url` pada seluruh respon autentikasi buyer (`register_buyer`, `login_buyer_password`, `login_buyer_phone`, `login_buyer_otp`).
+- **Schemas (`app/schemas/auth.py`, `app/schemas/user.py`)**:
+  - Menambahkan `avatar_url` ke `BuyerAuthResponse`, `UserResponse`, dan `UserOut`.
+  - Menambahkan schema `BuyerProfileResponse`.
+- **API Endpoints (`app/api/routes/customer.py`, `app/api/routes/user.py`, `app/main.py`)**:
+  - `POST /buyers/me/avatar` (dan alias `/v1/buyers/me/avatar`, `/api/v1/buyers/me/avatar`): Upload avatar Buyer yang sedang login.
+  - `GET /buyers/me` (dan alias `/v1/buyers/me`): Mengambil profil akun Buyer yang sedang login.
+  - `POST /users/me/avatar`: Upload avatar internal User (Owner/Admin/Staff) yang sedang login.
+- **Automated Tests (`app/test_avatar_upload.py`)**:
+  - Pengujian komprehensif validasi MIME type, validasi ukuran >5MB, mocking Cloudinary upload, persistensi DB SQLite, dan endpoint API Buyer/User.
+
+---
 - **1. Root Path & Proxy Fix (`app/main.py`)**:
   - Menambahkan parameter `root_path="/api"` pada instansiasi `FastAPI(..., root_path="/api")` agar redirect internal FastAPI, dokumentasi OpenAPI/Swagger (`/docs`), dan reverse proxy HTTPS (seperti Vercel rewrite `/api/*`) diarahkan dengan akurat tanpa memicu mixed content atau salah prefix rute.
   - Memasang auto-seed pada event `lifespan` startup: sistem mendeteksi apakah tabel `roles` masih kosong; jika ya, seeder master data awal otomatis dijalankan.

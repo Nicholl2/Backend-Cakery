@@ -21,7 +21,10 @@ Table roles {
 Table users {
   id int [pk, increment]
   username varchar(50) [unique, not null]
+  email varchar(100) [unique, null]
+  phone_number varchar(20) [null]
   password_hash varchar(255) [not null]
+  avatar_url varchar(500) [null, note: 'Cloudinary secure HTTPS URL']
   role_id int [ref: > roles.id, not null]
   is_active boolean [default: true]
   nomor_wa_admin varchar(20) [null]
@@ -36,6 +39,7 @@ Table buyers {
   email varchar(100) [unique, not null]
   phone varchar(20) [unique, not null]
   password_hash varchar(255) [not null]
+  avatar_url varchar(500) [null, note: 'Cloudinary secure HTTPS URL']
   is_verified boolean [default: false, not null]
   is_active boolean [default: true, not null]
   created_at timestamp [default: `now()`]

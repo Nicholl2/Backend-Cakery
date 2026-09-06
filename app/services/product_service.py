@@ -123,6 +123,8 @@ async def get_price_history(db: AsyncSession, product_id: int) -> list[PriceHist
     return [PriceHistoryOut.model_validate(h) for h in history]
 
 
+from app.utils.cloudinary_helper import upload_image_to_cloudinary
+
 async def upload_product_image(
     db: AsyncSession,
     product_id: int,
@@ -135,66 +137,11 @@ async def upload_product_image(
     # 1. Ambil data produk, error 404 jika tidak ditemukan
     product = await get_product_or_404(db, product_id)
 
-    # 2. Validasi tipe file (Content-Type)
-    ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
-    if file.content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Tipe file tidak didukung. Hanya JPEG, PNG, dan WEBP yang diperbolehkan."
-        )
+    # 2. Upload via helper Cloudinary
+    secure_url = await upload_image_to_cloudinary(file, folder="toti-cakery/products")
 
-    # 3. Validasi ukuran file (Maksimal 5 MB)
-    file.file.seek(0, 2)
-    file_size = file.file.tell()
-    file.file.seek(0)
-    if file_size > 5 * 1024 * 1024:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Ukuran file melebihi batas maksimal 5 MB."
-        )
-
-    # 4. Validasi konfigurasi Cloudinary
-    if not (settings.cloudinary_cloud_name and settings.cloudinary_api_key and settings.cloudinary_api_secret):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Konfigurasi Cloudinary belum lengkap di server backend."
-        )
-
-    # 5. Konfigurasi Cloudinary SDK
-    cloudinary.config(
-        cloud_name=settings.cloudinary_cloud_name,
-        api_key=settings.cloudinary_api_key,
-        api_secret=settings.cloudinary_api_secret,
-        secure=True
-    )
-
-    # 6. Upload stream berkas langsung dari memory (file.file) ke folder Cloudinary
-    try:
-        def _sync_upload():
-            file.file.seek(0)
-            return cloudinary.uploader.upload(
-                file.file,
-                folder="toti-cakery/products",
-                resource_type="image",
-                overwrite=True,
-            )
-
-        upload_result = await anyio.to_thread.run_sync(_sync_upload)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gagal mengunggah gambar ke Cloudinary: {str(e)}"
-        )
-
-    # 7. Ambil URL HTTPS publik (secure_url)
-    secure_url = upload_result.get("secure_url")
-    if not secure_url:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Gagal mendapatkan URL gambar dari Cloudinary."
-        )
-
-    # 8. Update database dengan URL Cloudinary
+    # 3. Update database dengan URL Cloudinary
     updated_product = await product_repo.update_image_url(db, product, secure_url)
     return ProductOut.model_validate(updated_product)
+
 

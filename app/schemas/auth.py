@@ -44,6 +44,7 @@ class UserResponse(BaseModel):
     nomor_wa_admin: Optional[str] = None
     email: Optional[str] = None
     phone_number: Optional[str] = None
+    avatar_url: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -105,6 +106,21 @@ class BuyerAuthResponse(BaseModel):
     name: str
     email: str
     phone: str
+    avatar_url: Optional[str] = None
+
+
+class BuyerProfileResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+    phone: str
+    avatar_url: Optional[str] = None
+    is_verified: bool
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
 
 
 class BuyerLoginRequest(BaseModel):

@@ -1,11 +1,12 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, UploadFile
 from app.repositories import user_repo
 from app.schemas.user import UserTakeoverUpdate, UserTakeoverResponse, UserCreate, UserBootstrap
 from app.models.user import User
 from app.models.role import Role
 from app.core.security import hash_password
+from app.utils.cloudinary_helper import upload_image_to_cloudinary
 
 async def update_takeover_handler(
     db: AsyncSession,
@@ -102,3 +103,17 @@ async def bootstrap_owner(db: AsyncSession, data: UserBootstrap) -> User:
     await db.commit()
     await db.refresh(owner_user)
     return owner_user
+
+
+async def upload_user_avatar(db: AsyncSession, user_id: int, file: UploadFile) -> User:
+    """Upload and update internal user avatar image to Cloudinary (folder: toti-cakery/avatars)."""
+    user = await user_repo.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User tidak ditemukan"
+        )
+    secure_url = await upload_image_to_cloudinary(file, folder="toti-cakery/avatars")
+    updated_user = await user_repo.update_avatar_url(db, user, secure_url)
+    return updated_user
+

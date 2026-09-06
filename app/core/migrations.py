@@ -48,6 +48,7 @@ async def ensure_buyer_columns(conn: AsyncConnection):
         return
 
     await conn.execute(text("ALTER TABLE buyers ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
+    await conn.execute(text("ALTER TABLE buyers ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500);"))
     await conn.execute(text("UPDATE buyers SET is_active = COALESCE(is_active, TRUE) WHERE is_active IS NULL;"))
     await conn.execute(text("ALTER TABLE buyers ALTER COLUMN is_active SET NOT NULL;"))
 
@@ -120,6 +121,7 @@ async def ensure_user_columns(conn: AsyncConnection):
 
     await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(100);"))
     await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);"))
+    await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500);"))
     await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email) WHERE email IS NOT NULL;"))
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_phone_number ON users (phone_number) WHERE phone_number IS NOT NULL;"))
 

@@ -98,7 +98,7 @@ Dokumentasi lengkap seluruh endpoint REST API Backend Toti Cakery (FastAPI).
 
 ---
 
-### F. Pelanggan & Human Takeover (`/customers` & `/admin`)
+### F. Pelanggan & Profil Pembeli (`/customers`, `/buyers`, `/admin`)
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
@@ -107,6 +107,9 @@ Dokumentasi lengkap seluruh endpoint REST API Backend Toti Cakery (FastAPI).
 | `POST` | `/customers/{nomor_wa}/takeover` | `X-Service-Key` | Aktifkan/nonaktifkan status human takeover dan set waktu kedaluwarsa |
 | `GET` | `/customers/{nomor_wa}/takeover` | `X-Service-Key` | Cek status aktif dan masa berlaku takeover sebelum chatbot merespons |
 | `GET` | `/admin/takeover-handlers` | `X-Service-Key` | Ambil daftar nomor WA admin yang bertugas menangani live takeover |
+| `GET` | `/buyers/me` (alias: `/v1/buyers/me`) | Buyer JWT (`get_current_buyer`) | Ambil data profil Buyer yang sedang login beserta `avatar_url` |
+| `POST` | `/buyers/me/avatar` (alias: `/v1/buyers/me/avatar`) | Buyer JWT (`get_current_buyer`) | Upload foto avatar akun Buyer langsung di-stream ke Cloudinary (`toti-cakery/avatars/`, maks 5MB, format JPEG/PNG/WEBP), simpan `secure_url` ke database |
+
 
 ---
 
@@ -185,3 +188,4 @@ Dokumentasi lengkap seluruh endpoint REST API Backend Toti Cakery (FastAPI).
 | :--- | :--- | :--- | :--- |
 | `POST` | `/users` | Owner Only | Daftarkan akun internal baru (Owner, Admin, atau Staff) |
 | `PATCH` | `/users/{user_id}/takeover-handler` | Owner Only | Set status apakah admin tersebut bertugas menangani live takeover |
+| `POST` | `/users/me/avatar` | Authenticated User | Upload foto avatar akun internal langsung di-stream ke Cloudinary (`toti-cakery/avatars/`, maks 5MB, format JPEG/PNG/WEBP), simpan `secure_url` ke database |

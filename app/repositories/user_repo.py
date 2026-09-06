@@ -67,3 +67,11 @@ async def get_user_by_phone(db: AsyncSession, phone: str) -> Optional[User]:
     )
     result = await db.execute(stmt)
     return result.scalars().first()
+
+
+async def update_avatar_url(db: AsyncSession, user: User, avatar_url: str) -> User:
+    """Update user avatar URL"""
+    user.avatar_url = avatar_url
+    await db.commit()
+    await db.refresh(user)
+    return user
