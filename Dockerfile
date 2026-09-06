@@ -25,4 +25,11 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
   CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8000')+'/openapi.json')"
 
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# app dijalankan di belakang nginx, dan TLS diterminasi Cloudflare di edge.
+# Tanpa --proxy-headers uvicorn mengabaikan X-Forwarded-Proto dan menyusun
+# redirect root_path dengan skema http walau pengunjung datang lewat https,
+# sehingga browser memblokirnya sebagai mixed content.
+#
+# --forwarded-allow-ips dibatasi ke rentang bridge Docker, bukan "*": yang
+# menghubungi container ini selalu nginx dari dalam network compose.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='172.16.0.0/12'"]
