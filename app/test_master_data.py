@@ -4,7 +4,7 @@ import asyncio
 from decimal import Decimal
 from sqlalchemy import select
 from app.core.database import AsyncSessionLocal, engine, Base
-from app.core.migrations import ensure_product_columns, ensure_buyer_columns, ensure_stock_item_columns, ensure_recipe_columns
+from app.core.migrations import ensure_product_columns, ensure_buyer_columns, ensure_stock_item_columns, ensure_recipe_columns, ensure_otp_columns
 from app.services import purchasing_service, stock_service, product_service, recipe_service, review_service
 from app.schemas.purchasing import SupplierCreate, SupplierUpdate
 from app.schemas.stock import StockCreate, StockUpdate
@@ -30,6 +30,7 @@ async def run_tests():
         await ensure_buyer_columns(conn)
         await ensure_stock_item_columns(conn)
         await ensure_recipe_columns(conn)
+        await ensure_otp_columns(conn)
     print("✓ Migrations completed successfully")
 
     # 2. Get DB Session

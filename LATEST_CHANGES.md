@@ -4,9 +4,44 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ---
 
-## 📌 Daftar Perubahan Kode
+## 📌 Daftar Perubahan Kode Terbaru
 
-### 0. Refactoring Upload Gambar Produk (Cloudinary Integration — Fix Vercel Read-Only Filesystem)
+### 0. Tiga Perbaikan Kritis Backend (Root Path Proxy, Seeder Otomatis, & Buyer JWT Endpoints)
+- **1. Root Path & Proxy Fix (`app/main.py`)**:
+  - Menambahkan parameter `root_path="/api"` pada instansiasi `FastAPI(..., root_path="/api")` agar redirect internal FastAPI, dokumentasi OpenAPI/Swagger (`/docs`), dan reverse proxy HTTPS (seperti Vercel rewrite `/api/*`) diarahkan dengan akurat tanpa memicu mixed content atau salah prefix rute.
+  - Memasang auto-seed pada event `lifespan` startup: sistem mendeteksi apakah tabel `roles` masih kosong; jika ya, seeder master data awal otomatis dijalankan.
+
+- **2. Master Data Database Seeder (`app/core/seeder.py` & `app/seed_data.py`)**:
+  - Dibuat modul seeder idempoten yang mengisi data awal:
+    - **Roles**: `Owner` (Level 1), `Admin` (Level 2), `Staff`/`Seller` (Level 3), `Buyer` (Level 4).
+    - **Akun Internal Default**:
+      - Superadmin/Owner: `imeng` / `Admin_123` (HP: `08111111111`)
+      - Admin: `ameng` / `Admin_123` (HP: `08222222222`)
+      - Staff/Seller: `smeng` / `Staff_123` (HP: `08333333333`)
+    - **Akun Buyer Default**:
+      - `aceng@gmail.com` / `Aceng_123` (HP: `08123456789`)
+    - **Master Suppliers**: `PT Sukses Bahan Kue` & `CV Kemasan Cantik`.
+    - **Master Stock Items**: Tepung Terigu, Gula Pasir, Mentega Wisman, Telur Ayam, Box Kue Eksklusif.
+    - **Master Products & Recipes**: Lapis Legit Premium, Chiffon Cake Pandan, Brownies Fudgy Almond (terkoneksi dengan takaran resep `Recipe` ke stok bahan baku & kemasan).
+    - **Master FAQ Items**: 3 item FAQ mengenai daya tahan kue, pembayaran Midtrans, dan metode pengiriman.
+  - Skrip CLI mandiri: `python -m app.seed_data` atau `python app/seed_data.py`.
+
+- **3. Endpoint Pesanan & Pembayaran Khusus Buyer JWT (`/orders` & `/payments`)**:
+  - **Dependencies (`app/api/dependencies.py`)**:
+    - `get_current_buyer`: Memvalidasi token JWT Buyer dan mengembalikan model `Buyer` yang aktif.
+    - `get_auth_identity_optional_service_or_jwt`: Mendukung autentikasi fleksibel `X-Service-Key` (Chatbot) ATAU `Authorization: Bearer <token>` (Buyer / Internal User).
+  - **Order Endpoints (`app/api/routes/order.py`)**:
+    - `POST /orders/buyer`: Membuat pesanan khusus Buyer. `customer_id` didapatkan langsung dari token JWT (nomor HP Buyer yang sedang login).
+    - `GET /orders/buyer`: Mengambil seluruh riwayat pesanan milik Buyer yang sedang login.
+    - `GET /orders/buyer/{order_id}`: Mengambil detail spesifik pesanan milik Buyer yang sedang login (dengan isolasi data aman 404 jika bukan pemilik).
+    - Mempertahankan `POST /orders`, `GET /orders/latest`, dan `POST /orders/{order_id}/cancel` untuk Chatbot (`require_service_key`).
+  - **Payment Endpoints (`app/api/routes/payment.py`)**:
+    - `POST /payments`: Dapat diakses oleh Chatbot (`X-Service-Key`) maupun Buyer JWT (`Authorization: Bearer <token>`). Jika diakses oleh Buyer JWT, sistem memvalidasi kepemilikan pesanan sebelum membuat transaksi Midtrans.
+    - `GET /payments/{order_id}/status`: Dapat diakses oleh Chatbot maupun Buyer JWT pemilik pesanan untuk memantau status pembayaran.
+
+---
+
+### 1. Refactoring Upload Gambar Produk (Cloudinary Integration — Fix Vercel Read-Only Filesystem)
 - **Latar Belakang & Masalah**:
   - Runtime serverless Vercel memiliki sistem berkas *read-only* (`Read-only file system (os error 30)`).
   - Penulisan berkas statis lokal ke `/static/products/` menyebabkan HTTP 500 saat di-deploy di Vercel.

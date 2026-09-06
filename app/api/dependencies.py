@@ -37,11 +37,14 @@ async def get_current_user_id(
     return user_id
 
 
-async def get_current_buyer_id(
+from app.models.buyer import Buyer
+
+
+async def get_current_buyer(
     payload: dict = Depends(get_current_user_payload),
     db: AsyncSession = Depends(get_db)
-) -> int:
-    """Get current buyer ID from token and verify buyer is active/exists"""
+) -> Buyer:
+    """Get current buyer object from token and verify buyer is active/exists"""
     if payload.get("role") != "buyer":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -56,7 +59,88 @@ async def get_current_buyer_id(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Buyer account is inactive or not found"
         )
-    return buyer_id
+    return buyer
+
+
+async def get_current_buyer_id(
+    buyer: Buyer = Depends(get_current_buyer)
+) -> int:
+    """Get current buyer ID from token and verify buyer is active/exists"""
+    return buyer.id
+
+
+class AuthIdentity:
+    """Represents authenticated client: Chatbot service key, Buyer, or Internal User"""
+    def __init__(
+        self,
+        auth_type: str,
+        buyer: Optional[Buyer] = None,
+        user_id: Optional[int] = None,
+        role: Optional[str] = None
+    ):
+        self.auth_type = auth_type  # "service", "buyer", "user"
+        self.buyer = buyer
+        self.user_id = user_id
+        self.role = role
+
+    @property
+    def is_service(self) -> bool:
+        return self.auth_type == "service"
+
+    @property
+    def is_buyer(self) -> bool:
+        return self.auth_type == "buyer"
+
+
+async def get_auth_identity_optional_service_or_jwt(
+    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db)
+) -> AuthIdentity:
+    """
+    Authenticate via either X-Service-Key (Chatbot) or Bearer JWT (Buyer or Internal User).
+    """
+    # 1. Check Service Key
+    if x_service_key and x_service_key == settings.service_api_key:
+        return AuthIdentity(auth_type="service")
+
+    # 2. Check Bearer Token
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+        try:
+            payload = decode_token(token)
+            role = payload.get("role")
+            sub_id = int(payload.get("sub"))
+
+            if role == "buyer":
+                from app.repositories import buyer_repo
+                buyer = await buyer_repo.get_buyer_by_id(db, sub_id)
+                if not buyer or not buyer.is_active:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Buyer account is inactive or not found"
+                    )
+                return AuthIdentity(auth_type="buyer", buyer=buyer, user_id=sub_id, role="buyer")
+            else:
+                is_active = await user_repo.is_user_active(db, sub_id)
+                if not is_active:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="User is no longer active"
+                    )
+                return AuthIdentity(auth_type="user", user_id=sub_id, role=payload.get("role_level"))
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authorization token"
+            )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required (provide valid X-Service-Key or Bearer token)"
+    )
 
 
 async def get_current_user_role_level(

@@ -16,6 +16,9 @@ test_master_data.py
 .env
 app/seed_admin.py
 app/test_imports.py
+app/seed_data.py
+app/test_buyer_orders_payments.py
+app/test_master_data.py
 
 .DS_Store
 Thumbs.db

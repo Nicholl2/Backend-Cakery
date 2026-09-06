@@ -179,15 +179,7 @@ async def create_new_order(
         )
 
 
-async def get_customer_latest_order(db: AsyncSession, nomor_wa: str) -> Order:
-    nomor_wa = normalize_phone(nomor_wa)
-    order = await order_repo.get_latest_order_by_wa(db, nomor_wa)
-    if not order:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Pelanggan belum memiliki pesanan",
-        )
-    
+async def _attach_payment_amounts(db: AsyncSession, order: Order) -> Order:
     amount_paid = Decimal("0.00")
     if order.invoice:
         payment_query = await db.execute(
@@ -208,7 +200,76 @@ async def get_customer_latest_order(db: AsyncSession, nomor_wa: str) -> Order:
         
     order.amount_paid = amount_paid
     order.amount_due = amount_due
-    
+    return order
+
+
+async def get_customer_latest_order(db: AsyncSession, nomor_wa: str) -> Order:
+    nomor_wa = normalize_phone(nomor_wa)
+    order = await order_repo.get_latest_order_by_wa(db, nomor_wa)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pelanggan belum memiliki pesanan",
+        )
+    return await _attach_payment_amounts(db, order)
+
+
+from app.repositories import customer_repo
+from app.models.buyer import Buyer
+from app.schemas.order import BuyerOrderCreate
+
+
+async def get_or_create_customer_for_buyer(db: AsyncSession, buyer: Buyer):
+    customer = await customer_repo.get_by_nomor_wa(db, buyer.phone)
+    if not customer:
+        customer, _ = await customer_repo.upsert(
+            db,
+            nomor_wa=buyer.phone,
+            nama=buyer.name,
+            alamat=None,
+        )
+        await db.commit()
+        await db.refresh(customer)
+    return customer
+
+
+async def get_buyer_orders(db: AsyncSession, buyer: Buyer) -> list[Order]:
+    customer = await customer_repo.get_by_nomor_wa(db, buyer.phone)
+    if not customer:
+        return []
+    orders = await order_repo.get_orders_by_customer_id(db, customer.id)
+    for o in orders:
+        await _attach_payment_amounts(db, o)
+    return orders
+
+
+async def get_buyer_order_by_id(db: AsyncSession, buyer: Buyer, order_id: int) -> Order:
+    customer = await customer_repo.get_by_nomor_wa(db, buyer.phone)
+    if not customer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order tidak ditemukan",
+        )
+    order = await order_repo.get_order_by_id_and_customer(db, order_id, customer.id)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order tidak ditemukan",
+        )
+    await _attach_payment_amounts(db, order)
+    return order
+
+
+async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCreate) -> Order:
+    customer = await get_or_create_customer_for_buyer(db, buyer)
+    order = await create_new_order(
+        db=db,
+        customer_id=customer.id,
+        items=[item.model_dump() for item in data.items],
+        metode_pengiriman=data.metode_pengiriman,
+        created_via=data.created_via,
+    )
+    await _attach_payment_amounts(db, order)
     return order
 
 

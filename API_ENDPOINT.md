@@ -114,7 +114,10 @@ Dokumentasi lengkap seluruh endpoint REST API Backend Toti Cakery (FastAPI).
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/orders` | `X-Service-Key` | Buat order baru (reservasi stok bahan via Optimistic Locking, generate invoice) |
+| `POST` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Buat order baru khusus Buyer (otomatis derive `customer_id` dari identitas JWT, reservasi stok bahan, generate invoice) |
+| `GET` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Ambil seluruh riwayat pesanan milik Buyer yang sedang login |
+| `GET` | `/orders/buyer/{order_id}` | Buyer JWT (`get_current_buyer`) | Detail pesanan spesifik milik Buyer (isolasi data aman antarpembeli) |
+| `POST` | `/orders` | `X-Service-Key` | Buat order baru via chatbot (reservasi stok bahan via Optimistic Locking, generate invoice) |
 | `GET` | `/orders/latest` | `X-Service-Key` | Ambil order terbaru pelanggan berdasarkan query `?nomor_wa=...` |
 | `POST` | `/orders/{order_id}/cancel` | `X-Service-Key` | Pembatalan otomatis (hanya jika invoice `unpaid`, stok bahan dikembalikan) |
 | `PATCH` | `/orders/{order_id}/status` | Admin / Owner | Update status pesanan (`pending`, `in_process`, `ready`, `delivered`, `picked_up`, `cancelled`). Menembak push webhook saat `ready`. |
@@ -125,8 +128,8 @@ Dokumentasi lengkap seluruh endpoint REST API Backend Toti Cakery (FastAPI).
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/payments` | `X-Service-Key` | Charge pembayaran ke Midtrans (Bank Transfer BCA VA atau QRIS), validasi nominal anti-tampering |
-| `GET` | `/payments/{order_id}/status` | `X-Service-Key` | Cek status tagihan, total terbayar, sisa tagihan, dan refresh transaksi pending |
+| `POST` | `/payments` | `X-Service-Key` / Buyer JWT | Charge pembayaran ke Midtrans (Bank Transfer BCA VA atau QRIS), validasi nominal anti-tampering dan verifikasi kepemilikan order untuk Buyer |
+| `GET` | `/payments/{order_id}/status` | `X-Service-Key` / Buyer JWT | Cek status tagihan, total terbayar, sisa tagihan, dan refresh transaksi pending untuk Chatbot & Buyer |
 | `POST` | `/payments/notify` | Public Webhook | Listener webhook otomatis Midtrans (validasi signature SHA512, auto-settlement invoice & order) |
 
 ---

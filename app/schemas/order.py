@@ -25,6 +25,12 @@ class OrderCreate(BaseModel):
     created_via: str = "chatbot"
 
 
+class BuyerOrderCreate(BaseModel):
+    metode_pengiriman: str = Field(..., pattern="^(pickup|delivery)$")
+    items: list[OrderItemCreate] = Field(..., min_length=1)
+    created_via: str = "web"
+
+
 # ── OUTPUT ───────────────────────────────────────────────────────────────────
 
 class InvoiceOut(BaseModel):

@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.api.dependencies import require_service_key, require_admin_or_owner
-from app.schemas.order import OrderCreate, OrderOut, OrderStatusUpdate
+from app.api.dependencies import require_service_key, require_admin_or_owner, get_current_buyer
+from app.models.buyer import Buyer
+from app.schemas.order import OrderCreate, BuyerOrderCreate, OrderOut, OrderStatusUpdate
 from app.services import order_service
 
 router = APIRouter(
@@ -15,6 +16,53 @@ router = APIRouter(
     },
 )
 
+
+# ── BUYER JWT ORDER ENDPOINTS ───────────────────────────────────────────────
+
+@router.post("/buyer", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
+             summary="Buat order baru khusus Buyer (autentikasi JWT)")
+async def create_order_for_buyer(
+    data: BuyerOrderCreate,
+    buyer: Buyer = Depends(get_current_buyer),
+    db: AsyncSession = Depends(get_db),
+) -> OrderOut:
+    """
+    Membuat pesanan baru untuk Buyer yang sedang login.
+    `customer_id` didapatkan otomatis dari nomor HP/identitas Buyer token JWT.
+    """
+    order = await order_service.create_buyer_order(db, buyer, data)
+    return OrderOut.model_validate(order)
+
+
+@router.get("/buyer", response_model=list[OrderOut],
+            summary="List riwayat pesanan milik Buyer yang sedang login")
+async def list_buyer_orders(
+    buyer: Buyer = Depends(get_current_buyer),
+    db: AsyncSession = Depends(get_db),
+) -> list[OrderOut]:
+    """
+    Mengambil semua pesanan milik Buyer yang sedang login.
+    """
+    orders = await order_service.get_buyer_orders(db, buyer)
+    return [OrderOut.model_validate(o) for o in orders]
+
+
+@router.get("/buyer/{order_id}", response_model=OrderOut,
+            summary="Detail pesanan milik Buyer yang sedang login")
+async def get_buyer_order_detail(
+    order_id: int,
+    buyer: Buyer = Depends(get_current_buyer),
+    db: AsyncSession = Depends(get_db),
+) -> OrderOut:
+    """
+    Mengambil detail spesifik pesanan milik Buyer yang sedang login.
+    Mengembalikan 404 jika pesanan tidak ditemukan atau bukan milik Buyer ini.
+    """
+    order = await order_service.get_buyer_order_by_id(db, buyer, order_id)
+    return OrderOut.model_validate(order)
+
+
+# ── CHATBOT & ADMIN ORDER ENDPOINTS ─────────────────────────────────────────
 
 @router.post("", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_service_key)],

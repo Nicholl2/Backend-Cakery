@@ -18,7 +18,7 @@ class Customer(Base):
 
     human_takeover_active = Column(Boolean, default=False, nullable=False)
     takeover_expires_at = Column(DateTime(timezone=True), nullable=True)
-    orders = relationship("Order", back_populates="customer")
+    orders = relationship("Order", back_populates="customer", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Customer(id={self.id}, nomor_wa={self.nomor_wa}, takeover={self.human_takeover_active})>"

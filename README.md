@@ -125,7 +125,23 @@ WA_VERIFICATION_MODE=mock
 
 ---
 
-### 6. Run the FastAPI Server
+### 6. Seed Initial Master Data (Optional / Automatic on Startup)
+
+Sistem akan otomatis melakukan seeding data dasar saat startup jika tabel `roles` masih kosong. Anda juga dapat menjalankan seeder secara manual melalui CLI:
+
+```bash
+python -m app.seed_data
+```
+
+Default credentials yang dibuat:
+- **Owner (Admin Site)**: `imeng` / `Admin_123` (HP: `08111111111`)
+- **Admin (Admin Site)**: `ameng` / `Admin_123` (HP: `08222222222`)
+- **Staff (Admin Site)**: `smeng` / `Staff_123` (HP: `08333333333`)
+- **Buyer (Buyer Site)**: `aceng@gmail.com` / `Aceng_123` (HP: `08123456789`)
+
+---
+
+### 7. Run the FastAPI Server
 
 ```bash
 uvicorn app.main:app --reload

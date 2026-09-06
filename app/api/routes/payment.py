@@ -4,15 +4,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
 from app.core.database import get_db
-from app.api.dependencies import require_service_key
+from app.api.dependencies import get_auth_identity_optional_service_or_jwt, AuthIdentity
 from app.services import payment_service
-from app.repositories import order_repo
+from app.repositories import order_repo, customer_repo
 from app.models.payment import PaymentStatusEnum
 
 router = APIRouter(
     tags=["Payments"],
     responses={
-        401: {"description": "Invalid or missing X-Service-Key header"},
+        401: {"description": "Unauthorized - Missing or invalid Service Key / Bearer JWT"},
         404: {"description": "Order or Payment not found"},
     },
 )
@@ -23,17 +23,29 @@ class PaymentChargeRequest(BaseModel):
     payment_type: str = Field(..., pattern="^(full|dp)$")
     amount: Decimal = Field(..., gt=0)
 
-# 1. Endpoint POST /payments (secured)
-@router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_service_key)],
-             summary="Charge payment via Midtrans Core API")
+# 1. Endpoint POST /payments (secured via Service Key OR Buyer JWT)
+@router.post("", status_code=status.HTTP_201_CREATED,
+             summary="Charge payment via Midtrans Core API (Service Key / Buyer JWT)")
 async def create_midtrans_payment(
     data: PaymentChargeRequest,
+    auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Buat request charge baru ke Midtrans Core API (headless).
-    Mengembalikan data transaksi Midtrans (seperti nomor VA atau QRIS string).
+    Dapat diakses oleh Chatbot (X-Service-Key) maupun Buyer (Bearer JWT).
+    Mengembalikan data transaksi Midtrans (nomor VA atau QRIS string).
     """
+    # Jika diakses oleh Buyer JWT, validasi kepemilikan order
+    if auth.is_buyer:
+        customer = await customer_repo.get_by_nomor_wa(db, auth.buyer.phone)
+        order = await order_repo.get_order_by_id(db, data.order_id)
+        if not order or not customer or order.customer_id != customer.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Order tidak ditemukan"
+            )
+
     return await payment_service.create_midtrans_charge(
         db,
         order_id=data.order_id,
@@ -42,16 +54,25 @@ async def create_midtrans_payment(
         amount=data.amount
     )
 
-# 2. Endpoint GET /payments/{order_id}/status (secured)
-@router.get("/{order_id}/status", dependencies=[Depends(require_service_key)],
+# 2. Endpoint GET /payments/{order_id}/status (secured via Service Key OR Buyer JWT)
+@router.get("/{order_id}/status",
             summary="Get latest payment status of an order")
 async def get_order_payment_status(
     order_id: int,
+    auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Mengambil summary status pembayaran terakhir dari suatu order untuk polling chatbot.
+    Mengambil summary status pembayaran terakhir dari suatu order (Chatbot atau Buyer JWT).
     """
+    if auth.is_buyer:
+        customer = await customer_repo.get_by_nomor_wa(db, auth.buyer.phone)
+        order = await order_repo.get_order_by_id(db, order_id)
+        if not order or not customer or order.customer_id != customer.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Order tidak ditemukan"
+            )
     payments = await payment_service.get_payments_by_order(db, order_id)
     
     # Refresh status if any payment is pending

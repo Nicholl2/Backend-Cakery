@@ -98,3 +98,28 @@ async def update_order_status(db: AsyncSession, order_id: int, status: str) -> O
         order.status = status
         await db.flush()
     return order
+
+
+async def get_orders_by_customer_id(db: AsyncSession, customer_id: int) -> list[Order]:
+    result = await db.execute(
+        select(Order)
+        .where(Order.customer_id == customer_id)
+        .order_by(Order.created_at.desc())
+        .options(
+            selectinload(Order.order_items),
+            selectinload(Order.invoice),
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def get_order_by_id_and_customer(db: AsyncSession, order_id: int, customer_id: int) -> Optional[Order]:
+    result = await db.execute(
+        select(Order)
+        .where(Order.id == order_id, Order.customer_id == customer_id)
+        .options(
+            selectinload(Order.order_items),
+            selectinload(Order.invoice),
+        )
+    )
+    return result.scalars().first()

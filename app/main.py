@@ -41,6 +41,18 @@ async def lifespan(app: FastAPI):
         await ensure_stock_item_columns(conn)
         await ensure_recipe_columns(conn)
         await ensure_otp_columns(conn)
+
+    # Auto-seed initial master data if roles table is empty
+    from app.core.database import AsyncSessionLocal
+    from sqlalchemy import select
+    from app.models.role import Role
+    from app.core.seeder import seed_initial_data
+
+    async with AsyncSessionLocal() as db:
+        role_check = await db.execute(select(Role).limit(1))
+        if not role_check.scalars().first():
+            await seed_initial_data(db)
+
     yield
     pass
 
@@ -48,7 +60,8 @@ app = FastAPI(
     title="Toti Cakery API",
     description="Bakery management system with inventory, products, and financial tracking",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    root_path="/api",
 )
 
 # Hanya mount static jika direktori static benar-benar ada
