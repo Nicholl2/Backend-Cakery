@@ -2,7 +2,6 @@ import secrets
 import uuid
 import string
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,57 +13,71 @@ from app.models.otp_code import OTPCode
 from app.core.config import settings
 from app.utils.phone import normalize_phone
 
-# In-memory store for single-use verified tokens (verify_token)
-# Format: { token_str: { "target": str, "purpose": str, "expires_at": datetime } }
-VERIFIED_TOKENS: Dict[str, Dict[str, Any]] = {}
+# ── GENERAL OTP HELPERS ───────────────────────────────────────────────────────
 
+async def send_otp(db: AsyncSession, target: str, channel: str, purpose: str) -> dict:
+    """Generate and store OTP in database, returning OTP ID and expiration"""
+    code = "".join(secrets.choice(string.digits) for _ in range(6))
+    otp_id = str(uuid.uuid4())
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    code_hash = hash_password(code)
 
-def clean_expired_tokens():
-    """Remove expired verification tokens from memory"""
-    now = datetime.now(timezone.utc)
-    expired = [k for k, v in VERIFIED_TOKENS.items() if v["expires_at"] < now]
-    for k in expired:
-        VERIFIED_TOKENS.pop(k, None)
+    await otp_repo.create_otp(
+        db=db,
+        otp_id=otp_id,
+        target=target,
+        channel=channel,
+        purpose=purpose,
+        code_hash=code_hash,
+        expires_at=expires_at
+    )
 
-
-def generate_verify_token(target: str, purpose: str) -> str:
-    """Generate a secure, single-use verification token valid for 10 minutes"""
-    clean_expired_tokens()
-    token = secrets.token_hex(32)
-    VERIFIED_TOKENS[token] = {
-        "target": target,
-        "purpose": purpose,
-        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10)
+    return {
+        "otp_id": otp_id,
+        "expires_in": 300
     }
-    return token
 
 
-def consume_verify_token(token: str, expected_purpose: str) -> str:
-    """Validate and consume a single-use verification token, returning its target"""
-    clean_expired_tokens()
-    if token not in VERIFIED_TOKENS:
+async def verify_otp(db: AsyncSession, otp_id: str, code: str) -> dict:
+    """Verify OTP code from database and issue a single-use DB verify_token"""
+    otp = await otp_repo.get_otp_by_id(db, otp_id)
+    if not otp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Verification token is invalid or has already been used"
+            detail="Kode OTP tidak valid atau tidak ditemukan."
         )
-    
-    token_data = VERIFIED_TOKENS[token]
-    if token_data["expires_at"] < datetime.now(timezone.utc):
-        VERIFIED_TOKENS.pop(token, None)
+
+    if otp.is_used:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Verification token has expired"
+            detail="Kode OTP sudah digunakan."
         )
-        
-    if token_data["purpose"] != expected_purpose:
+
+    otp_expires = otp.expires_at
+    if otp_expires.tzinfo is None:
+        otp_expires = otp_expires.replace(tzinfo=timezone.utc)
+    if otp_expires < datetime.now(timezone.utc):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Verification token purpose mismatch. Expected: {expected_purpose}"
+            detail="Kode OTP telah kedaluwarsa."
         )
-        
-    # Consume (remove from memory) to ensure single-use
-    VERIFIED_TOKENS.pop(token)
-    return token_data["target"]
+
+    if not verify_password(code, otp.code_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kode OTP salah."
+        )
+
+    verify_token = str(uuid.uuid4())
+    otp.is_verified = True
+    otp.verify_token = verify_token
+    await db.commit()
+    await db.refresh(otp)
+
+    return {
+        "verify_token": verify_token,
+        "target": otp.target
+    }
 
 
 # ── DB VERIFICATION TOKENS ────────────────────────────────────────────────────
@@ -466,47 +479,50 @@ async def login_buyer_otp(db: AsyncSession, phone: str, verify_token: str) -> di
 
 async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password: str) -> dict:
     """Reset buyer password via verification token"""
-    # Try looking up in DB first
     stmt = select(OTPCode).where(OTPCode.verify_token == verify_token)
     res = await db.execute(stmt)
     otp = res.scalars().first()
-    
-    if otp:
-        if otp.is_used:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Token verifikasi sudah digunakan."
-            )
-        otp_expires = otp.expires_at
-        if otp_expires.tzinfo is None:
-            otp_expires = otp_expires.replace(tzinfo=timezone.utc)
-        if otp_expires < datetime.now(timezone.utc):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Token verifikasi telah kedaluwarsa."
-            )
-        target = otp.phone_number
-        otp.is_used = True
-        await db.commit()
-    else:
-        # Fallback to in-memory tokens
-        target = consume_verify_token(verify_token, "reset_password")
-    
+
+    if not otp:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token verifikasi tidak valid atau tidak ditemukan."
+        )
+
+    if otp.is_used:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token verifikasi sudah digunakan."
+        )
+
+    otp_expires = otp.expires_at
+    if otp_expires.tzinfo is None:
+        otp_expires = otp_expires.replace(tzinfo=timezone.utc)
+    if otp_expires < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token verifikasi telah kedaluwarsa."
+        )
+
+    target = otp.phone_number or otp.target
+    otp.is_used = True
+    await db.commit()
+
     # Target can be email or phone
     buyer = await buyer_repo.get_buyer_by_email(db, target)
     if not buyer:
         buyer = await buyer_repo.get_buyer_by_phone(db, target)
-        
+
     if not buyer:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Buyer account not found"
         )
-        
+
     # Hash and update password
     pwd_hash = hash_password(new_password)
     await buyer_repo.update_buyer_password(db, buyer, pwd_hash)
-    
+
     return {"message": "Password reset successful"}
 
 
@@ -520,7 +536,7 @@ async def request_seller_forgot_password(db: AsyncSession, email: str) -> dict:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Seller account not found with this email"
         )
-        
+
     # Send mock OTP
     return await send_otp(db, email, "email", "reset_password")
 
@@ -532,18 +548,46 @@ async def verify_seller_forgot_password(db: AsyncSession, otp_id: str, code: str
 
 async def reset_seller_password(db: AsyncSession, verify_token: str, new_password: str) -> dict:
     """Reset seller/internal user password via verification token"""
-    target = consume_verify_token(verify_token, "reset_password")
-    
+    stmt = select(OTPCode).where(OTPCode.verify_token == verify_token)
+    res = await db.execute(stmt)
+    otp = res.scalars().first()
+
+    if not otp:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token verifikasi tidak valid atau tidak ditemukan."
+        )
+
+    if otp.is_used:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token verifikasi sudah digunakan."
+        )
+
+    otp_expires = otp.expires_at
+    if otp_expires.tzinfo is None:
+        otp_expires = otp_expires.replace(tzinfo=timezone.utc)
+    if otp_expires < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token verifikasi telah kedaluwarsa."
+        )
+
+    target = otp.target
+    otp.is_used = True
+    await db.commit()
+
     user = await user_repo.get_user_by_username(db, target)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Seller account not found"
         )
-        
+
     # Update user password in DB
     user.password_hash = hash_password(new_password)
     await db.commit()
     await db.refresh(user)
-    
+
     return {"message": "Password reset successful"}
+
