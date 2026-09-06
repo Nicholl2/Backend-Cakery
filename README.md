@@ -134,10 +134,11 @@ python -m app.seed_data
 ```
 
 Default credentials yang dibuat:
-- **Owner (Admin Site)**: `imeng` / `Admin_123` (HP: `08111111111`)
-- **Admin (Admin Site)**: `ameng` / `Admin_123` (HP: `08222222222`)
-- **Staff (Admin Site)**: `smeng` / `Staff_123` (HP: `08333333333`)
-- **Buyer (Buyer Site)**: `aceng@gmail.com` / `Aceng_123` (HP: `08123456789`)
+- **Owner (Admin Site)**: `imeng` / `Admin_123` (Email: `imeng@toticakery.com` | HP/WA: `08111111111`)
+- **Admin (Admin Site)**: `ameng` / `Admin_123` (Email: `ameng@toticakery.com` | HP/WA: `08222222222`)
+- **Staff (Admin Site)**: `smeng` / `Staff_123` (Email: `smeng@toticakery.com` | HP/WA: `08333333333`)
+- **Buyer (Buyer Site)**: `aceng@gmail.com` / `Aceng_123` (HP/WA: `08123456789`)
+*(Catatan: Login akun internal di Frontend mendukung login via Username, Email, ataupun Nomor HP/WA)*
 
 ---
 

@@ -33,25 +33,38 @@ from app.api.routes.review import router as review_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        from app.core.migrations import ensure_product_columns, ensure_buyer_columns, ensure_stock_item_columns, ensure_recipe_columns, ensure_otp_columns
-        await ensure_product_columns(conn)
-        await ensure_buyer_columns(conn)
-        await ensure_stock_item_columns(conn)
-        await ensure_recipe_columns(conn)
-        await ensure_otp_columns(conn)
+    import logging
+    main_logger = logging.getLogger(__name__)
 
-    # Auto-seed initial master data if roles table is empty
-    from app.core.database import AsyncSessionLocal
-    from sqlalchemy import select
-    from app.models.role import Role
-    from app.core.seeder import seed_initial_data
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            from app.core.migrations import (
+                ensure_product_columns,
+                ensure_buyer_columns,
+                ensure_stock_item_columns,
+                ensure_recipe_columns,
+                ensure_otp_columns,
+                ensure_user_columns,
+            )
+            await ensure_product_columns(conn)
+            await ensure_buyer_columns(conn)
+            await ensure_stock_item_columns(conn)
+            await ensure_recipe_columns(conn)
+            await ensure_otp_columns(conn)
+            await ensure_user_columns(conn)
 
-    async with AsyncSessionLocal() as db:
-        role_check = await db.execute(select(Role).limit(1))
-        if not role_check.scalars().first():
-            await seed_initial_data(db)
+        # Auto-seed initial master data if roles table is empty
+        from app.core.database import AsyncSessionLocal, seed_initial_data
+        from sqlalchemy import select
+        from app.models.role import Role
+
+        async with AsyncSessionLocal() as db:
+            role_check = await db.execute(select(Role).limit(1))
+            if not role_check.scalars().first():
+                await seed_initial_data(db)
+    except Exception as e:
+        main_logger.warning(f"Startup initialization / auto-seed encountered a non-fatal warning: {e}")
 
     yield
     pass

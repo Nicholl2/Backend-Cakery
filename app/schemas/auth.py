@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from decimal import Decimal
 from typing import Optional
 from enum import Enum
@@ -6,9 +6,24 @@ from app.utils.phone import validate_phone_e164
 
 
 class UserLogin(BaseModel):
-    """Schema for user login request"""
-    username: str = Field(..., min_length=3, max_length=50)
+    """Schema for user login request (accepts username, email, phone number, or identifier)"""
+    identifier: Optional[str] = Field(None, min_length=3, max_length=100, description="Username, email, atau nomor HP")
+    username: Optional[str] = Field(None, min_length=3, max_length=100)
+    email: Optional[str] = Field(None, max_length=100)
+    phone: Optional[str] = Field(None, max_length=25)
+    phone_number: Optional[str] = Field(None, max_length=25)
     password: str = Field(..., min_length=6)
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_identifier(cls, values):
+        if isinstance(values, dict):
+            id_val = values.get("identifier") or values.get("username") or values.get("email") or values.get("phone") or values.get("phone_number")
+            if id_val:
+                values["identifier"] = id_val
+            else:
+                raise ValueError("Identifier (username/email/phone) harus diisi")
+        return values
 
 
 class Token(BaseModel):
@@ -27,6 +42,8 @@ class UserResponse(BaseModel):
     is_active: bool
     role_id: int
     nomor_wa_admin: Optional[str] = None
+    email: Optional[str] = None
+    phone_number: Optional[str] = None
 
     class Config:
         from_attributes = True

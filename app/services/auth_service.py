@@ -7,14 +7,21 @@ from app.schemas.auth import UserLogin, Token
 
 async def authenticate_user(db: AsyncSession, login_data: UserLogin) -> Token:
     """
-    Authenticate user and return JWT token
-    
+    Authenticate user and return JWT token.
+    The `identifier` field accepts username, email, or phone_number.
+
     Raises:
         HTTPException 401: Invalid credentials
         HTTPException 422: User inactive
     """
-    # Get user from database
-    user = await user_repo.get_user_by_username(db, login_data.username)
+    identifier = login_data.identifier
+
+    # Try lookup: username → email → phone_number
+    user = await user_repo.get_user_by_username(db, identifier)
+    if not user:
+        user = await user_repo.get_user_by_email(db, identifier)
+    if not user:
+        user = await user_repo.get_user_by_phone(db, identifier)
 
     if not user:
         raise HTTPException(

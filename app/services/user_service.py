@@ -51,7 +51,9 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
         role_id=data.role_id,
         nomor_wa_admin=data.nomor_wa_admin,
         handles_takeover=data.handles_takeover if data.handles_takeover is not None else False,
-        is_active=data.is_active if data.is_active is not None else True
+        is_active=data.is_active if data.is_active is not None else True,
+        email=data.email,
+        phone_number=data.phone_number,
     )
     db.add(new_user)
     await db.commit()
@@ -92,7 +94,9 @@ async def bootstrap_owner(db: AsyncSession, data: UserBootstrap) -> User:
         role_id=1,  # Owner role has ID 1
         nomor_wa_admin=data.nomor_wa_admin,
         handles_takeover=True,
-        is_active=True
+        is_active=True,
+        email=getattr(data, "email", None),
+        phone_number=getattr(data, "phone_number", None),
     )
     db.add(owner_user)
     await db.commit()

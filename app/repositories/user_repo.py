@@ -45,3 +45,25 @@ async def get_takeover_handlers(db: AsyncSession) -> list[User]:
     stmt = select(User).where(User.is_active == True, User.handles_takeover == True)
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
+    """Get user by email with role details loaded"""
+    stmt = (
+        select(User)
+        .options(joinedload(User.role))
+        .where(User.email == email)
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def get_user_by_phone(db: AsyncSession, phone: str) -> Optional[User]:
+    """Get user by phone_number with role details loaded"""
+    stmt = (
+        select(User)
+        .options(joinedload(User.role))
+        .where(User.phone_number == phone)
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()

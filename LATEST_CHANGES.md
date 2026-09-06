@@ -15,11 +15,15 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Dibuat modul seeder idempoten yang mengisi data awal:
     - **Roles**: `Owner` (Level 1), `Admin` (Level 2), `Staff`/`Seller` (Level 3), `Buyer` (Level 4).
     - **Akun Internal Default**:
-      - Superadmin/Owner: `imeng` / `Admin_123` (HP: `08111111111`)
-      - Admin: `ameng` / `Admin_123` (HP: `08222222222`)
-      - Staff/Seller: `smeng` / `Staff_123` (HP: `08333333333`)
+      - Superadmin/Owner: `imeng` / `Admin_123` (Email: `imeng@toticakery.com`, HP/WA: `08111111111`)
+      - Admin: `ameng` / `Admin_123` (Email: `ameng@toticakery.com`, HP/WA: `08222222222`)
+      - Staff/Seller: `smeng` / `Staff_123` (Email: `smeng@toticakery.com`, HP/WA: `08333333333`)
     - **Akun Buyer Default**:
       - `aceng@gmail.com` / `Aceng_123` (HP: `08123456789`)
+    - **Dukungan Multi-Identifier Login Internal (`/auth/login`)**:
+      - Kolom `email` dan `phone_number` ditambahkan ke model `User` (`app/models/user.py`).
+      - Schema `UserLogin` menerima `identifier` fleksibel (`username`, `email`, atau `phone` / `phone_number`).
+      - Service `authenticate_user` otomatis mencari `User` berdasarkan `username` -> `email` -> `phone_number`, sehingga pengguna admin/owner/staff di Frontend dapat login menggunakan email, username, nomor HP, maupun WA secara langsung.
     - **Master Suppliers**: `PT Sukses Bahan Kue` & `CV Kemasan Cantik`.
     - **Master Stock Items**: Tepung Terigu, Gula Pasir, Mentega Wisman, Telur Ayam, Box Kue Eksklusif.
     - **Master Products & Recipes**: Lapis Legit Premium, Chiffon Cake Pandan, Brownies Fudgy Almond (terkoneksi dengan takaran resep `Recipe` ke stok bahan baku & kemasan).

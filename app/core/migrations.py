@@ -110,3 +110,17 @@ async def ensure_otp_columns(conn: AsyncConnection):
     await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_otp_codes_nonce ON otp_codes (nonce) WHERE nonce IS NOT NULL;"))
     await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_otp_codes_verify_token ON otp_codes (verify_token) WHERE verify_token IS NOT NULL;"))
 
+
+async def ensure_user_columns(conn: AsyncConnection):
+    """
+    Ensure email and phone_number columns exist in the 'users' table on PostgreSQL database.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(100);"))
+    await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);"))
+    await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email) WHERE email IS NOT NULL;"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_phone_number ON users (phone_number) WHERE phone_number IS NOT NULL;"))
+
+

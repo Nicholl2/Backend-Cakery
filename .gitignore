@@ -19,7 +19,6 @@ app/test_imports.py
 app/seed_data.py
 app/test_buyer_orders_payments.py
 app/test_master_data.py
-app/core/seeder.py
 
 .DS_Store
 Thumbs.db
