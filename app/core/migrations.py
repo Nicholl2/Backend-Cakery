@@ -126,3 +126,22 @@ async def ensure_user_columns(conn: AsyncConnection):
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_phone_number ON users (phone_number) WHERE phone_number IS NOT NULL;"))
 
 
+async def ensure_order_columns(conn: AsyncConnection):
+    """
+    Ensure notes, due_date, payment_method_preference exist in 'orders' table,
+    and custom_product_name exists with nullable product_id in 'order_items' table.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    # Order columns
+    await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS notes VARCHAR(1000);"))
+    await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS due_date TIMESTAMPTZ;"))
+    await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method_preference VARCHAR(50);"))
+
+    # OrderItem columns & nullable product_id
+    await conn.execute(text("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS custom_product_name VARCHAR(255);"))
+    await conn.execute(text("ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL;"))
+
+
+

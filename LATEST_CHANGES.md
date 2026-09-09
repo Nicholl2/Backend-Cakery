@@ -6,6 +6,32 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 00. Seller Orders & Custom Orders Integration (`toti-cakery-fe` Support)
+- **Seller Orders List & Detail Endpoints (`app/api/routes/order.py`)**:
+  - `GET /orders`: Mengembalikan seluruh pesanan toko untuk Seller/Admin dengan relasi eager loading lengkap (Customer, OrderItems, Product, Invoice, Payments, `amount_paid`, `amount_due`). Dilindungi `require_admin_or_owner`.
+  - `GET /orders/{order_id}`: Mengembalikan detail pesanan spesifik untuk Seller/Admin.
+- **Custom Order Creation (`POST /orders/custom`)**:
+  - Endpoint baru untuk admin/seller membuat pesanan kustom tanpa master produk (`product_id = null`).
+  - Otomatis melakukan upsert record `Customer` berdasarkan `customer_name` dan `customer_phone` (ter-normalisasi E.164).
+  - Mengisi `custom_product_name`, `jumlah` (qty), `subtotal`, dan `hpp_snapshot = 0.00`.
+  - **Bypassing Stock Deduction**: Melewati deduksi stok bahan baku / resep karena item tidak terhubung ke master produk.
+  - Otomatis membuat `Invoice` dengan nomor `INV-{YYYYMMDD}-{order_id}`, `total_tagihan = total_harga_pesanan`, status `unpaid`.
+  - Menetapkan `created_via = "seller"`.
+- **Order Status Update & Automatic Stock Restoration (`PATCH /orders/{order_id}/status`)**:
+  - Mendukung update status pesanan: `pending`, `in_process`, `ready`, `delivered`, `picked_up`, `cancelled`.
+  - **Auto Stock Restoration on Cancellation**: Jika status pesanan diubah ke `cancelled`, sistem secara otomatis mengembalikan stok bahan baku untuk item pesanan yang memiliki resep terkait menggunakan mekanisme **Optimistic Locking** (`version = version + 1`).
+  - Memicu webhook chatbot jika status diubah ke `ready`.
+- **Database Model & Migration (`app/models/order.py`, `app/core/migrations.py`, `app/main.py`)**:
+  - `OrderItem`: Menjadikan kolom `product_id` `nullable=True`, menambahkan kolom `custom_product_name VARCHAR(255)`.
+  - `Order`: Menambahkan kolom `notes VARCHAR(1000)`, `due_date TIMESTAMPTZ`, dan `payment_method_preference VARCHAR(50)`.
+  - Menambahkan migration idempotent `ensure_order_columns` pada lifespan startup.
+- **Pydantic Schemas (`app/schemas/order.py`)**:
+  - Menambahkan `CustomerOrderOut`, `CustomOrderItemCreate`, `CustomOrderCreate`.
+  - Memperkaya `OrderItemOut` dengan `custom_product_name: Optional[str]` dan `product_id: Optional[int]`.
+  - Memperkaya `OrderOut` dengan `customer: Optional[CustomerOrderOut]`, `order_items: list[OrderItemOut]`, `notes`, `due_date`, `payment_method_preference`, `amount_paid`, dan `amount_due`.
+- **Automated Tests (`app/test_seller_orders.py`)**:
+  - Pengujian terisolasi (SQLite In-Memory) untuk RBAC (`GET /orders`), pembuatan custom order, bypass stok, relasi customer & invoice, kalkulasi pembayaran, order buyer biasa dengan deduksi stok resep, serta pemulihan stok saat status diubah ke `cancelled`.
+
 ### 0. User & Buyer Avatar Upload via Cloudinary Direct Integration
 - **Direct Memory Stream Helper (`app/utils/cloudinary_helper.py`)**:
   - Menyediakan helper `upload_image_to_cloudinary(file, folder="toti-cakery/avatars")` yang men-stream buffer memory berkas langsung ke Cloudinary API tanpa menyentuh disk lokal atau repositori Git.

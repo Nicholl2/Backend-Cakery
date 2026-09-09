@@ -23,15 +23,49 @@ class OrderCreate(BaseModel):
     metode_pengiriman: str = Field(..., pattern="^(pickup|delivery)$")
     items: list[OrderItemCreate] = Field(..., min_length=1)
     created_via: str = "chatbot"
+    notes: Optional[str] = None
+    due_date: Optional[datetime] = None
+    payment_method_preference: Optional[str] = None
 
 
 class BuyerOrderCreate(BaseModel):
     metode_pengiriman: str = Field(..., pattern="^(pickup|delivery)$")
     items: list[OrderItemCreate] = Field(..., min_length=1)
     created_via: str = "web"
+    notes: Optional[str] = None
+    due_date: Optional[datetime] = None
+    payment_method_preference: Optional[str] = None
+
+
+class CustomOrderItemCreate(BaseModel):
+    custom_product_name: str = Field(..., min_length=1)
+    price: Decimal = Field(..., gt=0, decimal_places=2)
+    qty: int = Field(default=1, gt=0)
+    custom_decoration_charge: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
+
+
+class CustomOrderCreate(BaseModel):
+    customer_name: str = Field(..., min_length=1)
+    customer_phone: str = Field(..., min_length=5)
+    customer_address: Optional[str] = None
+    metode_pengiriman: str = Field(default="pickup", pattern="^(pickup|delivery)$")
+    notes: Optional[str] = None
+    due_date: Optional[datetime] = None
+    payment_method_preference: Optional[str] = None
+    items: list[CustomOrderItemCreate] = Field(..., min_length=1)
 
 
 # ── OUTPUT ───────────────────────────────────────────────────────────────────
+
+class CustomerOrderOut(BaseModel):
+    id: int
+    nama: str
+    nomor_wa: str
+    alamat: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
 
 class InvoiceOut(BaseModel):
     id: int
@@ -51,11 +85,12 @@ class InvoiceOut(BaseModel):
 
 class OrderItemOut(BaseModel):
     id: int
-    product_id: int
+    product_id: Optional[int] = None
+    custom_product_name: Optional[str] = None
     jumlah: int
-    custom_decoration_charge: Decimal
+    custom_decoration_charge: Decimal = Decimal("0.00")
     subtotal: Decimal
-    hpp_snapshot: Decimal
+    hpp_snapshot: Decimal = Decimal("0.00")
 
     @field_validator("custom_decoration_charge", "subtotal", "hpp_snapshot", mode="before")
     @classmethod
@@ -73,9 +108,14 @@ class OrderOut(BaseModel):
     metode_pengiriman: str
     total_harga_pesanan: Decimal
     created_via: str
+    notes: Optional[str] = None
+    due_date: Optional[datetime] = None
+    payment_method_preference: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    items: list[OrderItemOut] = Field(validation_alias="order_items")
+    customer: Optional[CustomerOrderOut] = None
+    order_items: list[OrderItemOut] = Field(default_factory=list)
+    items: Optional[list[OrderItemOut]] = Field(default=None, validation_alias="order_items")
     invoice: Optional[InvoiceOut] = None
     amount_paid: Optional[Decimal] = None
     amount_due: Optional[Decimal] = None

@@ -51,8 +51,9 @@ async def get_order_with_details(db: AsyncSession, order_id: int) -> Optional[Or
         select(Order)
         .where(Order.id == order_id)
         .options(
-            selectinload(Order.order_items),
-            selectinload(Order.invoice),
+            selectinload(Order.customer),
+            selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
     return result.scalars().first()
@@ -66,8 +67,8 @@ async def get_latest_order_by_wa(db: AsyncSession, nomor_wa: str) -> Optional[Or
         .order_by(Order.created_at.desc())
         .options(
             selectinload(Order.customer),
-            selectinload(Order.invoice),
-            selectinload(Order.order_items),
+            selectinload(Order.invoice).selectinload(Invoice.payments),
+            selectinload(Order.order_items).selectinload(OrderItem.product),
         )
         .limit(1)
     )
@@ -79,7 +80,9 @@ async def get_order_by_id(db: AsyncSession, order_id: int) -> Optional[Order]:
         select(Order)
         .where(Order.id == order_id)
         .options(
-            selectinload(Order.invoice),
+            selectinload(Order.customer),
+            selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
     return result.scalars().first()
@@ -90,7 +93,9 @@ async def update_order_status(db: AsyncSession, order_id: int, status: str) -> O
         select(Order)
         .where(Order.id == order_id)
         .options(
-            selectinload(Order.invoice),
+            selectinload(Order.customer),
+            selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
     order = result.scalars().first()
@@ -106,8 +111,9 @@ async def get_orders_by_customer_id(db: AsyncSession, customer_id: int) -> list[
         .where(Order.customer_id == customer_id)
         .order_by(Order.created_at.desc())
         .options(
-            selectinload(Order.order_items),
-            selectinload(Order.invoice),
+            selectinload(Order.customer),
+            selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
     return list(result.scalars().all())
@@ -118,8 +124,32 @@ async def get_order_by_id_and_customer(db: AsyncSession, order_id: int, customer
         select(Order)
         .where(Order.id == order_id, Order.customer_id == customer_id)
         .options(
-            selectinload(Order.order_items),
-            selectinload(Order.invoice),
+            selectinload(Order.customer),
+            selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
     return result.scalars().first()
+
+
+async def get_all_orders(
+    db: AsyncSession,
+    limit: int = 100,
+    offset: int = 0,
+    status: Optional[str] = None,
+) -> list[Order]:
+    query = (
+        select(Order)
+        .order_by(Order.created_at.desc())
+        .options(
+            selectinload(Order.customer),
+            selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.invoice).selectinload(Invoice.payments),
+        )
+    )
+    if status:
+        query = query.where(Order.status == status)
+    
+    query = query.limit(limit).offset(offset)
+    result = await db.execute(query)
+    return list(result.scalars().all())

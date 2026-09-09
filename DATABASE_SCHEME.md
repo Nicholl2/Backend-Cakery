@@ -178,6 +178,9 @@ Table orders {
   metode_pengiriman enum('pickup','delivery') [not null]
   total_harga_pesanan decimal(10,2) [default: 0, not null]
   created_via varchar(50) [default: 'chatbot', not null]
+  notes varchar(1000) [null, note: 'Catatan pesanan kustom / instruksi pengiriman']
+  due_date timestamp [null, note: 'Tenggat waktu pengerjaan / tanggal pengiriman']
+  payment_method_preference varchar(50) [null, note: 'Preferensi metode bayar']
   created_at timestamp [default: `now()`]
   updated_at timestamp
 }
@@ -185,11 +188,12 @@ Table orders {
 Table order_items {
   id int [pk, increment]
   order_id int [ref: > orders.id, not null]
-  product_id int [ref: > products.id, not null]
+  product_id int [ref: > products.id, null, note: 'Null jika custom order item tanpa master product']
+  custom_product_name varchar(255) [null, note: 'Nama produk kustom seller']
   jumlah int [not null]
   custom_decoration_charge decimal(10,2) [default: 0, not null]
   subtotal decimal(10,2) [not null]
-  hpp_snapshot decimal(10,2) [not null, note: 'Modal HPP kue saat transaksi terjadi']
+  hpp_snapshot decimal(10,2) [not null, note: 'Modal HPP kue saat transaksi terjadi (0 untuk custom)']
 }
 
 Table invoices {

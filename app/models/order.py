@@ -48,6 +48,9 @@ class Order(Base):
     )
     total_harga_pesanan = Column(Numeric(10, 2), nullable=False, default=Decimal("0.00"))
     created_via = Column(String(50), nullable=False, default="chatbot")
+    notes = Column(String(1000), nullable=True)
+    due_date = Column(DateTime(timezone=True), nullable=True)
+    payment_method_preference = Column(String(50), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -65,11 +68,12 @@ class OrderItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, index=True)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    custom_product_name = Column(String(255), nullable=True)
     jumlah = Column(Integer, nullable=False)
     custom_decoration_charge = Column(Numeric(10, 2), nullable=False, default=Decimal("0.00"))
     subtotal = Column(Numeric(10, 2), nullable=False)
-    hpp_snapshot = Column(Numeric(10, 2), nullable=False)
+    hpp_snapshot = Column(Numeric(10, 2), nullable=False, default=Decimal("0.00"))
 
     order = relationship("Order", back_populates="order_items")
     product = relationship("Product")

@@ -1,10 +1,18 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
 
 from app.core.database import get_db
 from app.api.dependencies import require_service_key, require_admin_or_owner, get_current_buyer
 from app.models.buyer import Buyer
-from app.schemas.order import OrderCreate, BuyerOrderCreate, OrderOut, OrderStatusUpdate
+from app.models.order import OrderStatusEnum
+from app.schemas.order import (
+    OrderCreate,
+    BuyerOrderCreate,
+    CustomOrderCreate,
+    OrderOut,
+    OrderStatusUpdate,
+)
 from app.services import order_service
 
 router = APIRouter(
@@ -62,7 +70,28 @@ async def get_buyer_order_detail(
     return OrderOut.model_validate(order)
 
 
-# ── CHATBOT & ADMIN ORDER ENDPOINTS ─────────────────────────────────────────
+# ── CHATBOT & ADMIN/SELLER ORDER ENDPOINTS ──────────────────────────────────
+
+@router.get("", response_model=list[OrderOut],
+            dependencies=[Depends(require_admin_or_owner)],
+            summary="List seluruh pesanan toko (Khusus Admin/Owner/Seller)")
+async def list_seller_orders(
+    status: Optional[OrderStatusEnum] = Query(None, description="Filter status pesanan"),
+    limit: int = Query(100, ge=1, le=500, description="Jumlah data per halaman"),
+    offset: int = Query(0, ge=0, description="Offset pagination"),
+    db: AsyncSession = Depends(get_db),
+) -> list[OrderOut]:
+    """
+    Mengambil daftar seluruh pesanan untuk Seller/Admin dengan relasi lengkap (Customer, OrderItems, Invoice, Payments).
+    """
+    orders = await order_service.get_seller_orders(
+        db,
+        limit=limit,
+        offset=offset,
+        status=status.value if status else None,
+    )
+    return [OrderOut.model_validate(o) for o in orders]
+
 
 @router.post("", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_service_key)],
@@ -77,7 +106,29 @@ async def create_order(
         items=[item.model_dump() for item in data.items],
         metode_pengiriman=data.metode_pengiriman,
         created_via=data.created_via,
+        notes=data.notes,
+        due_date=data.due_date,
+        payment_method_preference=data.payment_method_preference,
     )
+    return OrderOut.model_validate(order)
+
+
+@router.post("/custom", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_admin_or_owner)],
+             summary="Buat custom order tanpa master produk (Khusus Admin/Owner/Seller)")
+async def create_custom_order(
+    data: CustomOrderCreate,
+    db: AsyncSession = Depends(get_db),
+) -> OrderOut:
+    """
+    Membuat pesanan custom baru tanpa master produk:
+    - Membuat/mengambil record Customer secara otomatis berdasarkan customer_phone & customer_name.
+    - Mengisi custom_product_name, price, dan qty tanpa master product_id.
+    - Bypassing pemotongan stok bahan baku/resep.
+    - Membuat Invoice otomatis dengan nomor unik.
+    - Menetapkan created_via = 'seller'.
+    """
+    order = await order_service.create_custom_order(db, data)
     return OrderOut.model_validate(order)
 
 
@@ -100,6 +151,20 @@ async def cancel_order(
     return await order_service.cancel_order_by_customer(db, order_id)
 
 
+@router.get("/{order_id}", response_model=OrderOut,
+            dependencies=[Depends(require_admin_or_owner)],
+            summary="Detail pesanan berdasarkan ID (Khusus Admin/Owner/Seller)")
+async def get_seller_order_detail(
+    order_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> OrderOut:
+    """
+    Mengambil detail pesanan spesifik untuk Admin/Owner dengan relasi lengkap.
+    """
+    order = await order_service.get_seller_order_by_id(db, order_id)
+    return OrderOut.model_validate(order)
+
+
 @router.patch("/{order_id}/status", response_model=OrderOut,
               dependencies=[Depends(require_admin_or_owner)],
               summary="Update status order oleh admin")
@@ -111,6 +176,7 @@ async def update_order_status(
     """
     Update status order oleh Admin/Owner. Nilai status: pending, in_process, ready, delivered, picked_up, cancelled.
     Jika status diubah menjadi 'ready', memicu push notification webhook ke Chatbot Service.
+    Jika status diubah menjadi 'cancelled', stok bahan baku pesanan biasa akan dikembalikan secara otomatis.
     """
-    order = await order_service.update_order_status(db, order_id, data.status)
+    order = await order_service.update_order_status(db, order_id, data.status.value)
     return OrderOut.model_validate(order)
