@@ -6,6 +6,31 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 000. High Concurrency, Race Condition, Security & Settlement Hardening
+- **Payment & Order State Machine (`app/core/state_machine.py`)**:
+  - Validasi transisi status satu arah (`is_valid_payment_transition` & `is_valid_order_transition`).
+  - Mencegah backward rollback (misal: webhook `pending` stale menimpa status `Success` menjadi `Pending`).
+  - Mendeteksi terminal state (`Success`, `Failed`, `Refunded` untuk payment; `Delivered`, `Picked Up`, `Cancelled` untuk order).
+- **Payment Webhook Hardening & Idempotency (`app/services/payment_service.py`)**:
+  - **Row-Level Locking (`SELECT ... FOR UPDATE`)**: Mengunci baris `Payment` saat memproses callback Midtrans untuk mencegah race condition double-settlement saat dua webhook masuk bersamaan.
+  - **Idempotency Guard**: Jika transaksi sudah berada pada status terminal (`is_payment_terminal`), webhook duplikat langsung di-skip secara aman tanpa mutasi ganda ke Invoice/Order.
+  - **Structured Audit Logging**: Setiap charge creation, state transition, blocked rollback, auto-transition order, dan pembaruan invoice dicatat dalam format terstruktur `[PAYMENT_AUDIT]`.
+- **Inventory Concurrency & Auto-Retry Mechanism (`app/services/order_service.py`)**:
+  - **Optimistic Locking Auto-Retry**: Menambahkan loop retry hingga 3 kali (`MAX_STOCK_RETRY = 3`) dengan re-fetch data bahan baku terbaru saat terjadi benturan versi (`StockItem.version`) di tengah concurrent checkout.
+  - **Pessimistic Row Lock on Status & Cancellation**: Menambahkan `with_for_update()` pada pembaruan status order dan pembatalan pesanan (`cancel_order_by_customer`) untuk mencegah double-cancellation dan duplicate stock restoration.
+  - Validasi state machine pada perubahan status order admin/seller.
+- **In-Memory Rate Limiting & Anti-Spam Protection (`app/core/rate_limiter.py`, `app/main.py`)**:
+  - Mengintegrasikan library `slowapi` berbasis memory (`memory://`) tanpa dependensi Redis tambahan.
+  - Menetapkan limit ketat:
+    - `POST /orders`, `/orders/buyer`, `/orders/custom`: `5/minute` per IP
+    - `POST /payments`: `5/minute` per IP
+    - `POST /auth/login`, `/auth/buyer/register`, `/auth/buyer/login`: `10/minute` per IP (anti brute force)
+    - `POST /auth/verify/wa/start`: `6/minute` per IP (anti-spam OTP)
+    - `POST /payments/notify`: `30/minute` rate limiter
+  - Global exception handler `RateLimitExceeded` menghasilkan respon HTTP 429 Too Many Requests yang standar.
+- **Automated Hardening Test Suite (`app/test_hardening.py`)**:
+  - 6 unit/integration test terisolasi (SQLite in-memory) menguji validasi transisi Payment & Order State Machine, pencegahan rollback, idempotency double-webhook settlement, inisialisasi rate limiter, dan guard update status.
+
 ### 00. Seller Orders & Custom Orders Integration (`toti-cakery-fe` Support)
 - **Seller Orders List & Detail Endpoints (`app/api/routes/order.py`)**:
   - `GET /orders`: Mengembalikan seluruh pesanan toko untuk Seller/Admin dengan relasi eager loading lengkap (Customer, OrderItems, Product, Invoice, Payments, `amount_paid`, `amount_due`). Dilindungi `require_admin_or_owner`.

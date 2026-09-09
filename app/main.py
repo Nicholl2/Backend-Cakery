@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
 
 try:
     from fastapi.staticfiles import StaticFiles
@@ -82,6 +84,11 @@ app = FastAPI(
     lifespan=lifespan,
     root_path="/api",
 )
+
+# ── RATE LIMITER (SlowAPI) ───────────────────────────────────────────────────
+from app.core.rate_limiter import limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Hanya mount static jika direktori static benar-benar ada
 if os.path.exists("static"):

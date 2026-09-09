@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
+
+from app.core.rate_limiter import limiter, RATE_ORDER_CREATE
 
 from app.core.database import get_db
 from app.api.dependencies import require_service_key, require_admin_or_owner, get_current_buyer
@@ -29,7 +31,9 @@ router = APIRouter(
 
 @router.post("/buyer", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
              summary="Buat order baru khusus Buyer (autentikasi JWT)")
+@limiter.limit(RATE_ORDER_CREATE)
 async def create_order_for_buyer(
+    request: Request,
     data: BuyerOrderCreate,
     buyer: Buyer = Depends(get_current_buyer),
     db: AsyncSession = Depends(get_db),
@@ -96,7 +100,9 @@ async def list_seller_orders(
 @router.post("", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_service_key)],
              summary="Buat order baru — dipanggil oleh chatbot")
+@limiter.limit(RATE_ORDER_CREATE)
 async def create_order(
+    request: Request,
     data: OrderCreate,
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
@@ -116,7 +122,9 @@ async def create_order(
 @router.post("/custom", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_admin_or_owner)],
              summary="Buat custom order tanpa master produk (Khusus Admin/Owner/Seller)")
+@limiter.limit(RATE_ORDER_CREATE)
 async def create_custom_order(
+    request: Request,
     data: CustomOrderCreate,
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:

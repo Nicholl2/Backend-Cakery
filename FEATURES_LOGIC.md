@@ -16,14 +16,15 @@ Alur kerja saat endpoint `POST /orders` dipanggil oleh Chatbot atau Client:
    - Untuk setiap produk dalam pesanan, sistem mengalikan kuantitas pesanan dengan takaran bahan baku di tabel `recipes`:
      $$\text{total\_needed} = \text{jumlah pesanan} \times \text{jumlah\_dibutuhkan}$$
    - Sistem menjumlahkan kebutuhan per `stock_item_id` dan memvalidasi apakah `stok_tersedia >= total_needed`.
-4. **Pengurangan Stok dengan Optimistic Locking**:
+4. **Pengurangan Stok dengan Optimistic Locking & Auto-Retry**:
    - Pengurangan stok dieksekusi dengan query berfilter versi:
      ```sql
      UPDATE stock_items 
      SET stok_tersedia = stok_tersedia - :total_needed, version = version + 1
      WHERE id = :stock_id AND version = :current_version;
      ```
-   - Jika `rowcount == 0` (terjadi modifikasi bersamaan oleh transaksi lain), transaksi langsung di-rollback dan melempar HTTP `400 Bad Request` (Concurrency Failure) untuk mencegah overselling.
+   - **Auto-Retry Loop (Maksimal 3 Kali)**: Jika `rowcount == 0` (terjadi modifikasi bersamaan oleh transaksi checkout lain), sistem tidak langsung menolak pesanan melainkan me-refetch data bahan baku terkini dan mencoba kembali hingga 3 percobaan (`MAX_STOCK_RETRY = 3`).
+   - Jika setelah 3 kali percobaan tetap terjadi conflict atau sisa stok tidak mencukupi kebutuhan pesanan, transaksi di-rollback dan melempar HTTP `400 Bad Request` untuk mencegah overselling.
 5. **Snapshot HPP & Pembuatan Invoice**:
    - Nilai HPP produk saat transaksi disimpan ke kolom `order_items.hpp_snapshot` untuk integritas audit laba kotor di masa mendatang.
    - Nomor invoice dibuat dengan format: `INV-YYYYMMDD-{order_id}` dengan status awal `unpaid`.
@@ -33,13 +34,14 @@ Alur kerja saat endpoint `POST /orders` dipanggil oleh Chatbot atau Client:
 ## 2. Pembatalan Order & Pemulihan Stok Bahan Baku
 
 Alur kerja saat endpoint `POST /orders/{order_id}/cancel` dipanggil:
-1. **Proteksi Status Invoice**:
-   Hanya pesanan yang status invoice-nya masih murni `unpaid` yang dapat dibatalkan otomatis. Pesanan yang sudah dibayar penuh (`paid`) atau memiliki DP (`partial`) ditolak dengan HTTP `409 Conflict`.
+1. **Pessimistic Row Lock & Proteksi Status Invoice**:
+   - Query mengambil pesanan menggunakan `with_for_update()` untuk mencegah race condition double-cancellation oleh request simultan.
+   - Hanya pesanan yang status invoice-nya masih murni `unpaid` yang dapat dibatalkan otomatis. Pesanan yang sudah dibayar penuh (`paid`) atau memiliki DP (`partial`) ditolak dengan HTTP `409 Conflict`.
 2. **Restorasi Stok Bahan Baku**:
    - Sistem menghitung kembali kuantitas bahan baku dari resep produk yang ada di `order_items`.
    - Mengembalikan kuantitas ke `stock_items.stok_tersedia` menggunakan Optimistic Locking (`version = version + 1`).
-3. **Pembaruan Status**:
-   Status order diubah menjadi `cancelled`.
+3. **Pembaruan Status & State Machine**:
+   Status order diubah menjadi `cancelled` setelah lolos validasi `is_valid_order_transition`.
 
 ---
 
@@ -53,23 +55,30 @@ Alur kerja pada endpoint `POST /payments`:
 2. **Dispatch Transaksi ke Midtrans**:
    - Mengirim request HTTP POST ke `/charge` Midtrans Sandbox/Production menggunakan `Basic Auth` (`midtrans_server_key`).
    - Mendukung metode `bank_transfer` (BCA Virtual Account) dan `qris` (dynamic QR code URL).
-3. **Pencatatan Record Pembayaran**:
+3. **Pencatatan Record Pembayaran & Audit Trail**:
    - Membuat record baru di tabel `payments` dengan status awal `Pending` dan tipe `DP` atau `Final`.
+   - Menghasilkan structured log `[PAYMENT_AUDIT] charge_created`.
 
 ---
 
-## 4. Otomasi Webhook Settlement & Transisi Status Transaksi
+## 4. Otomasi Webhook Settlement, Idempotency & State Machine
 
 Alur kerja saat Midtrans memanggil webhook listener `POST /payments/notify`:
 1. **Verifikasi Integritas Request (SHA512 Signature Key)**:
    Backend menghitung hash SHA-512 dari kombinasi:
    $$\text{hash} = \text{SHA512}(\text{order\_id} + \text{status\_code} + \text{gross\_amount} + \text{midtrans\_server\_key})$$
    Jika signature tidak cocok, request ditolak dengan HTTP `400 Bad Request (Invalid Signature)`.
-2. **Pemetaan Status Transaksi**:
+2. **Row-Level Lock (`SELECT ... FOR UPDATE`)**:
+   Query payment mengeksekusi `with_for_update()` pada PostgreSQL untuk memblokir callback duplikat yang datang bersamaan secara paralel.
+3. **Idempotency Guard**:
+   Jika transaksi sudah berstatus terminal (`Success`, `Failed`, atau `Refunded`), pemrosesan webhook duplikat langsung diabaikan (`skipped`) secara aman tanpa mutasi ganda ke Invoice atau Order.
+4. **State Machine Enforcement**:
+   Validasi satu arah via `is_valid_payment_transition` memastikan status `Success` tidak pernah dapat di-rollback kembali ke `Pending` atau `Failed` oleh webhook stale yang datang terlambat.
+5. **Pemetaan Status Transaksi**:
    - `settlement` / `capture` $\rightarrow$ `PaymentStatusEnum.success`
    - `deny` / `cancel` / `expire` $\rightarrow$ `PaymentStatusEnum.failed`
    - `pending` $\rightarrow$ `PaymentStatusEnum.pending`
-3. **Kalkulasi Akumulasi & Transisi Status Invoice/Order**:
+6. **Kalkulasi Akumulasi & Transisi Status Invoice/Order**:
    Jika status payment berubah menjadi `Success`:
    - Sistem menghitung total akumulasi pembayaran sukses:
      $$\text{total\_success} = \sum (\text{Payment.jumlah\_bayar}) \quad \text{dimana status} = \text{'Success'}$$
@@ -80,6 +89,8 @@ Alur kerja saat Midtrans memanggil webhook listener `POST /payments/notify`:
    - **Kondisi Uang Muka (DP)**:
      Jika $\text{total\_success} < \text{invoice.total\_tagihan}$:
      - `invoice.status` diubah menjadi `partial`.
+7. **Structured Audit Logging**:
+   Seluruh transisi status dan mutasi otomatis dicatat dengan prefix `[PAYMENT_AUDIT]` yang mencakup `transaction_id`, status lama, status baru, dan nominal transaksi.
 
 ---
 
@@ -165,3 +176,20 @@ Alur kerja pengalihan percakapan dari AI Chatbot ke Admin/Owner:
 4. **Biaya Operasional (Operating Expenses)**: $\sum(\text{Expense.jumlah})$ berdasarkan kategori (gaji, listrik, sewa, dll.).
 5. **Laba Bersih (Net Profit)**: $\text{Gross Profit} - \text{Operating Expenses}$.
 6. **Top Selling Products**: Ranking produk berdasarkan total kuantitas terjual dan kontribusi omzet pada rentang periode yang dipilih.
+
+---
+
+## 11. Rate Limiting & Anti-Abuse Protection
+
+Sistem menerapkan pembatasan frekuensi pemanggilan endpoint (Rate Limiting) berbasis memori (`slowapi`):
+1. **Pencegahan Spam Order (`POST /orders`, `POST /orders/buyer`, `POST /orders/custom`)**:
+   - Dibatasi maksimal **5 request per menit per alamat IP**.
+   - Mencegah serangan pengurasan stok bahan baku dan pembuatan invoice fiktif.
+2. **Pencegahan Brute-Force Kredensial (`POST /auth/login`, `POST /auth/buyer/register`, `POST /auth/buyer/login`)**:
+   - Dibatasi maksimal **10 request per menit per alamat IP**.
+3. **Pencegahan Spam Kode Verifikasi WhatsApp (`POST /auth/verify/wa/start`)**:
+   - Dibatasi maksimal **6 request per menit per alamat IP** untuk melindungi gateway WhatsApp dan nomor bot.
+4. **Pencegahan Flooding Webhook Midtrans (`POST /payments/notify`)**:
+   - Dibatasi maksimal **30 request per menit**.
+5. **Penanganan Pelanggaran**:
+   - Request yang melebihi batas kuota akan langsung ditolak oleh middleware dengan respon standar HTTP `429 Too Many Requests`.

@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi import APIRouter, Depends, Request, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
+from app.core.rate_limiter import limiter, RATE_AUTH_LOGIN, RATE_AUTH_VERIFY
 from app.api.dependencies import require_wa_internal_key
 from app.schemas.auth import (
     UserLogin, Token,
@@ -38,7 +39,9 @@ async def bootstrap(
 
 
 @router.post("/login", response_model=Token, status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_AUTH_LOGIN)
 async def login(
+    request: Request,
     login_data: UserLogin,
     db: AsyncSession = Depends(get_db)
 ) -> Token:
@@ -63,7 +66,9 @@ async def login(
 # ── WA DEEP LINK OTP ENDPOINTS ──────────────────────────────────────────────
 
 @router.post("/verify/wa/start", response_model=WAVerifyStartResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(RATE_AUTH_VERIFY)
 async def verify_wa_start(
+    request: Request,
     data: WAVerifyStartRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -93,7 +98,9 @@ async def verify_wa_status(
 
 
 @router.post("/buyer/register", response_model=BuyerAuthResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(RATE_AUTH_LOGIN)
 async def buyer_register(
+    request: Request,
     data: BuyerRegisterRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -115,7 +122,9 @@ async def buyer_register(
 
 
 @router.post("/buyer/login", response_model=BuyerAuthResponse, status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_AUTH_LOGIN)
 async def buyer_login(
+    request: Request,
     data: BuyerLoginRequest,
     db: AsyncSession = Depends(get_db)
 ):

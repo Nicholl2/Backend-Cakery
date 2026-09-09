@@ -7,6 +7,7 @@ Dokumen ini berisi konteks teknis, arsitektur, pedoman pengkodean, integrasi pih
 ## 1. Tech Stack & Environment
 
 - **Framework**: FastAPI (Python 3.12+)
+- **Rate Limiting**: SlowAPI (In-Memory `memory://` engine)
 - **Database ORM**: SQLAlchemy 2.0 (Full Asynchronous Mode via `asyncpg`)
 - **Database Engine**: PostgreSQL (Hosted on Neon.tech / Cloud Postgres)
 - **Validation & Serialization**: Pydantic v2 & `pydantic-settings`
@@ -33,7 +34,9 @@ app/
 └── core/
     ├── config.py       # Pydantic BaseSettings untuk pemetaan file .env
     ├── database.py     # Engine Async SQLAlchemy & session factory (get_db)
+    ├── rate_limiter.py # Limiter SlowAPI in-memory & konstanta limit
     ├── security.py     # Hashing password (bcrypt) & JWT token encode/decode
+    ├── state_machine.py# Validasi transisi status satu arah (Payment & Order)
     └── migrations.py   # Skrip migrasi ringan otomatis untuk kolom dan indeks baru
 ```
 
@@ -49,11 +52,17 @@ app/
 3. **Eager Loading Anti MissingGreenlet**:
    - Gunakan `selectinload()` atau `joinedload()` saat query relasi asinkronus untuk menghindari *Lazy-Load MissingGreenlet error*.
    - Saat objek telah di-`commit()`, jika respon endpoint memerlukan relasi nested, lakukan re-fetch dengan `selectinload()`.
-4. **Optimistic Concurrency Control**:
+4. **Optimistic Concurrency Control with Auto-Retry**:
    - Pengurangan dan pemulihan stok pada tabel `stock_items` wajib menyertakan filter kolom `version` dan increment `version = version + 1` untuk mencegah *race condition* / *overselling*.
-5. **No Password Plaintext**:
+   - Saat terjadi conflict versi, terapkan auto-retry hingga 3 kali dengan re-fetch data stok sebelum melempar HTTP 400.
+5. **Payment Webhook Idempotency & Row Locking**:
+   - Webhook processing wajib menggunakan `with_for_update()` pada record `Payment` dan memvalidasi `is_payment_terminal` agar transaksi terminal tidak pernah diproses ganda.
+   - Status transitions wajib divalidasi melalui State Machine (`is_valid_payment_transition` & `is_valid_order_transition`).
+6. **Rate Limiting Protection**:
+   - Seluruh endpoint mutasi sensitif (order, payment, auth login/register) wajib dilindungi oleh decorator `@limiter.limit(...)`.
+7. **No Password Plaintext**:
    - Seluruh kata sandi wajib di-hash menggunakan algoritma `bcrypt`. Token verifikasi sekali pakai (`verify_token`) di-generate menggunakan `secrets.token_hex` atau UUID yang aman.
-6. **International E.164 Phone Normalization**:
+8. **International E.164 Phone Normalization**:
    - Seluruh input nomor telepon dan WhatsApp wajib melalui utilitas `app.utils.phone.normalize_phone` dan divalidasi via Pydantic validator (`validate_phone_e164`).
    - Format wajib berupa digit murni 7–15 digit (tanpa simbol `+`, spasi, atau tanda hubung). Prefix lokal `0...` otomatis dinormalisasi menjadi `62...`, sedangkan kode negara internasional (misal US `1...`, Malaysia `60...`) dipertahankan secara utuh.
 

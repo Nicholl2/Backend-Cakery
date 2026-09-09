@@ -87,18 +87,27 @@ sequenceDiagram
 
     Customer->>Midtrans: Melakukan Pembayaran (VA BCA / QRIS)
     Midtrans->>Backend: POST /payments/notify (JSON Payload + signature_key)
-    Backend->>Backend: Validasi SHA512(order_id + status_code + gross_amount + server_key)
-    alt Signature Valid & Status Settlement
-        Backend->>DB: Update Payment Status = 'Success'
-        Backend->>DB: Hitung total pembayaran sukses pada invoice
-        alt Total Terbayar >= Total Tagihan
-            Backend->>DB: Invoice Status = 'paid', Order Status = 'in_process'
-        else Pembayaran DP Sebagian
-            Backend->>DB: Invoice Status = 'partial'
-        end
-        Backend-->>Midtrans: HTTP 200 {"status": "ok"}
-    else Signature Tidak Cocok
+    Backend->>Backend: 1. Validasi SHA512(order_id + status_code + gross_amount + server_key)
+    alt Signature Tidak Cocok
         Backend-->>Midtrans: HTTP 400 Bad Request (Invalid Signature)
+    else Signature Valid
+        Backend->>DB: 2. SELECT Payment WHERE pg_transaction_id WITH FOR UPDATE (Row Lock)
+        alt Payment Sudah Terminal State (Success/Failed)
+            Backend->>Backend: 3. Idempotency Guard: Skip proses (sudah pernah selesai)
+            Backend->>DB: RELEASE LOCK (commit)
+            Backend-->>Midtrans: HTTP 200 {"status": "ok"}
+        else Status Masih Pending
+            Backend->>Backend: 4. State Machine: Validasi transisi status satu arah
+            Backend->>DB: Update Payment Status = 'Success'
+            Backend->>DB: Hitung total pembayaran sukses pada invoice
+            alt Total Terbayar >= Total Tagihan
+                Backend->>DB: Invoice Status = 'paid', Order Status = 'in_process'
+            else Pembayaran DP Sebagian
+                Backend->>DB: Invoice Status = 'partial'
+            end
+            Backend->>DB: RELEASE LOCK & COMMIT
+            Backend-->>Midtrans: HTTP 200 {"status": "ok"}
+        end
     end
 ```
 

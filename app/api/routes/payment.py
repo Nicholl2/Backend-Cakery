@@ -1,9 +1,10 @@
 from decimal import Decimal
-from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi import APIRouter, Depends, Request, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
 from app.core.database import get_db
+from app.core.rate_limiter import limiter, RATE_PAYMENT_CREATE, RATE_WEBHOOK
 from app.api.dependencies import get_auth_identity_optional_service_or_jwt, AuthIdentity
 from app.services import payment_service
 from app.repositories import order_repo, customer_repo
@@ -14,6 +15,7 @@ router = APIRouter(
     responses={
         401: {"description": "Unauthorized - Missing or invalid Service Key / Bearer JWT"},
         404: {"description": "Order or Payment not found"},
+        429: {"description": "Too Many Requests - Rate limit exceeded"},
     },
 )
 
@@ -26,7 +28,9 @@ class PaymentChargeRequest(BaseModel):
 # 1. Endpoint POST /payments (secured via Service Key OR Buyer JWT)
 @router.post("", status_code=status.HTTP_201_CREATED,
              summary="Charge payment via Midtrans Core API (Service Key / Buyer JWT)")
+@limiter.limit(RATE_PAYMENT_CREATE)
 async def create_midtrans_payment(
+    request: Request,
     data: PaymentChargeRequest,
     auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
     db: AsyncSession = Depends(get_db)
@@ -120,7 +124,9 @@ async def get_order_payment_status(
 # 3. Endpoint POST /payments/notify (PUBLIC - webhook)
 @router.post("/notify", status_code=status.HTTP_200_OK,
              summary="Midtrans Webhook Notification Listener")
+@limiter.limit(RATE_WEBHOOK)
 async def midtrans_notification(
+    request: Request,
     payload: dict,
     db: AsyncSession = Depends(get_db)
 ):

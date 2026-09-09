@@ -108,33 +108,58 @@ async def create_new_order(
                         }
                     stock_item_requirements[stock_item.id]["total_needed"] += qty_needed
 
-        # ── 3. Validasi & Kurangi Stok (Optimistic Locking) ──────────────────
+        # ── 3. Validasi & Kurangi Stok (Optimistic Locking + Auto-Retry) ────
+        MAX_STOCK_RETRY = 3
+
         for stock_id, req in stock_item_requirements.items():
-            stock_item = req["stock_item_obj"]
             total_needed = req["total_needed"]
             product_name = req["product_name"]
 
-            # Validasi stok bahan baku
-            if stock_item.stok_tersedia < total_needed:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Stok bahan baku tidak mencukupi untuk memproses pesanan {product_name}",
-                )
+            for attempt in range(1, MAX_STOCK_RETRY + 1):
+                # Re-fetch stock item untuk fresh version pada retry
+                if attempt > 1:
+                    fresh_result = await db.execute(
+                        select(StockItem).where(StockItem.id == stock_id)
+                    )
+                    stock_item = fresh_result.scalars().first()
+                    if not stock_item:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=f"Bahan baku tidak ditemukan saat retry.",
+                        )
+                else:
+                    stock_item = req["stock_item_obj"]
 
-            # Kurangi stok & terapkan Optimistic Locking dengan filter version
-            stmt = (
-                update(StockItem)
-                .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
-                .values(
-                    stok_tersedia=StockItem.stok_tersedia - total_needed,
-                    version=StockItem.version + 1
+                # Validasi stok bahan baku
+                if stock_item.stok_tersedia < total_needed:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Stok bahan baku tidak mencukupi untuk memproses pesanan {product_name}",
+                    )
+
+                # Kurangi stok & terapkan Optimistic Locking dengan filter version
+                stmt = (
+                    update(StockItem)
+                    .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
+                    .values(
+                        stok_tersedia=StockItem.stok_tersedia - total_needed,
+                        version=StockItem.version + 1
+                    )
                 )
-            )
-            res = await db.execute(stmt)
-            if res.rowcount == 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Terjadi kegagalan validasi stok karena transaksi bersamaan. Silakan coba lagi.",
+                res = await db.execute(stmt)
+                if res.rowcount > 0:
+                    break  # Berhasil, lanjut ke stock item berikutnya
+
+                # Conflict: versi berubah oleh transaksi lain
+                if attempt == MAX_STOCK_RETRY:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Terjadi kegagalan validasi stok karena transaksi bersamaan. Silakan coba lagi.",
+                    )
+                logger.warning(
+                    "[STOCK_RETRY] Optimistic lock conflict on stock_item %s, "
+                    "attempt %s/%s, retrying...",
+                    stock_id, attempt, MAX_STOCK_RETRY,
                 )
 
         # ── 4. Buat Order ────────────────────────────────────────────────────
@@ -414,6 +439,7 @@ async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCre
 
 async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
     try:
+        # Lock Order row untuk mencegah double-cancel bersamaan
         result = await db.execute(
             select(Order)
             .where(Order.id == order_id)
@@ -424,6 +450,7 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
                 .selectinload(Product.recipes)
                 .selectinload(Recipe.stock_item)
             )
+            .with_for_update()
         )
         order = result.scalars().first()
         if not order:
@@ -490,6 +517,9 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
 
 
 async def update_order_status(db: AsyncSession, order_id: int, new_status: str) -> Order:
+    from app.core.state_machine import is_valid_order_transition
+
+    # Lock Order row untuk mencegah concurrent status update (double-cancel, dll)
     result = await db.execute(
         select(Order)
         .where(Order.id == order_id)
@@ -501,12 +531,29 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
             .selectinload(Product.recipes)
             .selectinload(Recipe.stock_item)
         )
+        .with_for_update()
     )
     order = result.scalars().first()
     if not order:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Order tidak ditemukan",
+        )
+
+    # State Machine validation
+    try:
+        new_status_enum = OrderStatusEnum(new_status)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Status '{new_status}' tidak valid.",
+        )
+
+    if not is_valid_order_transition(order.status, new_status_enum):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Transisi status tidak valid: '{order.status.value}' → '{new_status}'. "
+                   f"Pesanan sudah dalam status '{order.status.value}'.",
         )
 
     # Jika status diubah menjadi 'cancelled' dari status sebelumnya yang bukan cancelled
