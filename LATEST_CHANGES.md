@@ -29,9 +29,13 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
     - `POST /payments/notify`: `30/minute` rate limiter
   - Global exception handler `RateLimitExceeded` menghasilkan respon HTTP 429 Too Many Requests yang standar.
 - **Test Suite Reorganization & Pytest Integration (`tests/`, `pytest.ini`)**:
-  - Seluruh berkas pengujian (`test_avatar_upload.py`, `test_hardening.py`, `test_master_data.py`, `test_seller_orders.py`) dipindahkan dari direktori source code `app/` ke root direktori `tests/`.
-  - Dikonfigurasikan `pytest.ini` (`asyncio_mode = auto`, `pythonpath = .`, `testpaths = tests`) dan `tests/conftest.py`.
-  - Seluruh test suite (9 test items) terverifikasi 100% lulus saat dijalankan dengan `pytest` maupun direct runner (`python tests/test_*.py`).
+  - Seluruh berkas pengujian (`test_avatar_upload.py`, `test_hardening.py`, `test_master_data.py`, `test_seller_orders.py`, `test_buyer_orders_payments.py`, `test_imports.py`) dipindahkan dari direktori `app/` ke root direktori `tests/`.
+  - Dikonfigurasikan `pytest.ini` (`asyncio_mode = auto`, `pythonpath = .`, `testpaths = tests`) dan `tests/conftest.py` dengan penonaktifan rate limiter saat pengujian otomatis.
+  - Seluruh test suite (11 test items) terverifikasi 100% lulus saat dijalankan dengan `pytest` maupun direct runner (`python tests/test_*.py`).
+- **Pembersihan `.gitignore`**:
+  - Seluruh baris yang mengabaikan file test dihapus dari `.gitignore` sehingga seluruh test suite terlacak secara utuh di repositori GitHub.
+- **Pembaruan GitHub Actions CI Pipeline (`.github/workflows/ci.yaml`)**:
+  - Step eksekusi pengujian diperbarui dari `python app/test_master_data.py` menjadi `pytest tests/` untuk menjalankan seluruh rangkaian test integrasi PostgreSQL secara otomatis pada runner GitHub.
 
 ### 00. Seller Orders & Custom Orders Integration (`toti-cakery-fe` Support)
 - **Seller Orders List & Detail Endpoints (`app/api/routes/order.py`)**:

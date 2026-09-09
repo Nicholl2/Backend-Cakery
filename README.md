@@ -156,6 +156,38 @@ http://127.0.0.1:8000
 
 ---
 
+## 🧪 Testing Suite
+
+Proyek ini menggunakan **Pytest** dan **pytest-asyncio** untuk pengujian unit, integrasi, dan hardening sistem secara asinkronus. Seluruh berkas pengujian berada di dalam direktori `tests/`.
+
+### Menjalankan Seluruh Test Suite
+
+```bash
+pytest
+```
+
+Atau secara spesifik per file:
+
+```bash
+pytest tests/test_hardening.py
+pytest tests/test_seller_orders.py
+pytest tests/test_avatar_upload.py
+pytest tests/test_master_data.py
+pytest tests/test_buyer_orders_payments.py
+pytest tests/test_imports.py
+```
+
+### Struktur Pengujian (`tests/`)
+
+* `test_hardening.py`: Pengujian Concurrency, Optimistic Locking auto-retry, Idempotency webhook Midtrans, Row-Level Locking (`FOR UPDATE`), dan State Machine.
+* `test_seller_orders.py`: Pengujian Seller Orders, Custom Orders tanpa master produk, kalkulasi tagihan/pembayaran, dan auto-restorasi stok bahan baku saat dibatalkan.
+* `test_avatar_upload.py`: Pengujian upload gambar ke Cloudinary via direct memory stream, validasi MIME/ekstensi, dan batasan ukuran 5 MB.
+* `test_master_data.py`: Pengujian CRUD Supplier, StockItem, Product, Recipe, Review, dan seeder akun Buyer.
+* `test_buyer_orders_payments.py`: Pengujian checkout pesanan Buyer dan validasi alur pembayaran via JWT & Service Key.
+* `test_imports.py`: Verifikasi integritas registrasi seluruh model, schema, service, dan 90+ router endpoint.
+
+---
+
 ## 📚 API Documentation
 
 FastAPI automatically generates interactive API documentation.

@@ -23,21 +23,27 @@ Dokumen ini berisi konteks teknis, arsitektur, pedoman pengkodean, integrasi pih
 Struktur kode backend wajib mematuhi pemisahan layer secara tegas:
 
 ```text
-app/
-├── models/         # Deklarasi entitas SQLAlchemy Base (Table Definition, Enums, Relationships)
-├── schemas/        # Schema validasi Pydantic v2 (Request, Response, Out DTOs)
-├── repositories/   # Layer manipulasi query database murni (select, insert, update, delete)
-├── services/       # Layer logika bisnis, kalkulasi finansial, transaksi DB, & integrasi HTTP
-├── api/
-│   ├── dependencies.py # Dependency injection (Auth verification, RBAC, Database session)
-│   └── routes/         # Router FastAPI (Endpoint definitions, HTTP status codes, query params)
-└── core/
-    ├── config.py       # Pydantic BaseSettings untuk pemetaan file .env
-    ├── database.py     # Engine Async SQLAlchemy & session factory (get_db)
-    ├── rate_limiter.py # Limiter SlowAPI in-memory & konstanta limit
-    ├── security.py     # Hashing password (bcrypt) & JWT token encode/decode
-    ├── state_machine.py# Validasi transisi status satu arah (Payment & Order)
-    └── migrations.py   # Skrip migrasi ringan otomatis untuk kolom dan indeks baru
+Backend/
+├── tests/              # Test suite Pytest (Unit, Integrasi, Concurrency & Hardening)
+│   ├── conftest.py     # Global setup (sys.path, disable limiter during test)
+│   ├── test_*.py       # Modul test otomatis
+│   └── ...
+├── pytest.ini          # Konfigurasi pytest (asyncio_mode=auto, pythonpath=., testpaths=tests)
+└── app/
+    ├── models/         # Deklarasi entitas SQLAlchemy Base (Table Definition, Enums, Relationships)
+    ├── schemas/        # Schema validasi Pydantic v2 (Request, Response, Out DTOs)
+    ├── repositories/   # Layer manipulasi query database murni (select, insert, update, delete)
+    ├── services/       # Layer logika bisnis, kalkulasi finansial, transaksi DB, & integrasi HTTP
+    ├── api/
+    │   ├── dependencies.py # Dependency injection (Auth verification, RBAC, Database session)
+    │   └── routes/         # Router FastAPI (Endpoint definitions, HTTP status codes, query params)
+    └── core/
+        ├── config.py       # Pydantic BaseSettings untuk pemetaan file .env
+        ├── database.py     # Engine Async SQLAlchemy & session factory (get_db)
+        ├── rate_limiter.py # Limiter SlowAPI in-memory & konstanta limit
+        ├── security.py     # Hashing password (bcrypt) & JWT token encode/decode
+        ├── state_machine.py# Validasi transisi status satu arah (Payment & Order)
+        └── migrations.py   # Skrip migrasi ringan otomatis untuk kolom dan indeks baru
 ```
 
 ---

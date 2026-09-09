@@ -40,12 +40,13 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: python app/test_master_data.py
+      - name: Run Integration Tests
         env:
           DATABASE_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci
           SECRET_KEY: dummy
           SERVICE_API_KEY: dummy
-        run: python app/test_master_data.py
+        run: |
+          pytest tests/
 
   docker:
     name: Build image + smoke test
