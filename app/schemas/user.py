@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional
 from app.utils.phone import validate_phone_e164
 
@@ -10,8 +10,7 @@ class UserTakeoverResponse(BaseModel):
     username: str
     handles_takeover: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserCreate(BaseModel):
@@ -41,8 +40,7 @@ class UserOut(BaseModel):
     phone_number: Optional[str] = None
     avatar_url: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserBootstrap(BaseModel):

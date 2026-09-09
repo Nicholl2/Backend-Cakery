@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from decimal import Decimal
 from typing import Optional
 from datetime import datetime
@@ -37,8 +37,7 @@ class SupplierOut(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── PURCHASE ITEM ───────────────────────────────────────────────────────────
@@ -58,8 +57,7 @@ class PurchaseItemOut(BaseModel):
     harga_total: Decimal
     created_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── PURCHASE ────────────────────────────────────────────────────────────────
@@ -68,7 +66,7 @@ class PurchaseCreate(BaseModel):
     supplier_id: int
     nomor_po: Optional[str] = None
     catatan: Optional[str] = None
-    items: list[PurchaseItemCreate] = Field(..., min_items=1)
+    items: list[PurchaseItemCreate] = Field(..., min_length=1)
 
 
 class PurchaseUpdate(BaseModel):
@@ -90,8 +88,7 @@ class PurchaseOut(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PurchaseDetailOut(BaseModel):
@@ -107,5 +104,4 @@ class PurchaseDetailOut(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

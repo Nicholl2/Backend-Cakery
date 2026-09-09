@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from decimal import Decimal
 from typing import Optional
 from enum import Enum
@@ -46,8 +46,7 @@ class UserResponse(BaseModel):
     phone_number: Optional[str] = None
     avatar_url: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── BUYER / SELLER AUTH SCHEMAS ─────────────────────────────────────────────
@@ -118,8 +117,7 @@ class BuyerProfileResponse(BaseModel):
     is_verified: bool
     is_active: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
 from datetime import datetime
 from app.schemas.product import ProductOut
@@ -28,5 +28,4 @@ class ReviewOut(BaseModel):
     product: Optional[ProductOut] = None
     customer: Optional[CustomerOut] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

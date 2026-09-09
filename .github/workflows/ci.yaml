@@ -45,6 +45,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci
           SECRET_KEY: dummy
           SERVICE_API_KEY: dummy
+          PYTHONPATH: .
         run: |
           pytest tests/
 

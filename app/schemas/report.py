@@ -1,6 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from decimal import Decimal
 from typing import List
+
 
 class TopProductSummary(BaseModel):
     product_id: int
@@ -8,8 +9,8 @@ class TopProductSummary(BaseModel):
     qty: int
     revenue: Decimal
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
 
 class FinancialReportSummary(BaseModel):
     revenue: Decimal
@@ -18,8 +19,7 @@ class FinancialReportSummary(BaseModel):
     avg_order_value: Decimal
     top_products: List[TopProductSummary]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FinancialReportDetail(BaseModel):
@@ -29,8 +29,7 @@ class FinancialReportDetail(BaseModel):
     gross_profit: Decimal
     net_profit: Decimal
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MostReviewedProduct(BaseModel):
@@ -38,8 +37,7 @@ class MostReviewedProduct(BaseModel):
     avg_rating: float
     review_count: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AnalyticsReport(BaseModel):
@@ -47,6 +45,4 @@ class AnalyticsReport(BaseModel):
     conversion_rate_via_chatbot: float
     most_reviewed_product: MostReviewedProduct | None = None
 
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from datetime import datetime
@@ -70,5 +70,4 @@ class StockOut(BaseModel):
             return Decimal("0.00")
         return Decimal(str(v)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

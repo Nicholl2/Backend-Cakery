@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Union
 from datetime import datetime
@@ -133,8 +133,7 @@ class RecipeOut(BaseModel):
             return v
         return Decimal(str(v)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RecipeSummary(BaseModel):

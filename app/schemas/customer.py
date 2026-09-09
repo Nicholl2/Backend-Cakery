@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from datetime import datetime
 from typing import Optional
 from app.utils.phone import validate_phone_e164
@@ -26,8 +26,7 @@ class CustomerOut(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TakeoverSet(BaseModel):

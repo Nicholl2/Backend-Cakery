@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from datetime import datetime
@@ -63,8 +63,7 @@ class CustomerOrderOut(BaseModel):
     nomor_wa: str
     alamat: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class InvoiceOut(BaseModel):
@@ -79,8 +78,7 @@ class InvoiceOut(BaseModel):
     def round_money(cls, v):
         return _round2(v)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OrderItemOut(BaseModel):
@@ -97,8 +95,7 @@ class OrderItemOut(BaseModel):
     def round_money(cls, v):
         return _round2(v)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OrderOut(BaseModel):
@@ -125,9 +122,7 @@ class OrderOut(BaseModel):
     def round_money(cls, v):
         return _round2(v)
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 from app.models.order import OrderStatusEnum

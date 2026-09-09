@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from datetime import datetime
@@ -95,8 +95,7 @@ class ProductOut(BaseModel):
             return None
         return Decimal(str(v)).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── PRICING BREAKDOWN ────────────────────────────────────────────────────────
@@ -138,5 +137,4 @@ class PriceHistoryOut(BaseModel):
     changed_by: Optional[str]
     created_at: Optional[datetime]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
