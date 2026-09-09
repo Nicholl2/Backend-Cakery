@@ -28,8 +28,10 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
     - `POST /auth/verify/wa/start`: `6/minute` per IP (anti-spam OTP)
     - `POST /payments/notify`: `30/minute` rate limiter
   - Global exception handler `RateLimitExceeded` menghasilkan respon HTTP 429 Too Many Requests yang standar.
-- **Automated Hardening Test Suite (`app/test_hardening.py`)**:
-  - 6 unit/integration test terisolasi (SQLite in-memory) menguji validasi transisi Payment & Order State Machine, pencegahan rollback, idempotency double-webhook settlement, inisialisasi rate limiter, dan guard update status.
+- **Test Suite Reorganization & Pytest Integration (`tests/`, `pytest.ini`)**:
+  - Seluruh berkas pengujian (`test_avatar_upload.py`, `test_hardening.py`, `test_master_data.py`, `test_seller_orders.py`) dipindahkan dari direktori source code `app/` ke root direktori `tests/`.
+  - Dikonfigurasikan `pytest.ini` (`asyncio_mode = auto`, `pythonpath = .`, `testpaths = tests`) dan `tests/conftest.py`.
+  - Seluruh test suite (9 test items) terverifikasi 100% lulus saat dijalankan dengan `pytest` maupun direct runner (`python tests/test_*.py`).
 
 ### 00. Seller Orders & Custom Orders Integration (`toti-cakery-fe` Support)
 - **Seller Orders List & Detail Endpoints (`app/api/routes/order.py`)**:

@@ -295,5 +295,10 @@ async def run_seller_order_tests():
     print("\n🎉 ALL SELLER ORDER & INVENTORY TESTS PASSED FLAWLESSLY!")
 
 
+async def test_seller_orders():
+    """Pytest test runner for seller orders tests."""
+    await run_seller_order_tests()
+
+
 if __name__ == "__main__":
     asyncio.run(run_seller_order_tests())

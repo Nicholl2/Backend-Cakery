@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 import httpx
+import pytest
 
 from app.core.database import Base, get_db
 from app.core.config import settings
@@ -35,11 +36,10 @@ async def override_get_db():
         yield session
 
 
-app.dependency_overrides[get_db] = override_get_db
-
-
 async def run_tests():
     print("🧪 Running User & Buyer Avatar Upload Unit & Integration Tests...\n")
+
+    app.dependency_overrides[get_db] = override_get_db
 
     # 1. Initialize Test Database Tables
     async with test_engine.begin() as conn:
@@ -180,7 +180,13 @@ async def run_tests():
             assert user_res_json["username"] == "admin_jane"
             print(f"  ✓ POST /users/me/avatar succeeded and returned user profile with avatar_url: {user_res_json['avatar_url']}")
 
+    app.dependency_overrides.clear()
     print("\n🎉 All User & Buyer Avatar Upload Tests Passed Successfully!")
+
+
+async def test_avatar_upload():
+    """Pytest test runner for avatar upload tests."""
+    await run_tests()
 
 
 if __name__ == "__main__":

@@ -2,28 +2,22 @@
 venv/
 .venv/
 env/
+
+.env
+
 TODO.txt
-test_master_data.py
+app.zip
 
+app/seed_admin.py
+app/seed_data.py
 
-**/__pycache__/
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
 .pytest_cache/
-
-
-.env
-app/seed_admin.py
-app/test_imports.py
-app/seed_data.py
-app/test_buyer_orders_payments.py
-app/test_master_data.py
-app/test_avatar_upload.py
-app/test_hardening.py
-app/test_seller_orders.py
+.coverage
+htmlcov/
 
 .DS_Store
 Thumbs.db
-
-app.zip
