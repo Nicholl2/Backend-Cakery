@@ -7,6 +7,9 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 ## 📌 Daftar Perubahan Kode Terbaru
 
 ### 001. Input Hardening, XSS Prevention, & Bug Fixes (BE1-BE4)
+- **User/Seller Creation Bugfix (`POST /users/`)**:
+  - Memperbaiki isu "user hilang setelah di-refresh/tidak bisa login" dengan menambahkan mapping *alias* pada skema `UserCreate` (mendukung parameter `nama_lengkap`, `nomor_wa`, `role` string dari *payload* FE).
+  - Menyempurnakan _error handling_ pada `create_user` (mengkonversi role string ke `role_id` jika diperlukan) dan mengecek duplikasi `email` dan `phone_number` yang mengembalikan respon HTTP 400 (Bad Request) dengan jelas agar tak terjadi 500 Internal Server Error yang tertelan (_swallowed_).
 - **Schema Hardening & XSS Prevention (Seluruh `app/schemas/`)**:
   - **`app/utils/sanitize.py`**: Ditambahkan utilitas sanitasi teks global yang mendeteksi dan menolak tag HTML/script (seperti `<script>`, `javascript:`, `<iframe>`) untuk mencegah serangan XSS.
   - **Panjang Karakter Ketat**: Membatasi panjang `username` (maks 25, hanya alfanumerik/underscore/hyphen), `phone_number` / `nomor_wa` (maks 16), `email` (maks 100), serta `notes` / `alamat` / `customer_name` (maks 100 - 500 karakter).

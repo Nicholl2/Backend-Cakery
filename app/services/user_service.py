@@ -26,15 +26,37 @@ async def update_takeover_handler(
 
 
 async def create_user(db: AsyncSession, data: UserCreate) -> User:
-    # Cek username
-    existing = await user_repo.get_user_by_username(db, data.username)
-    if existing:
+    # 1. Map role to role_id jika role_id tidak dikirim tapi role dikirim
+    if data.role_id is None:
+        if data.role:
+            role_mapping = {"owner": 1, "admin": 2, "staff": 3}
+            mapped_id = role_mapping.get(data.role.lower())
+            if not mapped_id:
+                raise HTTPException(status_code=400, detail=f"Role '{data.role}' tidak valid. Gunakan owner, admin, atau staff.")
+            data.role_id = mapped_id
+        else:
+            raise HTTPException(status_code=400, detail="role_id atau role wajib diisi")
+
+    # 2. Cek username
+    existing_user = await user_repo.get_user_by_username(db, data.username)
+    if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username sudah terdaftar"
         )
         
-    # Cek role
+    # 3. Cek email & phone
+    if data.email:
+        existing_email = await db.execute(select(User).where(User.email == data.email))
+        if existing_email.scalars().first():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email sudah terdaftar")
+            
+    if data.phone_number:
+        existing_phone = await db.execute(select(User).where(User.phone_number == data.phone_number))
+        if existing_phone.scalars().first():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nomor telepon sudah terdaftar")
+
+    # 4. Cek role eksistensi di DB
     role_stmt = select(Role).where(Role.id == data.role_id)
     role_res = await db.execute(role_stmt)
     if not role_res.scalars().first():
@@ -43,23 +65,28 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
             detail=f"Role ID {data.role_id} tidak valid/tidak ditemukan"
         )
 
-    # Hash password
+    # 5. Hash password & Insert
     hashed_pwd = hash_password(data.password)
     
     new_user = User(
         username=data.username,
         password_hash=hashed_pwd,
         role_id=data.role_id,
-        nomor_wa_admin=data.nomor_wa_admin,
+        nomor_wa_admin=data.nomor_wa_admin or data.phone_number, # Fallback to phone_number if not provided
         handles_takeover=data.handles_takeover if data.handles_takeover is not None else False,
         is_active=data.is_active if data.is_active is not None else True,
         email=data.email,
         phone_number=data.phone_number,
     )
-    db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
-    return new_user
+    
+    try:
+        db.add(new_user)
+        await db.commit()
+        await db.refresh(new_user)
+        return new_user
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Gagal menyimpan user: {str(e)}")
 
 
 async def ensure_roles_exist(db: AsyncSession) -> None:

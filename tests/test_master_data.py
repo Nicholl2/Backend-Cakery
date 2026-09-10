@@ -296,9 +296,43 @@ async def run_tests():
             assert verify_password("Aceng_123", user_aceng.password_hash) is True
             print(f"✓ User 'aceng@gmail.com' in 'users' table linked with role_id={user_aceng.role_id} (Role: {buyer_role.nama_role})")
 
-            # --- 2.7 Clean Up ---
+            # --- 2.7 Test Pembuatan User oleh Owner/Admin (Simulasi FE) ---
+            print("\nTesting User Creation (Simulasi FE 'Tambah Pengguna')...")
+            from app.schemas.user import UserCreate
+            from app.services import user_service
+            from fastapi import HTTPException
+            
+            fe_payload = {
+                "nama_lengkap": "Nicholas Dinata",
+                "username": "nicholas_test",
+                "email": "nic@example.com",
+                "nomor_wa": "081912345678",
+                "role": "admin",
+                "password": "Password123!"
+            }
+            # Verify alias works
+            user_data = UserCreate.model_validate(fe_payload)
+            print(f"Validated UserCreate: {user_data.model_dump(exclude={'password'})}")
+            
+            created_user = await user_service.create_user(db, user_data)
+            print(f"✓ User created successfully: ID={created_user.id}, Username={created_user.username}")
+            assert created_user.role_id == 2  # mapped from 'admin'
+            assert created_user.email == "nic@example.com"
+            assert created_user.nomor_wa_admin == "6281912345678"
+            
+            # Verify checking uniqueness
+            try:
+                await user_service.create_user(db, user_data)
+                assert False, "Should raise exception for duplicate user"
+            except HTTPException as e:
+                print(f"✓ Duplicate user properly blocked: {e.detail}")
+                assert e.status_code == 400
+
+            # --- 2.8 Clean Up ---
             print("\nCleaning up test data...")
             # Re-query all entities to avoid expired state or database session issues
+            if created_user.id:
+                await db.delete(created_user)
             product = await product_repo.get_by_id(db, prod_id)
             if product:
                 recipes = await recipe_repo.get_by_product(db, prod_id)
