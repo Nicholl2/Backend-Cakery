@@ -1,9 +1,12 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional
 from app.utils.phone import validate_phone_e164
+from app.utils.sanitize import sanitize_text, USERNAME_PATTERN
+
 
 class UserTakeoverUpdate(BaseModel):
     handles_takeover: bool = Field(..., description="Whether user handles takeover")
+
 
 class UserTakeoverResponse(BaseModel):
     id: int
@@ -14,19 +17,24 @@ class UserTakeoverResponse(BaseModel):
 
 
 class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
+    username: str = Field(..., min_length=3, max_length=25, pattern=USERNAME_PATTERN)
     password: str = Field(..., min_length=6)
     role_id: int
     nomor_wa_admin: Optional[str] = None
     handles_takeover: Optional[bool] = False
     is_active: Optional[bool] = True
     email: Optional[str] = Field(None, max_length=100)
-    phone_number: Optional[str] = Field(None, max_length=20)
+    phone_number: Optional[str] = Field(None, max_length=16)
 
     @field_validator("nomor_wa_admin", mode="before")
     @classmethod
     def validate_nomor_wa(cls, v):
         return validate_phone_e164(v)
+
+    @field_validator("username", mode="after")
+    @classmethod
+    def sanitize_username(cls, v):
+        return sanitize_text(v)
 
 
 class UserOut(BaseModel):
@@ -44,13 +52,18 @@ class UserOut(BaseModel):
 
 
 class UserBootstrap(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
+    username: str = Field(..., min_length=3, max_length=25, pattern=USERNAME_PATTERN)
     password: str = Field(..., min_length=6)
     nomor_wa_admin: Optional[str] = None
     email: Optional[str] = Field(None, max_length=100)
-    phone_number: Optional[str] = Field(None, max_length=20)
+    phone_number: Optional[str] = Field(None, max_length=16)
 
     @field_validator("nomor_wa_admin", mode="before")
     @classmethod
     def validate_nomor_wa(cls, v):
         return validate_phone_e164(v)
+
+    @field_validator("username", mode="after")
+    @classmethod
+    def sanitize_username(cls, v):
+        return sanitize_text(v)

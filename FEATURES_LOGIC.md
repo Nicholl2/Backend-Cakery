@@ -189,7 +189,21 @@ Sistem menerapkan pembatasan frekuensi pemanggilan endpoint (Rate Limiting) berb
    - Dibatasi maksimal **10 request per menit per alamat IP**.
 3. **Pencegahan Spam Kode Verifikasi WhatsApp (`POST /auth/verify/wa/start`)**:
    - Dibatasi maksimal **6 request per menit per alamat IP** untuk melindungi gateway WhatsApp dan nomor bot.
-4. **Pencegahan Flooding Webhook Midtrans (`POST /payments/notify`)**:
-   - Dibatasi maksimal **30 request per menit**.
 5. **Penanganan Pelanggaran**:
    - Request yang melebihi batas kuota akan langsung ditolak oleh middleware dengan respon standar HTTP `429 Too Many Requests`.
+
+---
+
+## 12. Validasi Input & Pencegahan Serangan XSS / Script Injection
+
+Sistem menerapkan proteksi ketat (Schema Hardening) berbasis Pydantic Validator untuk seluruh endpoint (Auth, Customers, Orders, Reviews, dll):
+1. **Sanitasi Teks Terpusat (Global Text Sanitizer)**:
+   - Modul `app/utils/sanitize.py` dipanggil via `@field_validator` untuk memproses dan menolak input yang mengandung tag HTML, XML, maupun script berbahaya (contoh: `<script>`, `javascript:`, `<iframe>`, `<object>`, `<embed>`, dll).
+   - Menolak *Cross-Site Scripting (XSS)* langsung di level API. Input akan ditolak dengan response `400/422` jika terdeteksi malicious.
+2. **Aturan Karakter & Panjang (Length Bounds)**:
+   - **Username**: Dibatasi maksimal 25 karakter. Hanya diizinkan menggunakan alfanumerik, underscore, dan hyphen (Regex: `^[a-zA-Z0-9_-]+$`).
+   - **Nomor Telepon**: Dibatasi panjang antara 10 hingga 16 karakter, hanya angka, dan dinormalisasi menjadi format standar E.164 (`628...`).
+   - **Email**: Maksimal 100 karakter dengan validasi format standar.
+   - **Teks Pendek (Nama)**: Maksimal 100 karakter.
+   - **Teks Bebas (Alamat, Catatan/Notes)**: Dibatasi maksimal 500 karakter.
+   - **Teks Ulasan (Review)**: Dibatasi maksimal 1000 karakter.

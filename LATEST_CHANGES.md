@@ -6,6 +6,21 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001. Input Hardening, XSS Prevention, & Bug Fixes (BE1-BE4)
+- **Schema Hardening & XSS Prevention (Seluruh `app/schemas/`)**:
+  - **`app/utils/sanitize.py`**: Ditambahkan utilitas sanitasi teks global yang mendeteksi dan menolak tag HTML/script (seperti `<script>`, `javascript:`, `<iframe>`) untuk mencegah serangan XSS.
+  - **Panjang Karakter Ketat**: Membatasi panjang `username` (maks 25, hanya alfanumerik/underscore/hyphen), `phone_number` / `nomor_wa` (maks 16), `email` (maks 100), serta `notes` / `alamat` / `customer_name` (maks 100 - 500 karakter).
+  - Sanitizer diterapkan via `@field_validator` di `auth.py`, `user.py`, `customer.py`, `order.py`, dan `review.py`.
+- **Customer Takeover (BE1)**:
+  - `POST /api/customers/{nomor_wa}/takeover` kini melakukan **UPSERT**. Jika nomor WA belum terdaftar di tabel `customers`, sistem akan otomatis membuat record baru (nama placeholder "Customer") lalu mengaktifkan status takeover, bukan lagi mengembalikan HTTP 404.
+- **Midtrans Rejection & Payment 201 Handling (BE2)**:
+  - `POST /api/payments` sekarang memvalidasi `status_code` dari body JSON respons Midtrans (misalnya mendeteksi `"406"`). Jika Midtrans menolak, transaksi **tidak akan disimpan** menggantung di database dan endpoint mengembalikan HTTP 400.
+  - Ditambahkan perlindungan idempotensi: jika sudah ada payment `pending` aktif, sistem mengembalikan data payment tersebut.
+- **Minimum Order Validation (BE3)**:
+  - Memperbaiki *guard condition* pada saat pembuatan order dari `if product.minimum_order and ...` menjadi `if product.minimum_order is not None and ...` untuk menghindari *bypass* validasi pada kondisi nilai minimum 0.
+- **WhatsApp Phone Normalization (BE4)**:
+  - Fungsi seed awal di `app/core/database.py` (`ensure_user`) sekarang menerapkan normalisasi `normalize_phone` sebelum masuk ke database. Format `08...` akan otomatis dikonversi ke format E.164 (`628...`).
+
 ### 000. High Concurrency, Race Condition, Security & Settlement Hardening
 - **Payment & Order State Machine (`app/core/state_machine.py`)**:
   - Validasi transisi status satu arah (`is_valid_payment_transition` & `is_valid_order_transition`).

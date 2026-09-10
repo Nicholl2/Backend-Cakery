@@ -5,6 +5,7 @@ Dokumentasi lengkap seluruh endpoint REST API Backend Toti Cakery (FastAPI).
 ---
 
 ## 1. Aturan Keamanan & Autentikasi
+### A. Mekanisme Akses & Token
 
 | Jenis Klien / Aktor | Mekanisme Autentikasi | Header / Dependency | Keterangan |
 | :--- | :--- | :--- | :--- |
@@ -15,6 +16,15 @@ Dokumentasi lengkap seluruh endpoint REST API Backend Toti Cakery (FastAPI).
 | **Chatbot & Internal Services** | Pre-shared Service Key | `X-Service-Key: <key>` / `X-Internal-Key: <key>` | Komunikasi headless: webhook, order placement, takeover |
 | **Public Webhook Midtrans** | SHA512 Signature Hash | Signature di payload webhook | Verifikasi integritas pembayaran Midtrans tanpa token |
 | **Public Endpoint** | Tanpa Autentikasi | - | Katalog produk, FAQ, cek status ulasan |
+
+### B. Validasi Input & Pencegahan XSS
+
+Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payload:
+- **Phone Number / WhatsApp**: Hanya menerima karakter angka. Panjang 10-16 karakter. Seluruh nomor otomatis diubah ke format internasional **E.164** (`628...`).
+- **Username**: Maksimal 25 karakter. Hanya boleh berisi huruf, angka, `_`, dan `-` (regex: `^[a-zA-Z0-9_-]+$`).
+- **Email**: Format email standar, maksimal 100 karakter.
+- **Teks Bebas (Nama, Alamat, Notes, Review)**: Maksimal karakter ketat diberlakukan (contoh: notes/alamat maks 500 karakter, komentar review maks 1000). 
+- **Pencegahan XSS / Script Injection**: Seluruh field berupa string/teks akan menolak string yang mengandung tag berbahaya (seperti `<script>`, `javascript:`, `<iframe>`, `<object>`, `<form>`). API akan langsung mengembalikan HTTP 422 Unprocessable Entity atau HTTP 400 Bad Request jika mendeteksi payload berbahaya.
 
 ---
 

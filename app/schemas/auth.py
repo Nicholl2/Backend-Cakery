@@ -3,15 +3,16 @@ from decimal import Decimal
 from typing import Optional
 from enum import Enum
 from app.utils.phone import validate_phone_e164
+from app.utils.sanitize import sanitize_text, USERNAME_PATTERN
 
 
 class UserLogin(BaseModel):
     """Schema for user login request (accepts username, email, phone number, or identifier)"""
     identifier: Optional[str] = Field(None, min_length=3, max_length=100, description="Username, email, atau nomor HP")
-    username: Optional[str] = Field(None, min_length=3, max_length=100)
+    username: Optional[str] = Field(None, min_length=3, max_length=25)
     email: Optional[str] = Field(None, max_length=100)
-    phone: Optional[str] = Field(None, max_length=25)
-    phone_number: Optional[str] = Field(None, max_length=25)
+    phone: Optional[str] = Field(None, max_length=16)
+    phone_number: Optional[str] = Field(None, max_length=16)
     password: str = Field(..., min_length=6)
 
     @model_validator(mode="before")
@@ -24,6 +25,13 @@ class UserLogin(BaseModel):
             else:
                 raise ValueError("Identifier (username/email/phone) harus diisi")
         return values
+
+    @field_validator("identifier", mode="after")
+    @classmethod
+    def sanitize_identifier(cls, v):
+        if v is None:
+            return v
+        return sanitize_text(v)
 
 
 class Token(BaseModel):
@@ -63,9 +71,14 @@ class OTPPurpose(str, Enum):
 
 
 class OTPSendRequest(BaseModel):
-    target: str = Field(..., description="Email address or WhatsApp phone number")
+    target: str = Field(..., max_length=100, description="Email address or WhatsApp phone number")
     channel: OTPChannel
     purpose: OTPPurpose
+
+    @field_validator("target", mode="after")
+    @classmethod
+    def sanitize_target(cls, v):
+        return sanitize_text(v)
 
 
 class OTPSendResponse(BaseModel):
@@ -75,7 +88,7 @@ class OTPSendResponse(BaseModel):
 
 class OTPVerifyRequest(BaseModel):
     otp_id: str
-    code: str
+    code: str = Field(..., max_length=10)
 
 
 class OTPVerifyResponse(BaseModel):
@@ -86,8 +99,8 @@ class OTPVerifyResponse(BaseModel):
 class BuyerRegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     email: str = Field(..., max_length=100)
-    phone: Optional[str] = Field(None, max_length=25)
-    phone_number: Optional[str] = Field(None, max_length=25)
+    phone: Optional[str] = Field(None, max_length=16)
+    phone_number: Optional[str] = Field(None, max_length=16)
     password: str = Field(..., min_length=6)
     verify_token: str
 
@@ -95,6 +108,11 @@ class BuyerRegisterRequest(BaseModel):
     @classmethod
     def validate_phones(cls, v):
         return validate_phone_e164(v)
+
+    @field_validator("name", mode="after")
+    @classmethod
+    def sanitize_name(cls, v):
+        return sanitize_text(v)
 
 
 class BuyerAuthResponse(BaseModel):
@@ -122,10 +140,10 @@ class BuyerProfileResponse(BaseModel):
 
 
 class BuyerLoginRequest(BaseModel):
-    email: Optional[str] = None
+    email: Optional[str] = Field(None, max_length=100)
     password: Optional[str] = None
-    phone: Optional[str] = None
-    phone_number: Optional[str] = None
+    phone: Optional[str] = Field(None, max_length=16)
+    phone_number: Optional[str] = Field(None, max_length=16)
     verify_token: Optional[str] = None
 
     @field_validator("phone", "phone_number", mode="before")
@@ -135,7 +153,7 @@ class BuyerLoginRequest(BaseModel):
 
 
 class BuyerLoginPhoneRequest(BaseModel):
-    phone_number: str = Field(..., description="Nomor telepon E.164 (7-15 digit)")
+    phone_number: str = Field(..., max_length=16, description="Nomor telepon E.164 (7-15 digit)")
     password: str
 
     @field_validator("phone_number", mode="before")
@@ -145,8 +163,8 @@ class BuyerLoginPhoneRequest(BaseModel):
 
 
 class BuyerLoginOTPRequest(BaseModel):
-    phone: Optional[str] = None
-    phone_number: Optional[str] = None
+    phone: Optional[str] = Field(None, max_length=16)
+    phone_number: Optional[str] = Field(None, max_length=16)
     verify_token: str
 
     @field_validator("phone", "phone_number", mode="before")
@@ -161,12 +179,12 @@ class BuyerResetPasswordRequest(BaseModel):
 
 
 class SellerForgotPasswordRequest(BaseModel):
-    email: str
+    email: str = Field(..., max_length=100)
 
 
 class SellerForgotPasswordVerifyRequest(BaseModel):
     otp_id: str
-    code: str
+    code: str = Field(..., max_length=10)
 
 
 class SellerResetPasswordRequest(BaseModel):
@@ -177,7 +195,7 @@ class SellerResetPasswordRequest(BaseModel):
 # ── WA DEEP LINK OTP SCHEMAS ────────────────────────────────────────────────
 
 class WAVerifyStartRequest(BaseModel):
-    phone_number: str = Field(..., description="Nomor telepon E.164 (7-15 digit)")
+    phone_number: str = Field(..., max_length=16, description="Nomor telepon E.164 (7-15 digit)")
 
     @field_validator("phone_number", mode="before")
     @classmethod
@@ -195,7 +213,7 @@ class WAVerifyStartResponse(BaseModel):
 
 class WAVerifyConfirmRequest(BaseModel):
     nonce: str
-    sender_phone: str = Field(..., description="Nomor telepon pengirim pesan WA")
+    sender_phone: str = Field(..., max_length=16, description="Nomor telepon pengirim pesan WA")
 
     @field_validator("sender_phone", mode="before")
     @classmethod

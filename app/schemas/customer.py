@@ -2,17 +2,30 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 from datetime import datetime
 from typing import Optional
 from app.utils.phone import validate_phone_e164
+from app.utils.sanitize import sanitize_text
 
 
 class CustomerUpsert(BaseModel):
     nama: str = Field(..., min_length=1, max_length=100)
     nomor_wa: str = Field(..., description="Nomor WhatsApp customer E.164 (7-15 digit)")
-    alamat: Optional[str] = None
+    alamat: Optional[str] = Field(None, max_length=500)
 
     @field_validator("nomor_wa", mode="before")
     @classmethod
     def validate_nomor_wa(cls, v):
         return validate_phone_e164(v)
+
+    @field_validator("nama", mode="after")
+    @classmethod
+    def sanitize_nama(cls, v):
+        return sanitize_text(v)
+
+    @field_validator("alamat", mode="before")
+    @classmethod
+    def sanitize_alamat(cls, v):
+        if v is None:
+            return v
+        return sanitize_text(v)
 
 
 class CustomerOut(BaseModel):

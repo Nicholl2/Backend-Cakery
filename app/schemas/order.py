@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from datetime import datetime
+from app.utils.sanitize import sanitize_text
 
 
 def _round2(v) -> Optional[Decimal]:
@@ -23,36 +24,67 @@ class OrderCreate(BaseModel):
     metode_pengiriman: str = Field(..., pattern="^(pickup|delivery)$")
     items: list[OrderItemCreate] = Field(..., min_length=1)
     created_via: str = "chatbot"
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=500)
     due_date: Optional[datetime] = None
-    payment_method_preference: Optional[str] = None
+    payment_method_preference: Optional[str] = Field(None, max_length=50)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def sanitize_notes(cls, v):
+        if v is None:
+            return v
+        return sanitize_text(v)
 
 
 class BuyerOrderCreate(BaseModel):
     metode_pengiriman: str = Field(..., pattern="^(pickup|delivery)$")
     items: list[OrderItemCreate] = Field(..., min_length=1)
     created_via: str = "web"
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=500)
     due_date: Optional[datetime] = None
-    payment_method_preference: Optional[str] = None
+    payment_method_preference: Optional[str] = Field(None, max_length=50)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def sanitize_notes(cls, v):
+        if v is None:
+            return v
+        return sanitize_text(v)
 
 
 class CustomOrderItemCreate(BaseModel):
-    custom_product_name: str = Field(..., min_length=1)
+    custom_product_name: str = Field(..., min_length=1, max_length=100)
     price: Decimal = Field(..., gt=0, decimal_places=2)
     qty: int = Field(default=1, gt=0)
     custom_decoration_charge: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
 
+    @field_validator("custom_product_name", mode="after")
+    @classmethod
+    def sanitize_product_name(cls, v):
+        return sanitize_text(v)
+
 
 class CustomOrderCreate(BaseModel):
-    customer_name: str = Field(..., min_length=1)
-    customer_phone: str = Field(..., min_length=5)
-    customer_address: Optional[str] = None
+    customer_name: str = Field(..., min_length=1, max_length=100)
+    customer_phone: str = Field(..., min_length=10, max_length=16)
+    customer_address: Optional[str] = Field(None, max_length=500)
     metode_pengiriman: str = Field(default="pickup", pattern="^(pickup|delivery)$")
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=500)
     due_date: Optional[datetime] = None
-    payment_method_preference: Optional[str] = None
+    payment_method_preference: Optional[str] = Field(None, max_length=50)
     items: list[CustomOrderItemCreate] = Field(..., min_length=1)
+
+    @field_validator("customer_name", mode="after")
+    @classmethod
+    def sanitize_name(cls, v):
+        return sanitize_text(v)
+
+    @field_validator("notes", "customer_address", mode="before")
+    @classmethod
+    def sanitize_text_fields(cls, v):
+        if v is None:
+            return v
+        return sanitize_text(v)
 
 
 # ── OUTPUT ───────────────────────────────────────────────────────────────────
