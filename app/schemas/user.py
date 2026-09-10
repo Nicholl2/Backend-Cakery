@@ -19,6 +19,8 @@ class UserTakeoverResponse(BaseModel):
 from pydantic import AliasChoices
 
 class UserCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     # Field ekstra untuk compatibility FE
     full_name: Optional[str] = Field(None, validation_alias=AliasChoices("full_name", "nama_lengkap"))
     role: Optional[str] = Field(None, description="Nama role (admin, staff, owner) jika tidak menggunakan role_id")

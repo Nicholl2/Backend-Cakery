@@ -25,15 +25,22 @@ async def update_takeover_handler(
     return UserTakeoverResponse.model_validate(user)
 
 
+from sqlalchemy import select, func
+
 async def create_user(db: AsyncSession, data: UserCreate) -> User:
     # 1. Map role to role_id jika role_id tidak dikirim tapi role dikirim
     if data.role_id is None:
         if data.role:
-            role_mapping = {"owner": 1, "admin": 2, "staff": 3}
-            mapped_id = role_mapping.get(data.role.lower())
-            if not mapped_id:
-                raise HTTPException(status_code=400, detail=f"Role '{data.role}' tidak valid. Gunakan owner, admin, atau staff.")
-            data.role_id = mapped_id
+            role_input = data.role.strip().lower()
+            role_stmt = select(Role).where(func.lower(Role.nama_role) == role_input)
+            role_res = await db.execute(role_stmt)
+            role_obj = role_res.scalars().first()
+            if not role_obj:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Role '{data.role}' tidak ditemukan. Role yang valid: admin, staff, owner."
+                )
+            data.role_id = role_obj.id
         else:
             raise HTTPException(status_code=400, detail="role_id atau role wajib diisi")
 

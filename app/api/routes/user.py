@@ -26,8 +26,12 @@ async def create_user(
     """
     Create a new internal user (Admin/Staff/Owner) - Owner only.
     """
-    user = await user_service.create_user(db, data)
-    return UserOut.model_validate(user)
+    try:
+        user = await user_service.create_user(db, data)
+        return UserOut.model_validate(user)
+    except Exception as e:
+        print(f"[ERROR] Failed to create user: {e}")
+        raise
 
 @router.patch("/{user_id}/takeover-handler", response_model=UserTakeoverResponse)
 async def update_takeover_handler(
