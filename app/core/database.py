@@ -53,6 +53,14 @@ async def ensure_user(
 ):
     from app.core.security import hash_password
     from app.models.user import User
+    from app.utils.phone import normalize_phone
+
+    # Normalisasi nomor telepon sebelum simpan/update
+    if nomor_wa_admin:
+        nomor_wa_admin = normalize_phone(nomor_wa_admin, as_http_exception=False)
+    if phone_number:
+        phone_number = normalize_phone(phone_number, as_http_exception=False)
+
     result = await db.execute(select(User).where(User.username == username))
     user = result.scalars().first()
     if user:
@@ -306,30 +314,30 @@ async def seed_initial_data(db: AsyncSession) -> None:
         username="imeng",
         password_plain="Admin_123",
         role_id=owner_role.id,
-        nomor_wa_admin="08111111111",
+        nomor_wa_admin="628111111111",
         handles_takeover=True,
         email="imeng@toticakery.com",
-        phone_number="08111111111",
+        phone_number="628111111111",
     )
     admin_user = await ensure_user(
         db,
         username="ameng",
         password_plain="Admin_123",
         role_id=admin_role.id,
-        nomor_wa_admin="08222222222",
+        nomor_wa_admin="628222222222",
         handles_takeover=True,
         email="ameng@toticakery.com",
-        phone_number="08222222222",
+        phone_number="628222222222",
     )
     seller_user = await ensure_user(
         db,
         username="smeng",
         password_plain="Staff_123",
         role_id=seller_role.id,
-        nomor_wa_admin="08333333333",
+        nomor_wa_admin="628333333333",
         handles_takeover=False,
         email="smeng@toticakery.com",
-        phone_number="08333333333",
+        phone_number="628333333333",
     )
 
     # 3. Default Buyer Account

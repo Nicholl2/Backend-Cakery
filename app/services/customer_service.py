@@ -32,11 +32,9 @@ async def set_takeover(db: AsyncSession, nomor_wa: str, data: TakeoverSet) -> Ta
             detail="expires_at wajib diisi saat mengaktifkan takeover.",
         )
 
-    customer = await customer_repo.set_takeover(
+    customer, _created = await customer_repo.set_takeover(
         db, nomor_wa=nomor_wa, active=data.active, expires_at=data.expires_at
     )
-    if not customer:
-        raise HTTPException(status_code=404, detail="Customer tidak ditemukan.")
 
     await db.commit()
     await db.refresh(customer)

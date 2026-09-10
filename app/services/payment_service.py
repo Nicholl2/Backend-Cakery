@@ -60,7 +60,25 @@ async def create_midtrans_charge(
         
     invoice = order.invoice
     
-    # 2. Buat request payload HTTP POST ke Midtrans API Charge (/charge)
+    # 2a. Cek apakah sudah ada payment Pending yang aktif untuk order ini
+    existing_payments = await payment_repo.get_payments_by_order_id(db, order_id)
+    for ep in existing_payments:
+        if ep.payment_status == PaymentStatusEnum.pending:
+            logger.info(
+                "[PAYMENT_AUDIT] existing_pending | payment_id=%s | order_id=%s",
+                ep.id, order_id,
+            )
+            return {
+                "payment_id": ep.id,
+                "pg_transaction_id": ep.pg_transaction_id,
+                "va_number": ep.va_number,
+                "qris_url": ep.qris_url,
+                "status": ep.payment_status,
+                "midtrans_response": None,
+                "message": "Tagihan pembayaran sudah ada dan masih aktif.",
+            }
+    
+    # 2b. Buat request payload HTTP POST ke Midtrans API Charge (/charge)
     # Order ID di Midtrans dikombinasikan dengan suffix agar unik
     order_id_midtrans = f"{invoice.nomor_invoice}-PAY-{int(datetime.now().timestamp())}"
     
@@ -88,13 +106,27 @@ async def create_midtrans_charge(
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
             res_json = response.json()
     except Exception as e:
         logger.error(f"Failed to charge via Midtrans: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Gagal memproses pembayaran ke Midtrans: {str(e)}"
+        )
+    
+    # 2c. Validasi status_code dari body JSON Midtrans
+    #     Midtrans Core API sering return HTTP 200 tapi body berisi status_code "406" dll.
+    midtrans_status_code = str(res_json.get("status_code", ""))
+    if not midtrans_status_code.startswith("2"):
+        status_msg = res_json.get("status_message", "Unknown Midtrans error")
+        logger.warning(
+            "[PAYMENT_AUDIT] midtrans_rejected | midtrans_status=%s | "
+            "status_message=%s | order_id=%s",
+            midtrans_status_code, status_msg, order_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Gagal membuat tagihan pembayaran: {status_msg}"
         )
         
     # 3. Ekstrak nomor VA atau QRIS URL dari respons

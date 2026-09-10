@@ -39,11 +39,19 @@ async def set_takeover(
     nomor_wa: str,
     active: bool,
     expires_at: Optional[datetime] = None,
-) -> Optional[Customer]:
+) -> tuple[Customer, bool]:
+    """
+    UPSERT takeover: jika customer belum ada, buat record baru.
+    Returns (customer, created) — created=True jika customer baru dibuat.
+    """
     customer = await get_by_nomor_wa(db, nomor_wa)
+    created = False
     if not customer:
-        return None
+        customer = Customer(nama="Customer", nomor_wa=nomor_wa)
+        db.add(customer)
+        await db.flush()
+        created = True
     customer.human_takeover_active = active
     customer.takeover_expires_at = expires_at if active else None
     await db.flush()
-    return customer
+    return customer, created
