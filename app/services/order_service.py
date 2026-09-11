@@ -558,40 +558,7 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
 
     # Jika status diubah menjadi 'cancelled' dari status sebelumnya yang bukan cancelled
     if new_status == OrderStatusEnum.cancelled.value and order.status != OrderStatusEnum.cancelled:
-        # Kembalikan stok bahan baku jika pesanan memiliki produk dengan resep
-        stock_item_returns = {}
-        for item in order.order_items:
-            if item.product and item.product.recipes:
-                for recipe in item.product.recipes:
-                    stock_item = recipe.stock_item
-                    if not stock_item:
-                        continue
-                    kembalikan = Decimal(str(recipe.jumlah_dibutuhkan)) * Decimal(str(item.jumlah))
-                    if stock_item.id not in stock_item_returns:
-                        stock_item_returns[stock_item.id] = {
-                            "qty_return": Decimal("0.00"),
-                            "stock_item_obj": stock_item
-                        }
-                    stock_item_returns[stock_item.id]["qty_return"] += kembalikan
-
-        for stock_id, s_data in stock_item_returns.items():
-            stock_item = s_data["stock_item_obj"]
-            qty_return = s_data["qty_return"]
-            
-            stmt = (
-                update(StockItem)
-                .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
-                .values(
-                    stok_tersedia=StockItem.stok_tersedia + qty_return,
-                    version=StockItem.version + 1
-                )
-            )
-            res = await db.execute(stmt)
-            if res.rowcount == 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Terjadi kegagalan pemulihan stok karena transaksi bersamaan. Silakan coba lagi.",
-                )
+        await _rollback_order_stock(db, order)
 
     order.status = new_status
     await db.commit()
@@ -613,3 +580,86 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
             logger.error(f"Failed to send webhook push notification for order {order_id}: {e}")
             
     return order_refetched
+
+
+async def _rollback_order_stock(db: AsyncSession, order: Order) -> None:
+    from app.models.stock_item import StockItem
+    from sqlalchemy import update
+    
+    stock_item_returns = {}
+    for item in order.order_items:
+        if item.product and item.product.recipes:
+            for recipe in item.product.recipes:
+                stock_item = recipe.stock_item
+                if not stock_item:
+                    continue
+                kembalikan = Decimal(str(recipe.jumlah_dibutuhkan)) * Decimal(str(item.jumlah))
+                if stock_item.id not in stock_item_returns:
+                    stock_item_returns[stock_item.id] = {
+                        "qty_return": Decimal("0.00"),
+                        "stock_item_obj": stock_item
+                    }
+                stock_item_returns[stock_item.id]["qty_return"] += kembalikan
+
+    for stock_id, s_data in stock_item_returns.items():
+        stock_item = s_data["stock_item_obj"]
+        qty_return = s_data["qty_return"]
+        
+        stmt = (
+            update(StockItem)
+            .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
+            .values(
+                stok_tersedia=StockItem.stok_tersedia + qty_return,
+                version=StockItem.version + 1
+            )
+        )
+        res = await db.execute(stmt)
+        if res.rowcount == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Terjadi kegagalan pemulihan stok karena transaksi bersamaan. Silakan coba lagi.",
+            )
+
+
+async def cancel_and_refund_order(db: AsyncSession, order_id: int, reason: str) -> Order:
+    from app.services.payment_service import process_refund
+    
+    result = await db.execute(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(
+            selectinload(Order.customer),
+            selectinload(Order.invoice).selectinload(Invoice.payments),
+            selectinload(Order.order_items)
+            .selectinload(OrderItem.product)
+            .selectinload(Product.recipes)
+            .selectinload(Recipe.stock_item)
+        )
+        .with_for_update()
+    )
+    order = result.scalars().first()
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order tidak ditemukan",
+        )
+        
+    from app.core.state_machine import is_order_terminal
+    if is_order_terminal(order.status):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Pesanan dalam status '{order.status.value}' tidak dapat di-refund."
+        )
+        
+    if not order.invoice or order.invoice.status in [InvoiceStatusEnum.unpaid, InvoiceStatusEnum.refunded]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Hanya pesanan dengan status pembayaran DP/Lunas yang dapat diproses refund. Gunakan cancel biasa."
+        )
+
+    # Call payment_service to do the API request & status change
+    await process_refund(db, order_id, reason)
+    
+    # Re-fetch after updates
+    order_refetched = await order_repo.get_order_with_details(db, order_id)
+    return await _attach_payment_amounts(db, order_refetched)

@@ -7,6 +7,28 @@ from app.models.user import User
 from app.models.role import Role
 from app.core.security import hash_password
 from app.utils.cloudinary_helper import upload_image_to_cloudinary
+from app.utils.phone import normalize_phone
+
+async def get_owner_wa_numbers(db: AsyncSession) -> list[str]:
+    stmt = select(User).where(
+        User.role_id == 1,
+        User.is_active == True,
+        User.phone_number.isnot(None),
+        User.phone_number != ""
+    )
+    result = await db.execute(stmt)
+    users = result.scalars().all()
+    
+    numbers = set()
+    for u in users:
+        try:
+            norm_num = normalize_phone(u.phone_number, as_http_exception=False)
+            if norm_num:
+                numbers.add(norm_num)
+        except ValueError:
+            pass
+            
+    return list(numbers)
 
 async def update_takeover_handler(
     db: AsyncSession,

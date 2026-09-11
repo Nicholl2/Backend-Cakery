@@ -193,7 +193,9 @@ async def _apply_transaction_status(db: AsyncSession, payment: Payment, payload:
         "pending": PaymentStatusEnum.pending,
         "deny": PaymentStatusEnum.failed,
         "cancel": PaymentStatusEnum.failed,
-        "expire": PaymentStatusEnum.failed
+        "expire": PaymentStatusEnum.failed,
+        "refund": PaymentStatusEnum.refunded,
+        "partial_refund": PaymentStatusEnum.refunded
     }
     
     new_status = status_map.get(txn_status, PaymentStatusEnum.pending)
@@ -274,6 +276,49 @@ async def _apply_transaction_status(db: AsyncSession, payment: Payment, payload:
                     invoice.status.value, total_success, invoice.total_tagihan,
                 )
 
+    elif new_status == PaymentStatusEnum.refunded:
+        invoice_res = await db.execute(
+            select(Invoice).where(Invoice.id == payment.invoice_id)
+        )
+        invoice = invoice_res.scalars().first()
+        if invoice:
+            old_invoice_status = invoice.status
+            invoice.status = InvoiceStatusEnum.refunded
+            
+            # Ubah status pesanan induk menjadi 'cancelled'
+            from sqlalchemy.orm import selectinload
+            from app.models.order import OrderItem
+            from app.models.product import Product
+            from app.models.recipe import Recipe
+            order_res = await db.execute(
+                select(Order).where(Order.id == invoice.order_id)
+                .options(
+                    selectinload(Order.order_items)
+                    .selectinload(OrderItem.product)
+                    .selectinload(Product.recipes)
+                    .selectinload(Recipe.stock_item)
+                )
+            )
+            order = order_res.scalars().first()
+            if order and order.status != OrderStatusEnum.cancelled:
+                order.status = OrderStatusEnum.cancelled
+                
+                # Kembalikan stok
+                from app.services.order_service import _rollback_order_stock
+                await _rollback_order_stock(db, order)
+                
+                logger.info(
+                    "[PAYMENT_AUDIT] order_auto_cancelled_refund | order_id=%s | "
+                    "trigger=payment_refund",
+                    order.id,
+                )
+            
+            logger.info(
+                "[PAYMENT_AUDIT] invoice_status_refunded | invoice_id=%s | "
+                "old_status=%s",
+                invoice.id, old_invoice_status.value if hasattr(old_invoice_status, 'value') else old_invoice_status,
+            )
+
 
 async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
     """
@@ -342,7 +387,12 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
         )
 
     # 3. IDEMPOTENCY GUARD — skip jika payment sudah di terminal state
-    if is_payment_terminal(payment.payment_status):
+    # Pengecualian: webhook 'refund' atau 'partial_refund' boleh diproses dari state 'success'
+    txn_status = payload.get("transaction_status")
+    is_refund_webhook = txn_status in ["refund", "partial_refund"]
+    allow_terminal_transition = is_refund_webhook and payment.payment_status == PaymentStatusEnum.success
+    
+    if is_payment_terminal(payment.payment_status) and not allow_terminal_transition:
         logger.info(
             "[PAYMENT_AUDIT] idempotent_skip | payment_id=%s | "
             "current_status=%s | webhook_status=%s | "
@@ -392,3 +442,67 @@ async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
 
 async def get_payments_by_order(db: AsyncSession, order_id: int) -> List[Payment]:
     return await payment_repo.get_payments_by_order_id(db, order_id)
+
+
+async def process_refund(db: AsyncSession, order_id: int, reason: str) -> None:
+    """
+    Proses refund untuk transaksi yang berstatus Success.
+    Mencoba memanggil API Refund/Cancel Midtrans, dengan fallback ke Refund Manual (offline).
+    """
+    payments = await get_payments_by_order(db, order_id)
+    success_payments = [p for p in payments if p.payment_status == PaymentStatusEnum.success]
+    
+    if not success_payments:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tidak ada pembayaran sukses yang bisa di-refund untuk pesanan ini."
+        )
+
+    for payment in success_payments:
+        # Panggil API Refund/Cancel Midtrans jika memungkinkan
+        if payment.pg_transaction_id:
+            url = f"{settings.midtrans_api_url}/{payment.pg_transaction_id}/refund"
+            encoded_key = base64.b64encode(f"{settings.midtrans_server_key}:".encode()).decode()
+            headers = {
+                "Authorization": f"Basic {encoded_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+            payload = {
+                "refund_key": f"refund-{payment.id}-{int(datetime.now().timestamp())}",
+                "reason": reason
+            }
+            
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(url, json=payload, headers=headers)
+                    res_json = response.json()
+                    
+                    midtrans_status = str(res_json.get("status_code", ""))
+                    if not midtrans_status.startswith("2"):
+                        logger.warning(
+                            "[REFUND_AUDIT] midtrans_api_failed | payment_id=%s | "
+                            "status_code=%s | message=%s | fallback=manual",
+                            payment.id, midtrans_status, res_json.get("status_message")
+                        )
+                        # Fallback manual refund
+                    else:
+                        logger.info(
+                            "[REFUND_AUDIT] midtrans_api_success | payment_id=%s | "
+                            "refund_key=%s",
+                            payment.id, payload["refund_key"]
+                        )
+            except Exception as e:
+                logger.error(f"Midtrans Refund API error for payment {payment.id}: {e}")
+                logger.warning(f"[REFUND_AUDIT] fallback=manual for payment {payment.id}")
+                
+        # Update status DB (Offline / Fallback manual if API fails, or Success if API succeeds)
+        # Because we already handled the order and stock rollback in _apply_transaction_status
+        fake_payload = {
+            "transaction_status": "refund",
+            "transaction_id": payment.pg_transaction_id,
+            "order_id": str(order_id)
+        }
+        await _apply_transaction_status(db, payment, fake_payload)
+        
+    await db.commit()

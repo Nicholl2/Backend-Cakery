@@ -137,6 +137,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `GET` | `/orders/latest` | `X-Service-Key` | Ambil order terbaru pelanggan berdasarkan query `?nomor_wa=...` |
 | `POST` | `/orders/{order_id}/cancel` | `X-Service-Key` | Pembatalan otomatis oleh pelanggan (hanya jika invoice `unpaid`, stok bahan dikembalikan). |
 | `PATCH` | `/orders/{order_id}/status` | Admin / Owner | Update status pesanan (`pending`, `in_process`, `ready`, `delivered`, `picked_up`, `cancelled`). Otomatis mengembalikan stok jika status diubah ke `cancelled` dan menembak push webhook saat `ready`. |
+| `POST` | `/orders/{order_id}/refund` | Admin / Owner | Memproses pembatalan sekaligus refund untuk pesanan berstatus DP/Lunas. Memicu panggilan Midtrans API dan otomatis mengembalikan persediaan bahan baku. |
 
 ---
 
@@ -202,3 +203,4 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `POST` | `/users` | Owner Only | Daftarkan akun internal baru (Owner, Admin, atau Staff) |
 | `PATCH` | `/users/{user_id}/takeover-handler` | Owner Only | Set status apakah admin tersebut bertugas menangani live takeover |
 | `POST` | `/users/me/avatar` | Authenticated User | Upload foto avatar akun internal langsung di-stream ke Cloudinary (`toti-cakery/avatars/`, maks 5MB, format JPEG/PNG/WEBP), simpan `secure_url` ke database |
+| `GET` | `/users/owner-numbers` | `X-Service-Key` | Ambil daftar seluruh nomor WhatsApp berformat E.164 (tanpa '+') milik user aktif dengan role Owner (Level 1) untuk keperluan verifikasi hak akses pada service Chatbot |

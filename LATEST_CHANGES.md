@@ -6,6 +6,26 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001b. Fitur Refund DP (Down Payment)
+- **Refund Endpoint (`POST /orders/{order_id}/refund`)**:
+  - Menambahkan endpoint khusus untuk melakukan proses *refund* pesanan yang telah dibayar DP/Lunas.
+  - Dilindungi otentikasi Admin/Owner dan akan otomatis memvalidasi kondisi State Machine (hanya pesanan aktif dengan invoice `partial` atau `paid`).
+  - Mengembalikan/rollback persediaan stok (StockItem) bahan baku sesuai resep.
+- **Integrasi Midtrans Refund API**:
+  - Mengirim HTTP Request ke API Midtrans `/v2/{order_id}/refund` untuk mengembalikan dana secara instan.
+  - Terdapat mekanisme fallback: jika gateway menolak karena keterbatasan metode pembayaran (seperti Bank Transfer VA), sistem akan mencatatnya sebagai *refund manual* di database.
+- **Webhook Update**:
+  - Event webhook Midtrans (`transaction_status` = `refund` atau `partial_refund`) kini mem-bypass Idempotency guard jika status awal adalah `Success`.
+  - Otomatis melakukan *cascading update* status Payment menjadi `Refunded`, Invoice menjadi `Refunded`, dan Order induk menjadi `Cancelled`.
+- **Unit Test Baru**:
+  - `test_refund.py` untuk menguji *Refund Flow* (Mock HTTPX Client) dan Webhook Refund.
+
+### 001a. Endpoint Owner WA Numbers
+- **Owner Numbers Endpoint (`GET /users/owner-numbers`)**:
+  - Menambahkan endpoint untuk digunakan oleh Chatbot service (`service-to-service`).
+  - Endpoint dilindungi dengan `verify_service_key` (`X-Service-Key` header).
+  - Mereturn daftar nomor WhatsApp dari pengguna dengan Role Owner (Level 1) yang sedang aktif, dan sudah dinormalisasi menjadi standar E.164 (tanpa '+', mulai '62').
+
 ### 001. Input Hardening, XSS Prevention, & Bug Fixes (BE1-BE4)
 - **User/Seller Creation Bugfix (`POST /users/`)**:
   - Memperbaiki isu "user hilang setelah di-refresh/tidak bisa login" dengan menambahkan mapping *alias* pada skema `UserCreate` (mendukung parameter `nama_lengkap`, `nomor_wa`, `role` string dari *payload* FE).

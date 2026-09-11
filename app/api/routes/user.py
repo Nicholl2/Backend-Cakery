@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.api.dependencies import require_owner, get_current_user_id
+from app.api.dependencies import require_owner, get_current_user_id, require_service_key
 from app.schemas.user import UserTakeoverUpdate, UserTakeoverResponse, UserCreate, UserOut
 from app.services import user_service
 
@@ -59,3 +59,10 @@ async def upload_user_avatar(
     user = await user_service.upload_user_avatar(db, user_id, file)
     return UserOut.model_validate(user)
 
+@router.get("/owner-numbers", dependencies=[Depends(require_service_key)])
+async def get_owner_numbers(db: AsyncSession = Depends(get_db)):
+    """
+    Get all active Owner's WhatsApp numbers for Chatbot service.
+    """
+    numbers = await user_service.get_owner_wa_numbers(db)
+    return {"numbers": numbers}

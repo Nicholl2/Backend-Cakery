@@ -14,6 +14,7 @@ from app.schemas.order import (
     CustomOrderCreate,
     OrderOut,
     OrderStatusUpdate,
+    RefundRequest,
 )
 from app.services import order_service
 
@@ -187,4 +188,21 @@ async def update_order_status(
     Jika status diubah menjadi 'cancelled', stok bahan baku pesanan biasa akan dikembalikan secara otomatis.
     """
     order = await order_service.update_order_status(db, order_id, data.status.value)
+    return OrderOut.model_validate(order)
+
+
+@router.post("/{order_id}/refund", response_model=OrderOut,
+             dependencies=[Depends(require_admin_or_owner)],
+             summary="Proses refund untuk order yang sudah dibayar (Khusus Admin/Owner)")
+async def refund_order(
+    order_id: int,
+    data: RefundRequest,
+    db: AsyncSession = Depends(get_db),
+) -> OrderOut:
+    """
+    Melakukan proses refund untuk tagihan (Invoice) yang telah dibayar sebagian (DP) atau lunas.
+    Secara otomatis akan mengembalikan stok (rollback), memanggil API Refund/Void dari Midtrans (jika bisa),
+    atau mencatat refund manual, lalu memperbarui status Payment, Invoice, dan Order menjadi cancelled/refunded.
+    """
+    order = await order_service.cancel_and_refund_order(db, order_id, data.reason)
     return OrderOut.model_validate(order)

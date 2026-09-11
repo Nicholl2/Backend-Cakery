@@ -87,6 +87,16 @@ class CustomOrderCreate(BaseModel):
         return sanitize_text(v)
 
 
+class RefundRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500, description="Alasan melakukan refund")
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def sanitize_reason(cls, v):
+        if v is None:
+            return v
+        return sanitize_text(v)
+
 # ── OUTPUT ───────────────────────────────────────────────────────────────────
 
 class CustomerOrderOut(BaseModel):
