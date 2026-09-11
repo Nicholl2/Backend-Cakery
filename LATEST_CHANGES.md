@@ -6,6 +6,15 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001c. Fix CI Integration Tests & Test Data Isolation
+- **Test Database Isolation (`test_owner_numbers.py` & `test_refund.py`)**:
+  - Memperbaiki isu di mana status `dependency_overrides` bocor atau terhapus oleh test lain saat dieksekusi bersamaan oleh `pytest`.
+  - Mengubah cara inisialisasi `app.dependency_overrides` agar diletakkan tepat sebelum pemanggilan `httpx.AsyncClient` di dalam blok tes untuk menjamin test tidak tanpa sengaja mengenai Database PostgreSQL asli milik CI yang menyebabkan AssertionError (`['628111111111']`).
+  - Mengganti `TestClient` FastAPI yang sinkron menjadi asinkron `httpx.AsyncClient` ber-transport ASGI pada test file `test_owner_numbers.py`.
+- **Memory Leak & Un-awaited Coroutines**:
+  - Mengisolasi inisialisasi SQLAlchemy `AsyncEngine` (khusus SQLite memori dengan `StaticPool`) ke dalam _function-scope_ per fungsi tes untuk menghindari terbaginya koneksi pool antar _event-loop_ berbeda yang dibuat oleh `pytest-asyncio`.
+  - Menutup/mematikan koneksi secara sadar di akhir setiap blok tes (`await test_engine.dispose()`) sehingga membersihkan RuntimeWarning *Connection._cancel was never awaited* saat proses *garbage collection*.
+
 ### 001b. Fitur Refund DP (Down Payment)
 - **Refund Endpoint (`POST /orders/{order_id}/refund`)**:
   - Menambahkan endpoint khusus untuk melakukan proses *refund* pesanan yang telah dibayar DP/Lunas.

@@ -17,14 +17,14 @@ from app.models.stock_item import StockItem
 from app.services.order_service import cancel_and_refund_order
 from app.services.payment_service import process_midtrans_webhook
 
-TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
-test_engine = create_async_engine(TEST_DB_URL, poolclass=StaticPool, echo=False)
-TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
-
 @pytest.mark.asyncio
 async def test_order_refund_flow():
     print("\n[TEST] Memulai test flow Refund Order DP/Paid...")
     
+    TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+    test_engine = create_async_engine(TEST_DB_URL, poolclass=StaticPool, echo=False)
+    TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
     # Setup DB
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -110,12 +110,17 @@ async def test_order_refund_flow():
             assert payment.payment_status == PaymentStatusEnum.refunded, f"Payment status should be refunded, got {payment.payment_status}"
             print("✓ Service Refund memicu update DB dengan benar (Order cancelled, Invoice refunded, Payment refunded)")
 
+    await test_engine.dispose()
     print("✅ Refund DP Flow Test Passed!")
 
 @pytest.mark.asyncio
 async def test_midtrans_webhook_refund():
     print("\n[TEST] Memulai test Webhook Refund...")
     
+    TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+    test_engine = create_async_engine(TEST_DB_URL, poolclass=StaticPool, echo=False)
+    TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
     # Setup DB
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -190,6 +195,7 @@ async def test_midtrans_webhook_refund():
         assert order.status == OrderStatusEnum.cancelled
         print("✓ Webhook Refund diproses dengan benar dan mem-bypass Idempotency guard")
 
+    await test_engine.dispose()
     print("✅ Webhook Refund Test Passed!")
 
 if __name__ == "__main__":

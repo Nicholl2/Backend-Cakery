@@ -17,18 +17,17 @@ from app.models.user import User
 from app.models.role import Role
 from app.core.config import settings
 
-# Test DB setup
-TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
-test_engine = create_async_engine(TEST_DB_URL, poolclass=StaticPool, echo=False)
-TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
-
-async def override_get_db():
-    async with TestSessionLocal() as session:
-        yield session
-
-app.dependency_overrides[get_db] = override_get_db
-
 async def run_tests():
+    # Test DB setup
+    TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+    test_engine = create_async_engine(TEST_DB_URL, poolclass=StaticPool, echo=False)
+    TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_get_db():
+        async with TestSessionLocal() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
     print("\nRunning Owner WhatsApp Numbers Endpoint Tests...")
     
     # 1. Setup Database & Roles/Users
@@ -53,15 +52,22 @@ async def run_tests():
         db.add_all([user_owner1, user_owner2, user_owner_inactive, user_admin1, user_owner_dup])
         await db.commit()
 
-    # 2. Test Endpoints with TestClient
-    with TestClient(app) as client:
+        # Direct service test to verify DB logic
+        from app.services.user_service import get_owner_wa_numbers
+        direct_numbers = await get_owner_wa_numbers(db)
+        print(f"Direct service call returned: {direct_numbers}")
+        assert "628123456789" in direct_numbers, "Direct service call failed"
+
+    # 2. Test Endpoints with AsyncClient
+    import httpx
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         # 2a. Missing Service Key (401)
-        response = client.get("/api/users/owner-numbers")
+        response = await client.get("/api/users/owner-numbers")
         assert response.status_code == 401, f"Expected 401, got {response.status_code}"
         print("✓ Missing Service Key blocked correctly (401)")
 
         # 2b. Invalid Service Key (401)
-        response = client.get(
+        response = await client.get(
             "/api/users/owner-numbers", 
             headers={"X-Service-Key": "invalid_key"}
         )
@@ -69,7 +75,7 @@ async def run_tests():
         print("✓ Invalid Service Key blocked correctly (401)")
 
         # 2c. Valid Service Key
-        response = client.get(
+        response = await client.get(
             "/api/users/owner-numbers", 
             headers={"X-Service-Key": settings.service_api_key}
         )
@@ -85,6 +91,8 @@ async def run_tests():
         assert "628987654321" in numbers
         print(f"✓ Valid request succeeded, returned normalized numbers: {numbers}")
 
+    app.dependency_overrides.clear()
+    await test_engine.dispose()
     print("✅ All Owner WhatsApp Numbers Endpoint Tests Passed!")
 
 @pytest.mark.asyncio
