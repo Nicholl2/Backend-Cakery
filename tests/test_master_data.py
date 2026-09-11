@@ -59,16 +59,6 @@ async def run_tests():
             existing_prod_res = await db.execute(select(Product).where(Product.nama_produk == "Kue Master Enak"))
             existing_prod = existing_prod_res.scalars().first()
             if existing_prod:
-                # Delete reviews first
-                reviews_res = await db.execute(select(Review).where(Review.product_id == existing_prod.id))
-                reviews = reviews_res.scalars().all()
-                for r in reviews:
-                    await db.delete(r)
-                # Delete recipes
-                recipes_res = await db.execute(select(Recipe).where(Recipe.product_id == existing_prod.id))
-                recipes = recipes_res.scalars().all()
-                for r in recipes:
-                    await db.delete(r)
                 await db.delete(existing_prod)
                 await db.commit()
 
@@ -79,10 +69,6 @@ async def run_tests():
                 stock_items_res = await db.execute(select(StockItem).where(StockItem.supplier_id == existing_sup.id))
                 stock_items = stock_items_res.scalars().all()
                 for item in stock_items:
-                    recipes_res = await db.execute(select(Recipe).where(Recipe.stock_item_id == item.id))
-                    recipes = recipes_res.scalars().all()
-                    for r in recipes:
-                        await db.delete(r)
                     await db.delete(item)
                 await db.delete(existing_sup)
                 await db.commit()
@@ -335,11 +321,8 @@ async def run_tests():
                 await db.delete(created_user)
             product = await product_repo.get_by_id(db, prod_id)
             if product:
-                recipes = await recipe_repo.get_by_product(db, prod_id)
-                for r in recipes:
-                    await recipe_repo.delete(db, r)
                 await product_repo.delete(db, product)
-                print("Deleted recipes and product")
+                print("Deleted product and its cascade relationships")
 
             stock_item = await stock_repo.get_by_id(db, stock_item_id)
             if stock_item:

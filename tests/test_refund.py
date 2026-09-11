@@ -27,6 +27,7 @@ async def test_order_refund_flow():
     
     # Setup DB
     async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
         
     async with TestSessionLocal() as db:
@@ -117,6 +118,7 @@ async def test_midtrans_webhook_refund():
     
     # Setup DB
     async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
         
     async with TestSessionLocal() as db:
