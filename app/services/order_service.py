@@ -579,16 +579,8 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
     await _attach_payment_amounts(db, order_refetched)
 
     if new_status == "ready":
-        try:
-            url = f"{settings.chatbot_url}/webhook/internal/orders/{order_id}/ready"
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    url,
-                    json={},
-                    headers={"X-Internal-Key": settings.chatbot_internal_key}
-                )
-        except Exception as e:
-            logger.error(f"Failed to send webhook push notification for order {order_id}: {e}")
+        from app.services.chatbot_notify import notify_chatbot_order_event
+        await notify_chatbot_order_event(order_id, "ready")
             
     return order_refetched
 
@@ -604,36 +596,50 @@ async def _rollback_order_stock(db: AsyncSession, order: Order) -> None:
                 stock_item = recipe.stock_item
                 if not stock_item:
                     continue
-                kembalikan = Decimal(str(recipe.jumlah_dibutuhkan)) * Decimal(str(item.jumlah))
+                qty_to_return = Decimal(str(item.jumlah)) * Decimal(str(recipe.jumlah_dibutuhkan))
                 if stock_item.id not in stock_item_returns:
-                    stock_item_returns[stock_item.id] = {
-                        "qty_return": Decimal("0.00"),
-                        "stock_item_obj": stock_item
-                    }
-                stock_item_returns[stock_item.id]["qty_return"] += kembalikan
+                    stock_item_returns[stock_item.id] = Decimal("0")
+                stock_item_returns[stock_item.id] += qty_to_return
 
-    for stock_id, s_data in stock_item_returns.items():
-        stock_item = s_data["stock_item_obj"]
-        qty_return = s_data["qty_return"]
-        
-        stmt = (
-            update(StockItem)
-            .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
-            .values(
-                stok_tersedia=StockItem.stok_tersedia + qty_return,
-                version=StockItem.version + 1
+    MAX_STOCK_RETRY = 3
+    for stock_id, qty_return in stock_item_returns.items():
+        for attempt in range(1, MAX_STOCK_RETRY + 1):
+            fresh_result = await db.execute(
+                select(StockItem).where(StockItem.id == stock_id)
             )
-        )
-        res = await db.execute(stmt)
-        if res.rowcount == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Terjadi kegagalan pemulihan stok karena transaksi bersamaan. Silakan coba lagi.",
+            stock_item = fresh_result.scalars().first()
+            if not stock_item:
+                break
+
+            stmt = (
+                update(StockItem)
+                .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
+                .values(
+                    stok_tersedia=StockItem.stok_tersedia + qty_return,
+                    version=StockItem.version + 1,
+                )
             )
+            res = await db.execute(stmt)
+            if res.rowcount > 0:
+                break
+
+            if attempt == MAX_STOCK_RETRY:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Terjadi kegagalan pemulihan stok karena transaksi bersamaan. Silakan coba lagi.",
+                )
 
 
-async def cancel_and_refund_order(db: AsyncSession, order_id: int, reason: str) -> Order:
+async def cancel_and_refund_order(
+    db: AsyncSession,
+    order_id: int,
+    reason: str,
+    is_service: bool = False,
+    customer_phone: Optional[str] = None,
+) -> Order:
     from app.services.payment_service import process_refund
+    from app.services.chatbot_notify import notify_chatbot_order_event
+    from app.utils.phone import normalize_phone
     
     result = await db.execute(
         select(Order)
@@ -654,7 +660,31 @@ async def cancel_and_refund_order(db: AsyncSession, order_id: int, reason: str) 
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Order tidak ditemukan",
         )
-        
+
+    # ── VALIDASI KHUSUS SERVICE CHATBOT ─────────────────────────────────────
+    if is_service:
+        # a. Verification Ownership
+        if not customer_phone:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Field 'nomor_wa' wajib disertakan untuk refund via Chatbot.",
+            )
+        req_phone = normalize_phone(customer_phone)
+        order_phone = normalize_phone(order.customer.nomor_wa) if order.customer and order.customer.nomor_wa else ""
+        if req_phone != order_phone:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Nomor WhatsApp tidak cocok dengan data pemesan.",
+            )
+
+        # b. Strict Status Check: HANYA diizinkan jika status pesanan masih 'pending'
+        if order.status != OrderStatusEnum.pending:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Refund melalui chatbot hanya diizinkan saat status pesanan masih 'pending'. Status saat ini: '{order.status.value}'.",
+            )
+
+    # ── VALIDASI STATUS TERMINAL & INVOICE (Berlaku untuk Admin & Chatbot) ──
     from app.core.state_machine import is_order_terminal
     if is_order_terminal(order.status):
         raise HTTPException(
@@ -670,6 +700,9 @@ async def cancel_and_refund_order(db: AsyncSession, order_id: int, reason: str) 
 
     # Call payment_service to do the API request & status change
     await process_refund(db, order_id, reason)
+
+    # Trigger Chatbot Webhook untuk event refunded
+    await notify_chatbot_order_event(order_id, "refunded")
     
     # Re-fetch after updates
     order_refetched = await order_repo.get_order_with_details(db, order_id)

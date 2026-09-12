@@ -6,6 +6,31 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001e. Chatbot Webhook Triggers & Service-to-Service Refund
+- **Sentralisasi Notifikasi Webhook Chatbot (`app/services/chatbot_notify.py`, `app/services/payment_service.py`, `app/services/order_service.py`)**:
+  - Disediakan helper asinkron `notify_chatbot_order_event(order_id: int, event: str)` yang mengirimkan HTTP POST non-blocking (fire-and-forget) ke endpoint Chatbot internal dengan header `X-Internal-Key: <CHATBOT_INTERNAL_KEY>`.
+  - Dilengkapi isolasi total `try-except Exception` dan timeout 5 detik sehingga kegagalan jaringan atau respons error dari service Chatbot tidak menggagalkan transaksi database di Backend.
+  - **Pemicu Event Baru**:
+    - `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/paid`: Memicu notifikasi saat transaksi pembayaran mencapai status `Success` (baik settlement DP maupun pelunasan final) di `_apply_transaction_status()`.
+    - `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/refunded`: Memicu notifikasi saat pesanan di-refund melalui `cancel_and_refund_order()` atau saat menerima webhook refund dari Midtrans.
+    - `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/ready`: Memicu notifikasi saat status pesanan diubah ke `ready`.
+- **Service-to-Service Refund dengan Dual Authentication (`app/api/routes/order.py`, `app/services/order_service.py`, `app/schemas/order.py`)**:
+  - Endpoint `POST /orders/{order_id}/refund` kini mendukung dua mekanisme otentikasi menggunakan dependency `get_auth_identity_optional_service_or_jwt`:
+    1. **JWT Bearer Token** (Seller Internal: Owner, Admin, Staff).
+    2. **Pre-Shared Service Key** via header `X-Service-Key` (Chatbot service).
+  - Skema `RefundRequest` diperluas dengan field opsional `nomor_wa: Optional[str] = None`.
+  - **Ownership Verification (Guard Kepemilikan WA)**: Untuk pemanggilan via service key, `nomor_wa` dari payload dicocokkan dengan nomor telepon customer pesanan menggunakan `normalize_phone_number()`. Mengembalikan `HTTP 403 Forbidden` jika nomor tidak cocok atau tidak disertakan.
+  - **Strict Status Check (Guard Status Pesanan)**: Untuk pemanggilan via service key, proses refund **hanya diizinkan** jika pesanan masih berstatus `pending`. Mengembalikan `HTTP 400 Bad Request` jika pesanan sudah diproses (`in_process`, `ready`, dll.).
+  - Fleksibilitas refund manual oleh Admin/Staff via token JWT tetap dipertahankan.
+- **Normalisasi Nomor Telepon (`app/utils/phone.py`)**:
+  - Ditambahkan alias `normalize_phone_number = normalize_phone` untuk konsistensi antar-service.
+- **Automated Test Suite Baru (`tests/test_chatbot_refund_webhook.py`)**:
+  - Verifikasi penolakan Chatbot refund saat `nomor_wa` salah atau tidak ada (403 Forbidden).
+  - Verifikasi penolakan Chatbot refund pada order berstatus `in_process` (400 Bad Request).
+  - Verifikasi keberhasilan Chatbot refund pada order berstatus `pending` (stok pulih, invoice & payment refunded, order cancelled).
+  - Verifikasi fleksibilitas Admin refund via JWT.
+  - Verifikasi pemicu webhook `/paid` dan `/refunded` ke Chatbot service.
+
 ### 001d. Frontend ↔ Backend Integration Fixes (Order & Seller Settings)
 - **Penyesuaian RBAC Order Seller (`app/api/routes/order.py`, `app/api/dependencies.py`)**:
   - Mengubah dependency guard pada endpoint manajemen order seller (`GET /orders`, `POST /orders/custom`, `GET /orders/{order_id}`, `PATCH /orders/{order_id}/status`, `POST /orders/{order_id}/refund`) dari `require_admin_or_owner` menjadi `require_internal_user` (level 3).
@@ -482,5 +507,40 @@ curl -X POST "http://127.0.0.1:8000/products/1/image" \
 }
 ```
 > URL gambar kini berupa HTTPS publik Cloudinary yang dapat diakses langsung oleh browser tanpa ketergantungan pada disk serverless lokal.
+
+---
+
+### Skenario 6: Testing Service-to-Service Refund & Chatbot Webhook Triggers
+
+1. **Jalankan Automated Test Suite Terisolasi**:
+```bash
+pytest tests/test_chatbot_refund_webhook.py -v
+```
+Semua 5 test case akan memverifikasi:
+- Penolakan HTTP 403 Forbidden saat chatbot memanggil refund dengan nomor WA yang tidak cocok / tidak diberikan.
+- Penolakan HTTP 400 Bad Request saat pesanan sudah berstatus `in_process` (strict state machine guard).
+- Keberhasilan refund otomatis pesanan `pending` dengan pengembalian stok, invoice & payment refunded, order cancelled, dan pemicu webhook `/refunded`.
+- Fleksibilitas refund manual Admin menggunakan token JWT.
+- Pemicu webhook `/paid` saat transaksi Midtrans mencapai status `Success`.
+
+2. **Manual Test via cURL (Service Key Auth)**:
+- **Refund Berhasil (Order Pending, Nomor WA Cocok)**:
+```bash
+curl -X POST "http://localhost:8000/orders/1/refund" \
+     -H "X-Service-Key: <CHATBOT_SERVICE_KEY>" \
+     -H "Content-Type: application/json" \
+     -d '{"reason": "Pelanggan membatalkan pesanan", "nomor_wa": "081234567890"}'
+```
+*Ekspektasi*: HTTP 200 OK dengan status order berubah ke `cancelled` dan webhook `POST {CHATBOT_URL}/webhook/internal/orders/1/refunded` tertembak.
+
+- **Refund Ditolak Karena Nomor WA Berbeda**:
+```bash
+curl -X POST "http://localhost:8000/orders/1/refund" \
+     -H "X-Service-Key: <CHATBOT_SERVICE_KEY>" \
+     -H "Content-Type: application/json" \
+     -d '{"reason": "Batal", "nomor_wa": "089999999999"}'
+```
+*Ekspektasi*: HTTP 403 Forbidden `{"detail": "Nomor WhatsApp tidak cocok dengan data pemesan"}`.
+
 
 

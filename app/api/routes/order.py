@@ -1,11 +1,17 @@
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from app.core.rate_limiter import limiter, RATE_ORDER_CREATE
 
 from app.core.database import get_db
-from app.api.dependencies import require_service_key, require_internal_user, get_current_buyer
+from app.api.dependencies import (
+    require_service_key,
+    require_internal_user,
+    get_current_buyer,
+    get_auth_identity_optional_service_or_jwt,
+    AuthIdentity,
+)
 from app.models.buyer import Buyer
 from app.models.order import OrderStatusEnum
 from app.schemas.order import (
@@ -192,17 +198,44 @@ async def update_order_status(
 
 
 @router.post("/{order_id}/refund", response_model=OrderOut,
-              dependencies=[Depends(require_internal_user)],
-              summary="Proses refund untuk order yang sudah dibayar (Khusus Staff/Admin/Owner)")
+             summary="Proses refund untuk order yang sudah dibayar (Staff/Admin/Owner atau Chatbot Service Key)")
 async def refund_order(
     order_id: int,
     data: RefundRequest,
+    auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
     """
     Melakukan proses refund untuk tagihan (Invoice) yang telah dibayar sebagian (DP) atau lunas.
-    Secara otomatis akan mengembalikan stok (rollback), memanggil API Refund/Void dari Midtrans (jika bisa),
-    atau mencatat refund manual, lalu memperbarui status Payment, Invoice, dan Order menjadi cancelled/refunded.
+    Dapat dipanggil oleh:
+    1. Chatbot Service (via header X-Service-Key):
+       - Memerlukan field nomor_wa pada request body.
+       - Memvalidasi kepemilikan nomor telepon (403 jika tidak cocok).
+       - Hanya diizinkan jika status pesanan masih 'pending' (400 jika sudah in_process atau seterusnya).
+    2. Internal Seller (Staff/Admin/Owner via Bearer JWT):
+       - Fleksibel sesuai kebijakan toko.
     """
-    order = await order_service.cancel_and_refund_order(db, order_id, data.reason)
+    if auth.is_service:
+        is_service_call = True
+    elif auth.auth_type == "user":
+        role_level = int(auth.role) if auth.role is not None else 3
+        if role_level > 3:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Hanya staff, admin, atau owner yang dapat memproses refund secara manual."
+            )
+        is_service_call = False
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak untuk peran ini."
+        )
+
+    order = await order_service.cancel_and_refund_order(
+        db=db,
+        order_id=order_id,
+        reason=data.reason,
+        is_service=is_service_call,
+        customer_phone=data.nomor_wa,
+    )
     return OrderOut.model_validate(order)

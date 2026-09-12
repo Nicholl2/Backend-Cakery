@@ -50,3 +50,7 @@ def validate_phone_e164(phone: str | None) -> str | None:
     if not phone_str:
         return None
     return normalize_phone(phone_str, as_http_exception=False)
+
+
+# Alias for compatibility
+normalize_phone_number = normalize_phone

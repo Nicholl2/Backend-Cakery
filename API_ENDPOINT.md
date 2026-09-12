@@ -137,7 +137,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `GET` | `/orders/latest` | `X-Service-Key` | Ambil order terbaru pelanggan berdasarkan query `?nomor_wa=...` |
 | `POST` | `/orders/{order_id}/cancel` | `X-Service-Key` | Pembatalan otomatis oleh pelanggan (hanya jika invoice `unpaid`, stok bahan dikembalikan). |
 | `PATCH` | `/orders/{order_id}/status` | Staff / Admin / Owner | Update status pesanan (`pending`, `in_process`, `ready`, `delivered`, `picked_up`, `cancelled`). Otomatis mengembalikan stok jika status diubah ke `cancelled` dan menembak push webhook saat `ready`. |
-| `POST` | `/orders/{order_id}/refund` | Staff / Admin / Owner | Memproses pembatalan sekaligus refund untuk pesanan berstatus DP/Lunas. Memicu panggilan Midtrans API dan otomatis mengembalikan persediaan bahan baku. |
+| `POST` | `/orders/{order_id}/refund` | Staff/Admin/Owner OR `X-Service-Key` | Memproses pembatalan sekaligus refund untuk pesanan berstatus DP/Lunas. Memicu API Midtrans, rollback stok, dan trigger webhook `/refunded` ke Chatbot. Mendukung panggilan via `X-Service-Key` (Chatbot) dengan validasi kepemilikan `nomor_wa` dan status wajib `pending`. |
 
 ---
 
@@ -211,3 +211,15 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `DELETE` | `/users/{user_id}` | Owner Only | Hapus akun pengguna internal (atau soft-deactivate jika terdapat riwayat transaksi) oleh Owner |
 | `PATCH` | `/users/{user_id}/takeover-handler` | Owner Only | Set status apakah admin tersebut bertugas menangani live takeover |
 | `GET` | `/users/owner-numbers` | `X-Service-Key` | Ambil daftar seluruh nomor WhatsApp berformat E.164 (tanpa '+') milik user aktif dengan role Owner (Level 1) untuk keperluan verifikasi hak akses pada service Chatbot |
+
+---
+
+### N. Outgoing Webhooks ke Chatbot Service
+
+Backend FastAPI mengirimkan notifikasi HTTP asynchronous (fire-and-forget, non-blocking) ke service Chatbot saat terjadi event-event penting pada pesanan:
+
+| Target Chatbot Endpoint | Pemicu (Trigger Event) | Header Autentikasi | Request Body | Deskripsi |
+| :--- | :--- | :--- | :--- | :--- |
+| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/ready` | Update status pesanan ke `ready` (`PATCH /orders/{order_id}/status`) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim pesan WA ke pelanggan bahwa pesanan kue sudah selesai dan siap diambil/dikirim. |
+| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/paid` | Transaksi pembayaran berhasil settlement DP / Lunas (`_apply_transaction_status` pada Midtrans webhook & status check) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim notifikasi konfirmasi pembayaran berhasil ke WhatsApp pelanggan. |
+| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/refunded` | Pembatalan & refund pesanan berhasil (`cancel_and_refund_order`) atau webhook status refund dari Midtrans | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot bahwa dana pesanan pelanggan telah direfund. |

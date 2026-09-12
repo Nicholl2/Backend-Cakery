@@ -276,6 +276,10 @@ async def _apply_transaction_status(db: AsyncSession, payment: Payment, payload:
                     invoice.status.value, total_success, invoice.total_tagihan,
                 )
 
+            # Trigger Chatbot Webhook untuk event paid
+            from app.services.chatbot_notify import notify_chatbot_order_event
+            await notify_chatbot_order_event(invoice.order_id, "paid")
+
     elif new_status == PaymentStatusEnum.refunded:
         invoice_res = await db.execute(
             select(Invoice).where(Invoice.id == payment.invoice_id)
@@ -318,6 +322,11 @@ async def _apply_transaction_status(db: AsyncSession, payment: Payment, payload:
                 "old_status=%s",
                 invoice.id, old_invoice_status.value if hasattr(old_invoice_status, 'value') else old_invoice_status,
             )
+
+            # Trigger Chatbot Webhook untuk event refunded
+            from app.services.chatbot_notify import notify_chatbot_order_event
+            await notify_chatbot_order_event(invoice.order_id, "refunded")
+
 
 
 async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
