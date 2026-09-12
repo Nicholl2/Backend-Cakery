@@ -136,7 +136,8 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `POST` | `/orders` | `X-Service-Key` | Buat order baru via chatbot (reservasi stok bahan via Optimistic Locking, generate invoice). |
 | `GET` | `/orders/latest` | `X-Service-Key` | Ambil order terbaru pelanggan berdasarkan query `?nomor_wa=...` |
 | `POST` | `/orders/{order_id}/cancel` | `X-Service-Key` | Pembatalan otomatis oleh pelanggan (hanya jika invoice `unpaid`, stok bahan dikembalikan). |
-| `POST` | `/orders/{order_id}/refund` | Staff/Admin/Owner OR `X-Service-Key` | Memproses pembatalan sekaligus refund untuk pesanan berstatus DP/Lunas. Memicu API Midtrans, rollback stok, dan trigger webhook `/refunded` ke Chatbot SETELAH database commit. Mendukung panggilan via `X-Service-Key` (Chatbot) dengan validasi kepemilikan `nomor_wa` dan status wajib `pending`. Mengembalikan payload DTO dengan penanda `refund_mode` (`auto` jika direct API Midtrans berhasil, atau `manual` jika metode VA/QRIS 412 yang mewajibkan transfer manual). |
+| `PATCH` | `/orders/{order_id}/status` | Staff / Admin / Owner | Update status pesanan (`pending`, `in_process`, `ready`, `delivered`, `picked_up`, `cancelled`, `refunded`). Memvalidasi aturan transisi State Machine (termasuk transisi `cancelled` -> `refunded` untuk menyelesaikan refund manual). Memicu webhook notifikasi `/ready` jika status menjadi `ready`, atau sinyal 2.b webhook `/refunded` jika status menjadi `refunded` (SETELAH `db.commit()`). |
+| `POST` | `/orders/{order_id}/refund` | Staff/Admin/Owner OR `X-Service-Key` | Memproses pembatalan sekaligus refund untuk pesanan berstatus DP/Lunas. Memicu API Midtrans, rollback stok bahan, dan trigger webhook `/refunded` ke Chatbot SETELAH database commit. Jika dipanggil Chatbot (`X-Service-Key`), memvalidasi kepemilikan `nomor_wa` dan status wajib `pending`. Mengembalikan payload DTO dengan penanda `refund_mode` (`auto` jika direct API Midtrans berhasil dengan status akhir order `refunded`, atau `manual` jika metode VA/QRIS 412 yang mewajibkan transfer manual dengan status order `cancelled`). Jika dipanggil oleh Admin/Seller, pesanan langsung bertransisi menjadi `refunded` dan memicu sinyal 2.b webhook `/refunded`. |
 
 ---
 
@@ -221,15 +222,26 @@ Backend FastAPI mengirimkan notifikasi HTTP asynchronous (fire-and-forget, non-b
 | :--- | :--- | :--- | :--- | :--- |
 | `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/ready` | Update status pesanan ke `ready` (`PATCH /orders/{order_id}/status`) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim pesan WA ke pelanggan bahwa pesanan kue sudah selesai dan siap diambil/dikirim. |
 | `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/paid` | Transaksi pembayaran berhasil settlement DP / Lunas (`_apply_transaction_status` pada Midtrans webhook & status check) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim notifikasi konfirmasi pembayaran berhasil ke WhatsApp pelanggan. |
-| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/refunded` | Pembatalan & refund pesanan berhasil (`cancel_and_refund_order`) atau webhook status refund dari Midtrans | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot bahwa dana pesanan pelanggan telah direfund. |
+| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/refunded` | **2 Sinyal Pemicu** (Lihat rincian di bawah):<br>1. Sinyal Auto Refund (QRIS API sukses)<br>2. Sinyal Manual Refund Completed (Admin mark as `refunded`) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot bahwa dana pesanan pelanggan telah berhasil direfund sehingga Chatbot dapat meneruskan notifikasi WhatsApp ke pelanggan. |
+
+#### Skenario 2 Pemicu Webhook Refund (`/refunded`):
+1. **Sinyal 2.a: Auto Refund (QRIS Direct Refund Successful)**
+   - **Pemicu**: Dipicu di `payment_service.py` saat API Direct Refund Midtrans sukses (`refund_mode == "auto"`).
+   - **Status Pesanan**: Langsung bertransisi menjadi `refunded` dan `payment_status: refunded`.
+   - **Waktu Eksekusi**: Ditembakkan tepat **SETELAH `await db.commit()`** pada database backend.
+2. **Sinyal 2.b: Manual Refund Completed (Admin Mark as Refunded)**
+   - **Pemicu**: Dipicu di `order_service.py` saat Admin/Owner menandai proses refund manual telah selesai via Dashboard Site (`PATCH /orders/{order_id}/status` ke `refunded` atau `POST /orders/{order_id}/refund`).
+   - **Status Pesanan**: Bertransisi dari `cancelled` (atau `pending`/`in_process`) -> `refunded`.
+   - **Waktu Eksekusi**: Ditembakkan tepat **SETELAH `await db.commit()`** pada database backend.
+   - *Catatan*: Jika refund dilakukan via Chatbot (`X-Service-Key`) dan Midtrans mengembalikan status 412 (perlu transfer manual oleh seller), status pesanan menjadi `cancelled` dan webhook `/refunded` **TIDAK** ditembakkan sampai Admin menyelesaikan transfer manual dan mengubah status menjadi `refunded`.
 
 #### Struktur Response Endpoint Refund (`POST /orders/{order_id}/refund`):
 ```json
 {
   "message": "Order refund processed successfully",
   "order_id": 57,
-  "status": "cancelled",
+  "status": "refunded", // "refunded" jika auto refund Midtrans sukses atau diproses oleh Admin/Owner; "cancelled" jika via Chatbot fallback manual transfer
   "payment_status": "refunded",
-  "refund_mode": "manual" // "auto" (direct API Midtrans sukses) atau "manual" (metode VA/QRIS 412 / pencatatan manual)
+  "refund_mode": "auto" // "auto" (direct API Midtrans sukses) atau "manual" (metode VA/QRIS 412 yang mewajibkan transfer manual seller)
 }
 ```

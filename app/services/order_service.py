@@ -567,11 +567,21 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
                    f"Pesanan sudah dalam status '{order.status.value}'.",
         )
 
-    # Jika status diubah menjadi 'cancelled' dari status sebelumnya yang bukan cancelled
-    if new_status == OrderStatusEnum.cancelled.value and order.status != OrderStatusEnum.cancelled:
+    # Jika status diubah menjadi 'cancelled' atau 'refunded' dari status sebelumnya yang bukan cancelled/refunded
+    if new_status in [OrderStatusEnum.cancelled.value, OrderStatusEnum.refunded.value] and order.status not in [OrderStatusEnum.cancelled, OrderStatusEnum.refunded]:
         await _rollback_order_stock(db, order)
 
-    order.status = new_status
+    # Update invoice & payment jika status diubah menjadi 'refunded'
+    if new_status == OrderStatusEnum.refunded.value:
+        if order.invoice and order.invoice.status != InvoiceStatusEnum.refunded:
+            order.invoice.status = InvoiceStatusEnum.refunded
+            if order.invoice.payments:
+                from app.models.payment import PaymentStatusEnum
+                for payment in order.invoice.payments:
+                    if payment.payment_status == PaymentStatusEnum.success:
+                        payment.payment_status = PaymentStatusEnum.refunded
+
+    order.status = new_status_enum
     await db.commit()
 
     # Re-query order with details to avoid lazy loading issues
@@ -581,6 +591,11 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
     if new_status == "ready":
         from app.services.chatbot_notify import notify_chatbot_order_event
         await notify_chatbot_order_event(order_id, "ready")
+    elif new_status == OrderStatusEnum.refunded.value or new_status == "refunded":
+        # Sinyal Manual Refund Completed (Poin 2.b):
+        # Dipicu saat Admin/Seller mengubah status pesanan menjadi refunded di Dashboard Site
+        from app.services.chatbot_notify import notify_refund_status
+        await notify_refund_status(order_id)
             
     return order_refetched
 
@@ -686,6 +701,11 @@ async def cancel_and_refund_order(
 
     # ── VALIDASI STATUS TERMINAL & INVOICE (Berlaku untuk Admin & Chatbot) ──
     from app.core.state_machine import is_order_terminal
+    if order.status == OrderStatusEnum.refunded:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pesanan sudah dalam status 'refunded'."
+        )
     if is_order_terminal(order.status):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -698,13 +718,29 @@ async def cancel_and_refund_order(
             detail="Hanya pesanan dengan status pembayaran DP/Lunas yang dapat diproses refund. Gunakan cancel biasa."
         )
 
-    # Panggil payment_service untuk eksekusi API Midtrans, commit DB, dan kirim webhook post-commit
+    # Panggil payment_service untuk eksekusi API Midtrans, commit DB, dan kirim webhook post-commit (jika auto)
     refund_mode = await process_refund(db, order_id, reason)
+
+    # Tentukan status akhir order:
+    # 1. Jika refund_mode == "auto": API direct refund Midtrans sukses -> status pesanan menjadi 'refunded'
+    # 2. Jika Admin/Seller memproses refund di Dashboard Site (not is_service): Admin menandai refund selesai -> status pesanan menjadi 'refunded'
+    # 3. Jika Chatbot memicu refund namun mode manual (VA/QRIS 412): status pesanan 'cancelled' (menunggu transfer manual admin)
+    if refund_mode == "auto" or not is_service:
+        order.status = OrderStatusEnum.refunded
+        await db.commit()
+        # Sinyal Manual Refund Completed (Poin 2.b):
+        # Jika diproses oleh Admin di Dashboard Site dan mode manual, tembak notifikasi webhook setelah commit DB
+        if not is_service and refund_mode == "manual":
+            from app.services.chatbot_notify import notify_refund_status
+            await notify_refund_status(order_id)
+    else:
+        order.status = OrderStatusEnum.cancelled
+        await db.commit()
 
     return RefundResponse(
         message="Order refund processed successfully",
         order_id=order.id,
-        status=OrderStatusEnum.cancelled.value,
+        status=order.status.value if hasattr(order.status, 'value') else str(order.status),
         payment_status="refunded",
         refund_mode=refund_mode,
     )

@@ -6,6 +6,28 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001h. State Machine Adjustment (`cancelled -> refunded`) & Dual-Signal Refund Webhooks ke Chatbot
+- **State Machine & Enum Order Baru (`app/models/order.py`, `app/core/state_machine.py`)**:
+  - Menambahkan nilai status baru `refunded = "refunded"` pada enum `OrderStatusEnum`.
+  - Memperbarui `ORDER_TRANSITIONS` agar status `cancelled` diperbolehkan bertransisi ke status `refunded` (`OrderStatusEnum.cancelled: {OrderStatusEnum.refunded}`), serta mengizinkan transisi langsung dari status aktif (`pending`, `in_process`, `ready`) ke `refunded`.
+  - Menetapkan `OrderStatusEnum.refunded` sebagai terminal state baru (`ORDER_TERMINAL_STATES = {delivered, picked_up, refunded}`). Status `cancelled` tidak lagi terminal karena dapat bertransisi ke `refunded`.
+- **Manajemen Transisi Status & Rollback Stok (`app/services/order_service.py`)**:
+  - Pada `update_order_status()`, jika status diubah menjadi `refunded` (misalnya oleh Admin via `PATCH /orders/{id}/status`), sistem memvalidasi transisi state machine, mengembalikan stok jika sebelumnya belum pernah dibatalkan (`_rollback_order_stock`), serta memperbarui status `invoice` dan `payment` terkait menjadi `refunded`.
+  - Transaksi disimpan dengan `await db.commit()` terlebih dahulu sebelum mengeksekusi webhook notifikasi.
+- **Webhook Notification Trigger 2 Sinyal ke Chatbot (`app/services/payment_service.py`, `app/services/order_service.py`, `app/services/chatbot_notify.py`)**:
+  - Webhook internal ke Chatbot (`POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/refunded` dengan header `X-Internal-Key: <CHATBOT_INTERNAL_KEY>`) kini ditembakkan secara presisi pada DUA kondisi kejadian pasca-commit (`commit=True`):
+    1. **Sinyal Auto Refund (Poin 2.a)**:
+       - Dipicu di `process_refund()` saat pemanggilan API Direct Refund Midtrans sukses (`refund_mode == "auto"`).
+       - Status pesanan diset menjadi `refunded`.
+       - Webhook langsung ditembakkan setelah `db.commit()`.
+    2. **Sinyal Manual Refund Completed (Poin 2.b)**:
+       - Saat refund otomatis tidak didukung / gagal (misal VA / QRIS HTTP 412), transaksi dicatat sebagai `refund_mode == "manual"` dan status awal pesanan diset ke `cancelled` (tanpa menembak webhook refund prematur ke Chatbot).
+       - Saat Admin/Seller menyelesaikan transfer manual offline dan menandai pesanan menjadi `refunded` di Dashboard Site (melalui `PATCH /orders/{id}/status` atau `POST /orders/{id}/refund`), status pesanan berubah menjadi `refunded`, database di-commit, dan Sinyal 2.b ditembakkan ke Chatbot.
+- **Pengujian & Verifikasi Terintegrasi**:
+  - `tests/test_hardening.py`: Memvalidasi transisi `cancelled -> refunded` diizinkan dan `is_order_terminal(refunded)` benar.
+  - `tests/test_refund.py`: Memverifikasi mode auto dan manual refund dengan status akhir `refunded`.
+  - `tests/test_chatbot_refund_webhook.py`: Memverifikasi kedua sinyal pemicu webhook: Sinyal 2.a (Auto refund QRIS/Midtrans) dan Sinyal 2.b (Admin mark as refunded via PATCH status atau POST refund).
+
 ### 001g. User Service Eager Loading & Fix MissingGreenlet (POST /users & User Queries)
 - **Eager Loading Relasi Role & Proteksi `role_name` (`app/models/user.py`)**:
   - Menetapkan konfigurasi `lazy="selectin"` pada relasi `role = relationship("Role", lazy="selectin")` di model `User`, sehingga setiap kali model `User` dimuat oleh SQLAlchemy secara asinkron, data relasi `Role` otomatis di-eager load tanpa memicu eksekusi IO sinkron tersembunyi.

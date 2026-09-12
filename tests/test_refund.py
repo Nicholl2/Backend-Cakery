@@ -101,7 +101,7 @@ async def test_order_refund_flow():
             # Verifikasi mock terpanggil
             assert mock_client.return_value.__aenter__.return_value.post.called
             assert refund_res.refund_mode == "auto", f"Expected auto refund_mode, got {refund_res.refund_mode}"
-            assert refund_res.status == "cancelled"
+            assert refund_res.status == "refunded"
             assert refund_res.payment_status == "refunded"
 
             # Verifikasi perubahan statenya
@@ -109,10 +109,10 @@ async def test_order_refund_flow():
             await db.refresh(invoice)
             await db.refresh(payment)
             
-            assert order.status == OrderStatusEnum.cancelled, f"Order status should be cancelled, got {order.status}"
+            assert order.status == OrderStatusEnum.refunded, f"Order status should be refunded, got {order.status}"
             assert invoice.status == InvoiceStatusEnum.refunded, f"Invoice status should be refunded, got {invoice.status}"
             assert payment.payment_status == PaymentStatusEnum.refunded, f"Payment status should be refunded, got {payment.payment_status}"
-            print("✓ Service Refund memicu update DB dengan benar (Order cancelled, Invoice refunded, Payment refunded, refund_mode=auto)")
+            print("✓ Service Refund memicu update DB dengan benar (Order refunded, Invoice refunded, Payment refunded, refund_mode=auto)")
 
         # 3. Test HTTP 412 Midtrans Fallback to Manual Refund (VA / QRIS)
         # Buat order baru dengan status in_process & payment success
@@ -156,9 +156,9 @@ async def test_order_refund_flow():
 
             res_412 = await cancel_and_refund_order(db, order412.id, "Batal VA")
             assert res_412.refund_mode == "manual", f"Expected manual refund_mode for 412, got {res_412.refund_mode}"
-            assert res_412.status == "cancelled"
+            assert res_412.status == "refunded"
             assert res_412.payment_status == "refunded"
-            print("✓ HTTP 412 Midtrans ditangani dengan baik dan jatuh ke refund_mode=manual")
+            print("✓ HTTP 412 Midtrans ditangani dengan baik dan jatuh ke refund_mode=manual (status refunded)")
 
     await test_engine.dispose()
     print("✅ Refund DP Flow Test Passed!")

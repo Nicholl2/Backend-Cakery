@@ -190,8 +190,9 @@ async def update_order_status(
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
     """
-    Update status order oleh Seller (Staff/Admin/Owner). Nilai status: pending, in_process, ready, delivered, picked_up, cancelled.
+    Update status order oleh Seller (Staff/Admin/Owner). Nilai status: pending, in_process, ready, delivered, picked_up, cancelled, refunded.
     Jika status diubah menjadi 'ready', memicu push notification webhook ke Chatbot Service.
+    Jika status diubah menjadi 'refunded', memicu push notification webhook /refunded ke Chatbot Service.
     Jika status diubah menjadi 'cancelled', stok bahan baku pesanan biasa akan dikembalikan secara otomatis.
     """
     order = await order_service.update_order_status(db, order_id, data.status.value)

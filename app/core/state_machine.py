@@ -54,25 +54,31 @@ ORDER_TRANSITIONS: dict[OrderStatusEnum, set[OrderStatusEnum]] = {
     OrderStatusEnum.pending: {
         OrderStatusEnum.in_process,
         OrderStatusEnum.cancelled,
+        OrderStatusEnum.refunded,
     },
     OrderStatusEnum.in_process: {
         OrderStatusEnum.ready,
         OrderStatusEnum.cancelled,
+        OrderStatusEnum.refunded,
     },
     OrderStatusEnum.ready: {
         OrderStatusEnum.delivered,
         OrderStatusEnum.picked_up,
         OrderStatusEnum.cancelled,
+        OrderStatusEnum.refunded,
+    },
+    OrderStatusEnum.cancelled: {
+        OrderStatusEnum.refunded,
     },
     OrderStatusEnum.delivered: set(),    # terminal state
     OrderStatusEnum.picked_up: set(),    # terminal state
-    OrderStatusEnum.cancelled: set(),    # terminal state
+    OrderStatusEnum.refunded: set(),     # terminal state
 }
 
 ORDER_TERMINAL_STATES: set[OrderStatusEnum] = {
     OrderStatusEnum.delivered,
     OrderStatusEnum.picked_up,
-    OrderStatusEnum.cancelled,
+    OrderStatusEnum.refunded,
 }
 
 

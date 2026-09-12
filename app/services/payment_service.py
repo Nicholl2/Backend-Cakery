@@ -583,8 +583,11 @@ async def process_refund(db: AsyncSession, order_id: int, reason: str) -> str:
     # Evaluasi status mode refund keseluruhan
     overall_refund_mode = "auto" if refund_modes and all(m == "auto" for m in refund_modes) else "manual"
 
+    # Sinyal Auto Refund (Poin 2.a):
+    # Tembak webhook internal ke Chatbot HANYA jika panggilan API Refund Midtrans sukses (refund_mode == "auto")
     # Pemicu Webhook Chatbot dieksekusi SETELAH db.commit() berhasil dilakukan
-    await notify_refund_status(order_id)
+    if overall_refund_mode == "auto":
+        await notify_refund_status(order_id)
 
     return overall_refund_mode
 

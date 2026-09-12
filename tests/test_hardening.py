@@ -98,15 +98,19 @@ async def test_order_state_machine():
     assert is_valid_order_transition(OS.delivered, OS.ready) is False, \
         "delivered → ready harus DITOLAK"
 
-    # Terminal states: tidak bisa transisi lagi
+    # Terminal states: tidak bisa transisi lagi, kecuali cancelled → refunded
     assert is_valid_order_transition(OS.cancelled, OS.pending) is False
+    assert is_valid_order_transition(OS.cancelled, OS.refunded) is True
     assert is_valid_order_transition(OS.delivered, OS.cancelled) is False
     assert is_valid_order_transition(OS.picked_up, OS.cancelled) is False
+    assert is_valid_order_transition(OS.refunded, OS.cancelled) is False
+    assert is_valid_order_transition(OS.refunded, OS.pending) is False
 
     # Terminal check
     assert is_order_terminal(OS.delivered) is True
     assert is_order_terminal(OS.picked_up) is True
-    assert is_order_terminal(OS.cancelled) is True
+    assert is_order_terminal(OS.refunded) is True
+    assert is_order_terminal(OS.cancelled) is False  # can transition to refunded
     assert is_order_terminal(OS.pending) is False
     assert is_order_terminal(OS.in_process) is False
     assert is_order_terminal(OS.ready) is False

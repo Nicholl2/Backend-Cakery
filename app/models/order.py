@@ -19,6 +19,7 @@ class OrderStatusEnum(str, enum.Enum):
     delivered = "delivered"
     picked_up = "picked_up"
     cancelled = "cancelled"
+    refunded = "refunded"
 
 
 class MetodePengirimanEnum(str, enum.Enum):
