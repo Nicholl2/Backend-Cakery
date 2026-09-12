@@ -54,10 +54,10 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/products/` | Admin / Owner | Buat master produk baru (HPP default 0 sebelum resep diisi) |
-| `GET` | `/products/` | Public | List katalog produk (Filter: `only_active`, `kategori`) |
-| `GET` | `/products/{product_id}` | Public | Detail produk lengkap beserta ketersediaan stok bahan (`is_available`) |
-| `PUT` | `/products/{product_id}` | Admin / Owner | Update data produk (nama, deskripsi, kategori, is_active, slug, minimum_order, dll.) |
+| `POST` | `/products/` | Admin / Owner | Buat master produk baru (HPP default 0 sebelum resep diisi, `is_available` default `true`) |
+| `GET` | `/products/` | Public | List katalog produk (Filter: `only_active`, `kategori`, `only_available`). Default menampilkan semua produk aktif (termasuk yang stok habis). Field response memuat `is_available: bool` (manual seller), `stock_quantity: int` (ketersediaan bahan/resep), dan `is_in_stock: bool` (computed property). Filter `only_available=true` hanya mereturn produk dengan `is_in_stock == true`. |
+| `GET` | `/products/{product_id}` | Public | Detail produk lengkap beserta ketersediaan manual (`is_available`), stok bahan (`stock_quantity`), dan status siap beli (`is_in_stock`) |
+| `PUT` | `/products/{product_id}` | Admin / Owner | Update data produk (nama, deskripsi, kategori, is_active, is_available, slug, minimum_order, dll.) |
 | `DELETE` | `/products/{product_id}` | Admin / Owner | Hapus produk beserta seluruh relasi resep dan riwayat harganya |
 | `POST` | `/products/{product_id}/image` | Admin / Owner | Upload gambar produk langsung ke Cloudinary (`toti-cakery/products`, maks 5MB, format JPEG/PNG/WEBP), simpan HTTPS secure_url ke DB |
 | `PATCH` | `/products/{product_id}/price` | Admin / Owner | Tetapkan/ubah harga jual produk (audit riwayat harga otomatis) |
@@ -130,10 +130,10 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `GET` | `/orders` | Staff / Admin / Owner | List seluruh pesanan toko untuk Seller (Staff/Admin/Owner) dengan relasi lengkap (Customer, OrderItems, Invoice, Payments, amount_paid, amount_due). Filter: `status`, `limit`, `offset`. |
 | `GET` | `/orders/{order_id}` | Staff / Admin / Owner | Detail pesanan spesifik untuk Seller beserta customer, item kustom/produk (dengan field `product_name`), invoice, dan ringkasan pembayaran. |
 | `POST` | `/orders/custom` | Staff / Admin / Owner | Buat pesanan kustom buatan seller tanpa master produk (otomatis create customer, bypass stock deduction, generate invoice, set `created_via = 'seller'`). |
-| `POST` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Buat order baru khusus Buyer (otomatis derive `customer_id` dari identitas JWT, reservasi stok bahan via Optimistic Locking, generate invoice). |
+| `POST` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Buat order baru khusus Buyer (otomatis derive `customer_id` dari identitas JWT, validasi ketat ketersediaan produk `is_in_stock` & batas `stock_quantity` -> HTTP 400 jika habis/melebihi stok, reservasi stok bahan via Optimistic Locking, generate invoice). |
 | `GET` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Ambil seluruh riwayat pesanan milik Buyer yang sedang login. |
 | `GET` | `/orders/buyer/{id}` | Buyer JWT (`get_current_buyer`) | Detail pesanan spesifik milik Buyer (isolasi data aman antarpembeli). |
-| `POST` | `/orders` | `X-Service-Key` | Buat order baru via chatbot (reservasi stok bahan via Optimistic Locking, generate invoice). |
+| `POST` | `/orders` | `X-Service-Key` | Buat order baru via chatbot (validasi ketat ketersediaan produk `is_in_stock` & batas `stock_quantity` -> HTTP 400 jika habis/melebihi stok, reservasi stok bahan via Optimistic Locking, generate invoice). |
 | `GET` | `/orders/latest` | `X-Service-Key` | Ambil order terbaru pelanggan berdasarkan query `?nomor_wa=...` |
 | `POST` | `/orders/{order_id}/cancel` | `X-Service-Key` | Pembatalan otomatis oleh pelanggan (hanya jika invoice `unpaid`, stok bahan dikembalikan). |
 | `PATCH` | `/orders/{order_id}/status` | Staff / Admin / Owner | Update status pesanan (`pending`, `in_process`, `ready`, `delivered`, `picked_up`, `cancelled`, `refunded`). Memvalidasi aturan transisi State Machine (termasuk transisi `cancelled` -> `refunded` untuk menyelesaikan refund manual). Memicu webhook notifikasi `/ready` jika status menjadi `ready`, atau sinyal 2.b webhook `/refunded` jika status menjadi `refunded` (SETELAH `db.commit()`). |

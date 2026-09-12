@@ -18,6 +18,7 @@ async def ensure_product_columns(conn: AsyncConnection):
     await conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0;"))
     await conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT FALSE;"))
     await conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS minimum_order INTEGER DEFAULT 1;"))
+    await conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;"))
 
     # 2. Update existing NULL records to their defaults before applying NOT NULL constraint
     await conn.execute(text("UPDATE products SET rating = COALESCE(rating, 0.0) WHERE rating IS NULL;"))
@@ -25,6 +26,7 @@ async def ensure_product_columns(conn: AsyncConnection):
     await conn.execute(text("UPDATE products SET sold_count = COALESCE(sold_count, 0) WHERE sold_count IS NULL;"))
     await conn.execute(text("UPDATE products SET is_featured = COALESCE(is_featured, FALSE) WHERE is_featured IS NULL;"))
     await conn.execute(text("UPDATE products SET minimum_order = COALESCE(minimum_order, 1) WHERE minimum_order IS NULL;"))
+    await conn.execute(text("UPDATE products SET is_available = COALESCE(is_available, TRUE) WHERE is_available IS NULL;"))
 
     # 3. Apply NOT NULL constraints to the default-valued columns
     await conn.execute(text("ALTER TABLE products ALTER COLUMN rating SET NOT NULL;"))
@@ -32,6 +34,7 @@ async def ensure_product_columns(conn: AsyncConnection):
     await conn.execute(text("ALTER TABLE products ALTER COLUMN sold_count SET NOT NULL;"))
     await conn.execute(text("ALTER TABLE products ALTER COLUMN is_featured SET NOT NULL;"))
     await conn.execute(text("ALTER TABLE products ALTER COLUMN minimum_order SET NOT NULL;"))
+    await conn.execute(text("ALTER TABLE products ALTER COLUMN is_available SET NOT NULL;"))
 
     # 4. Create unique partial index on slug (to allow multiple NULLs but unique values when present)
     await conn.execute(text(

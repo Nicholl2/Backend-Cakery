@@ -9,9 +9,11 @@ Dokumentasi lengkap logika bisnis, aturan validasi, dan otomasi alur kerja Backe
 Alur kerja saat endpoint `POST /orders` dipanggil oleh Chatbot atau Client:
 1. **Validasi Tagihan Aktif**:
    Sistem memeriksa apakah customer memiliki order yang belum lunas (`InvoiceStatusEnum.unpaid` atau `partial`). Jika ada, pembuatan order baru ditolak dengan HTTP `409 Conflict`.
-2. **Validasi Produk & Minimum Order**:
+2. **Validasi Produk, Ketersediaan Stok & Minimum Order**:
    - Produk harus berstatus `is_active = True` dan sudah memiliki `harga_jual`.
-   - Kuantitas pesanan (`jumlah`) tidak boleh kurang dari `minimum_order` produk.
+   - **Ketersediaan Manual Seller**: Produk wajib memiliki status `is_available = True`. Jika seller menonaktifkan ketersediaan manual produk, sistem melempar HTTP `400 Bad Request` ("Produk 'X' sedang tidak tersedia.").
+   - **Ketersediaan Stok Bahan Baku (`is_in_stock`)**: Produk wajib memiliki `is_in_stock == True` dan `stock_quantity > 0`. Jika stok habis, sistem melempar HTTP `400 Bad Request` ("Stok produk 'X' sedang habis.").
+   - **Batas Kuantitas Pesanan**: Kuantitas pesanan (`jumlah`) tidak boleh melebihi `stock_quantity` yang tersedia, dan tidak boleh kurang dari `minimum_order` produk.
 3. **Kalkulasi Kebutuhan Bahan Baku (Bill of Materials)**:
    - Untuk setiap produk dalam pesanan, sistem mengalikan kuantitas pesanan dengan takaran bahan baku di tabel `recipes`:
      $$\text{total\_needed} = \text{jumlah pesanan} \times \text{jumlah\_dibutuhkan}$$
@@ -207,3 +209,23 @@ Sistem menerapkan proteksi ketat (Schema Hardening) berbasis Pydantic Validator 
    - **Teks Pendek (Nama)**: Maksimal 100 karakter.
    - **Teks Bebas (Alamat, Catatan/Notes)**: Dibatasi maksimal 500 karakter.
    - **Teks Ulasan (Review)**: Dibatasi maksimal 1000 karakter.
+
+---
+
+## 13. Logika Katalog Produk, Ketersediaan Stok & Resep (BOM)
+
+Sistem backend mengintegrasikan pemisahan status operasional seller dan ketersediaan fisik bahan baku secara akurat:
+1. **Dua Layer Status Ketersediaan**:
+   - `is_available: bool`: Status manual dari seller (Staff/Admin/Owner) yang tersimpan di kolom database `products.is_available` (default `True`). Seller dapat menonaktifkan produk kapan saja (misal: menu kue sedang tidak diproduksi hari ini).
+   - `stock_quantity: int`: Jumlah porsi kue yang dapat diproduksi secara fisik berdasarkan ketersediaan bahan baku di tabel `stock_items` dan takaran per kue di tabel `recipes`:
+     $$\text{stock\_quantity} = \min_{r \in \text{recipes}} \left\lfloor \frac{\text{stock\_item.stok\_tersedia}}{\text{r.jumlah\_dibutuhkan}} \right\rfloor$$
+     Jika produk belum memiliki resep atau salah satu bahan baku habis, bernilai `0`.
+   - `is_in_stock: bool`: Status ketersediaan komputasi gabungan:
+     $$\text{is\_in\_stock} = \text{is\_available} \land (\text{stock\_quantity} > 0)$$
+2. **Perilaku Endpoint Katalog (`GET /products`)**:
+   - **Default Behavior**: Menampilkan seluruh katalog produk aktif tanpa menyembunyikan atau memfilter keluar produk yang stoknya 0 / habis. Produk dengan stok 0 tetap dikembalikan dengan nilai `stock_quantity = 0` dan `is_in_stock = false` agar calon pembeli tetap dapat melihat katalog lengkap toko.
+   - **Filter Query `only_available=true`**: Jika klien mengirimkan query parameter `GET /products?only_available=true`, sistem akan menyaring dan hanya mereturn produk dengan `is_in_stock == True`.
+3. **Proteksi Checkout**:
+   - Endpoint pemesanan (`POST /orders` dan `POST /orders/buyer`) memvalidasi status ketersediaan secara ketat sebelum reservasi stok.
+   - Jika pembeli mencoba memesan produk dengan `is_in_stock == False` atau `stock_quantity == 0`, pesanan ditolak dengan HTTP `400 Bad Request` ("Stok produk 'X' sedang habis.").
+   - Jika kuantitas yang dipesan melebihi `stock_quantity`, pesanan ditolak dengan HTTP `400 Bad Request`.

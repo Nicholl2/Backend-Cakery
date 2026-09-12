@@ -33,9 +33,13 @@ async def get_all_products(
     db: AsyncSession,
     only_active: bool = False,
     kategori: Optional[str] = None,
+    only_available: bool = False,
 ) -> list[ProductOut]:
     products = await product_repo.get_all(db, only_active, kategori)
-    return [ProductOut.model_validate(p) for p in products]
+    serialized = [ProductOut.model_validate(p) for p in products]
+    if only_available:
+        return [p for p in serialized if p.is_in_stock]
+    return serialized
 
 
 async def get_product_or_404(db: AsyncSession, product_id: int) -> Product:

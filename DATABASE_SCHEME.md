@@ -138,6 +138,7 @@ Table products {
   hpp_total decimal(10,2) [default: 0, null]
   markup_percentage decimal(5,4) [null]
   is_active boolean [default: true]
+  is_available boolean [default: true, not null, note: 'Status ketersediaan manual dari seller']
   image_url varchar(500) [null]
   slug varchar(100) [unique, null]
   rating float [default: 0.0, not null]

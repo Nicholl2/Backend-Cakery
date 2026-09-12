@@ -81,6 +81,23 @@ async def create_new_order(
                     detail=f"Jumlah pesanan untuk '{product.nama_produk}' minimal {product.minimum_order} pcs.",
                 )
 
+            # Validasi ketersediaan manual & stok fisik produk
+            if not product.is_available:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Produk '{product.nama_produk}' sedang tidak tersedia.",
+                )
+            if not product.is_in_stock or product.stock_quantity <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Stok produk '{product.nama_produk}' sedang habis.",
+                )
+            if jumlah > product.stock_quantity:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Jumlah pesanan ({jumlah}) melebihi stok yang tersedia ({product.stock_quantity}) untuk produk '{product.nama_produk}'.",
+                )
+
             subtotal = Decimal(str(product.harga_jual)) * jumlah
             total_harga_pesanan += subtotal
 

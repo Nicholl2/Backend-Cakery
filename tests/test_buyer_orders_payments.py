@@ -5,8 +5,10 @@ import asyncio
 from decimal import Decimal
 import httpx
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.pool import StaticPool
 
-from app.core.database import AsyncSessionLocal, engine, Base
+from app.core.database import Base, get_db
 from app.core.config import settings
 from app.core.migrations import (
     ensure_product_columns,
@@ -29,8 +31,22 @@ from app.core.security import create_access_token
 async def run_tests():
     print("🚀 Starting Buyer Orders & Payments Integration Tests...")
 
+    test_engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        echo=False,
+    )
+    TestSessionLocal = async_sessionmaker(bind=test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_get_db():
+        async with TestSessionLocal() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+
     # 1. Ensure Migrations and Seed
-    async with engine.begin() as conn:
+    async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await ensure_product_columns(conn)
         await ensure_buyer_columns(conn)
@@ -39,7 +55,7 @@ async def run_tests():
         await ensure_otp_columns(conn)
         await ensure_order_columns(conn)
 
-    async with AsyncSessionLocal() as db:
+    async with TestSessionLocal() as db:
         await seed_initial_data(db)
 
         # Retrieve a seeded product
@@ -156,7 +172,7 @@ async def run_tests():
         # Test 7: Chatbot POST /orders using X-Service-Key
         print("\n7. Testing chatbot POST /orders with X-Service-Key...")
         # Create or fetch customer for chatbot
-        async with AsyncSessionLocal() as db:
+        async with TestSessionLocal() as db:
             cb_cust, _ = await customer_repo.upsert(db, nomor_wa="089999999999", nama="Chatbot Customer")
             await db.commit()
             cb_cust_id = cb_cust.id
@@ -216,7 +232,7 @@ async def run_tests():
         print("✓ Chatbot checked payment status with X-Service-Key (200)")
 
     # Cleanup test data
-    async with AsyncSessionLocal() as db:
+    async with TestSessionLocal() as db:
         for b_id in [buyer1_id, buyer2_id]:
             b = await buyer_repo.get_buyer_by_id(db, b_id)
             if b:
@@ -230,6 +246,9 @@ async def run_tests():
                     await db.delete(o)
                 await db.delete(c)
         await db.commit()
+
+    app.dependency_overrides.clear()
+    await test_engine.dispose()
 
     print("\n🎉 ALL TESTS PASSED! Buyer Orders & Payments JWT flow is 100% verified.")
 

@@ -612,5 +612,48 @@ curl -X POST "http://localhost:8000/orders/1/refund" \
 ```
 *Ekspektasi*: HTTP 403 Forbidden `{"detail": "Nomor WhatsApp tidak cocok dengan data pemesan"}`.
 
+---
+
+### Skenario 7: Penyesuaian Logika Query Produk, Schema Ketersediaan Stok & Proteksi Validasi Order
+
+#### A. Ringkasan Perubahan
+1. **Schema Layer (`app/schemas/product.py`)**:
+   - Menambahkan field eksplisit ketersediaan stok pada `ProductOut`:
+     * `is_available: bool` (status ketersediaan manual dari seller).
+     * `stock_quantity: int` (ketersediaan fisik porsi kue berdasarkan stok bahan di `stock_items` dan takaran di `recipes`).
+     * `is_in_stock: bool` (computed property: `is_available == True` dan `stock_quantity > 0`).
+   - Menyediakan alias Pydantic schema: `ProductResponse = ProductOut` dan `ProductRead = ProductOut`.
+   - Menambahkan field `is_available` pada `ProductCreate` (default `True`) dan `ProductUpdate` (opsional `bool`).
+
+2. **Model & Database Migration Layer (`app/models/product.py`, `app/core/migrations.py`)**:
+   - Mengubah `is_available` pada model SQLAlchemy `Product` menjadi kolom database:
+     `is_available = Column(Boolean, default=True, nullable=False)`
+   - Menambahkan computed property `@property def stock_quantity(self) -> int` yang menghitung takaran terendah dari seluruh bahan resep produk (`int(stok_tersedia // jumlah_dibutuhkan)`).
+   - Menambahkan computed property `@property def is_in_stock(self) -> bool` yang mengevaluasi `bool(self.is_available and self.stock_quantity > 0)`.
+   - Memperbarui migration otomatis `ensure_product_columns` untuk menambahkan kolom `is_available` pada PostgreSQL.
+
+3. **Service & Route Layer (`app/services/product_service.py`, `app/api/routes/product.py`)**:
+   - Menambahkan query parameter `only_available: bool = Query(False)` pada endpoint `GET /products/`.
+   - Default query tanpa param `only_available` tetap mengembalikan seluruh katalog produk aktif (termasuk yang stok habis / 0) dengan field `stock_quantity = 0` dan `is_in_stock = False`.
+   - Query `GET /products/?only_available=true` menyaring hanya produk yang `is_in_stock == True`.
+   - Endpoint `GET /products/{id}` mengembalikan detail produk beserta informasi ketersediaan stok.
+
+4. **Order Checkout Protection (`app/services/order_service.py`)**:
+   - Menambahkan validasi ketersediaan stok ketat pada `create_new_order`:
+     * Jika `product.is_available == False`, melempar HTTP 400: `"Produk '{nama_produk}' sedang tidak tersedia."`
+     * Jika `product.is_in_stock == False` atau `product.stock_quantity <= 0`, melempar HTTP 400: `"Stok produk '{nama_produk}' sedang habis."`
+     * Jika kuantitas pesanan melebihi stok yang ada, melempar HTTP 400: `"Jumlah pesanan ({jumlah}) melebihi stok yang tersedia ({stock_quantity}) untuk produk '{nama_produk}'."`
+
+#### B. Pengujian Terotomasi
+Jalankan test suite terisolasi baru:
+```bash
+venv/bin/pytest tests/test_product_stock_catalog.py -v
+```
+Seluruh 4 test cases memvalidasi:
+- Kesesuaian schema Pydantic `ProductResponse` / `ProductRead` dan kalkulasi computed `is_in_stock`.
+- Kalkulasi `stock_quantity` dari relasi `recipes` & `stock_items`.
+- Perilaku default katalog `GET /products/` menampilkan produk habis, dan pemfilteran saat `only_available=true`.
+- Penolakan pesanan saat produk habis atau melebihi stok dengan HTTP 400 dan pesan error yang tepat.
+
 
 

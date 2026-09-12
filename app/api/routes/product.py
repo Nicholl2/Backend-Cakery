@@ -24,13 +24,19 @@ async def create_product(data: ProductCreate, db: AsyncSession = Depends(get_db)
 
 
 @router.get("/", response_model=list[ProductOut],
-            summary="List produk — filter by is_active / kategori")
+            summary="List produk — filter by is_active / kategori / only_available")
 async def list_products(
     only_active: bool = Query(False, description="True = hanya produk aktif (untuk Buyer Site)"),
     kategori: Optional[str] = Query(None),
+    only_available: bool = Query(False, description="True = hanya produk dengan stok tersedia (is_in_stock == True)"),
     db: AsyncSession = Depends(get_db),
 ):
-    return await product_service.get_all_products(db, only_active, kategori)
+    return await product_service.get_all_products(
+        db,
+        only_active=only_active,
+        kategori=kategori,
+        only_available=only_available,
+    )
 
 
 @router.get("/{product_id}", response_model=ProductOut)

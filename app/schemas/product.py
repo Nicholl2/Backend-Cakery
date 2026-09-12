@@ -16,14 +16,16 @@ class ProductCreate(BaseModel):
     kategori: Optional[str] = Field(None, max_length=50)
     harga_jual: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     is_active: bool = True
+    is_available: bool = True
     minimum_order: int = Field(1, ge=1)
 
 
-# ── UPDATE (Hanya edit deskripsi, harga_jual, is_active, image_url, minimum_order) ──
+# ── UPDATE (Hanya edit deskripsi, harga_jual, is_active, is_available, image_url, minimum_order) ──
 class ProductUpdate(BaseModel):
     deskripsi: Optional[str] = None
     harga_jual: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     is_active: Optional[bool] = None
+    is_available: Optional[bool] = None
     image_url: Optional[str] = None
     minimum_order: Optional[int] = Field(None, ge=1)
 
@@ -59,7 +61,9 @@ class ProductOut(BaseModel):
     harga_jual: Optional[Decimal] = None
     markup_percentage: Optional[Decimal] = None
     is_active: bool
-    is_available: bool
+    is_available: bool = True
+    stock_quantity: int = 0
+    is_in_stock: bool = False
     image_url: Optional[str] = None
     
     # New catalog fields requested by Frontend
@@ -82,6 +86,11 @@ class ProductOut(BaseModel):
             if not data.get('parent_category') and data.get('kategori'):
                 data['parent_category'] = data['kategori']
         return data
+
+    @model_validator(mode='after')
+    def compute_stock_status(self):
+        self.is_in_stock = bool(self.is_available and (self.stock_quantity or 0) > 0)
+        return self
 
     @field_validator('hpp_total', 'harga_jual', mode='before')
     @classmethod
@@ -138,3 +147,8 @@ class PriceHistoryOut(BaseModel):
     created_at: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ── ALIASES ──────────────────────────────────────────────────────────────────
+ProductResponse = ProductOut
+ProductRead = ProductOut

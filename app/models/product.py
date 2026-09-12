@@ -16,6 +16,7 @@ class Product(Base):
     hpp_total = Column(Numeric(10, 2), nullable=True, default=0)
     markup_percentage = Column(Numeric(5, 4), nullable=True)
     is_active = Column(Boolean, default=True)
+    is_available = Column(Boolean, default=True, nullable=False)
     image_url = Column(String(500), nullable=True)
     
     # New catalog fields requested by Frontend
@@ -42,17 +43,26 @@ class Product(Base):
     price_histories = relationship("PriceHistory", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
 
     @property
-    def is_available(self) -> bool:
+    def stock_quantity(self) -> int:
         from sqlalchemy.orm import attributes
         state = attributes.instance_state(self)
-        if "recipes" in state.unloaded:
-            return True
-        if not self.recipes:
-            return True
+        if "recipes" in state.unloaded or not self.recipes:
+            return 0
+        max_creatable = None
         for r in self.recipes:
             r_state = attributes.instance_state(r)
-            if "stock_item" in r_state.unloaded:
+            if "stock_item" in r_state.unloaded or not r.stock_item:
+                return 0
+            if not r.jumlah_dibutuhkan or r.jumlah_dibutuhkan <= 0:
                 continue
-            if r.stock_item and r.stock_item.stok_tersedia < r.jumlah_dibutuhkan:
-                return False
-        return True
+            available_stock = r.stock_item.stok_tersedia or 0
+            if available_stock <= 0:
+                return 0
+            available = int(available_stock // r.jumlah_dibutuhkan)
+            if max_creatable is None or available < max_creatable:
+                max_creatable = available
+        return max(0, max_creatable if max_creatable is not None else 0)
+
+    @property
+    def is_in_stock(self) -> bool:
+        return bool(self.is_available and self.stock_quantity > 0)
