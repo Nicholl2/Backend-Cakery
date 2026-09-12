@@ -14,6 +14,11 @@ from app.core.state_machine import is_valid_payment_transition, is_payment_termi
 from app.models.order import Order, Invoice, OrderStatusEnum, InvoiceStatusEnum
 from app.models.payment import Payment, PaymentStatusEnum, PaymentTypeEnum
 from app.repositories import order_repo, payment_repo
+from app.services.chatbot_notify import (
+    notify_chatbot_order_event,
+    notify_payment_status,
+    notify_refund_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,12 +184,19 @@ async def create_midtrans_charge(
         "midtrans_response": res_json
     }
 
-async def _apply_transaction_status(db: AsyncSession, payment: Payment, payload: dict) -> None:
+async def _apply_transaction_status(
+    db: AsyncSession,
+    payment: Payment,
+    payload: dict,
+    commit: bool = False,
+) -> list[tuple[int, str]]:
     """
     Mapping status Midtrans ke PaymentStatusEnum dan otomasi update Invoice/Order.
     
     Dilindungi oleh State Machine — backward transition ditolak secara silent.
-    Caller bertanggung jawab untuk memanggil db.commit() setelah fungsi ini.
+    Jika commit=True, fungsi ini mengeksekusi await db.commit() TERLEBIH DAHULU
+    sebelum memicu webhook notification ke Chatbot (mencegah race condition uncommitted read).
+    Jika commit=False, mengembalikan list[tuple[order_id, event]] untuk dinotifikasi oleh caller sesudah commit.
     """
     txn_status = payload.get("transaction_status")
     status_map = {
@@ -210,7 +222,7 @@ async def _apply_transaction_status(db: AsyncSession, payment: Payment, payload:
             payment.id, old_status.value, new_status.value,
             payload.get("transaction_id"), txn_status,
         )
-        return  # Silently skip invalid/idempotent transition
+        return []  # Silently skip invalid/idempotent transition
 
     # ── APPLY TRANSITION ─────────────────────────────────────────────────────
     payment.payment_status = new_status
@@ -227,6 +239,8 @@ async def _apply_transaction_status(db: AsyncSession, payment: Payment, payload:
         payload.get("gross_amount"), txn_status,
     )
     
+    events_to_notify: list[tuple[int, str]] = []
+
     # ── ATURAN OTOMASI: Jika status payment berubah menjadi 'Success' ────────
     if new_status == PaymentStatusEnum.success:
         invoice_res = await db.execute(
@@ -276,9 +290,7 @@ async def _apply_transaction_status(db: AsyncSession, payment: Payment, payload:
                     invoice.status.value, total_success, invoice.total_tagihan,
                 )
 
-            # Trigger Chatbot Webhook untuk event paid
-            from app.services.chatbot_notify import notify_chatbot_order_event
-            await notify_chatbot_order_event(invoice.order_id, "paid")
+            events_to_notify.append((invoice.order_id, "paid"))
 
     elif new_status == PaymentStatusEnum.refunded:
         invoice_res = await db.execute(
@@ -323,9 +335,21 @@ async def _apply_transaction_status(db: AsyncSession, payment: Payment, payload:
                 invoice.id, old_invoice_status.value if hasattr(old_invoice_status, 'value') else old_invoice_status,
             )
 
-            # Trigger Chatbot Webhook untuk event refunded
-            from app.services.chatbot_notify import notify_chatbot_order_event
-            await notify_chatbot_order_event(invoice.order_id, "refunded")
+            events_to_notify.append((invoice.order_id, "refunded"))
+
+    # Jika commit diminta, commit transaksi database TERLEBIH DAHULU,
+    # baru kemudian eksekusi panggilan webhook keluar ke Chatbot.
+    if commit:
+        await db.commit()
+        for o_id, evt in events_to_notify:
+            if evt == "paid":
+                await notify_payment_status(o_id)
+            elif evt == "refunded":
+                await notify_refund_status(o_id)
+            else:
+                await notify_chatbot_order_event(o_id, evt)
+
+    return events_to_notify
 
 
 
@@ -413,8 +437,8 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
         return {"status": "skipped", "payment_status": payment.payment_status}
         
     # 4. Apply status transition (dilindungi State Machine di dalam fungsi)
-    await _apply_transaction_status(db, payment, payload)
-    await db.commit()
+    #    Commit transaksi DB sebelum memicu webhook Chatbot
+    await _apply_transaction_status(db, payment, payload, commit=True)
     return {"status": "success", "payment_status": payment.payment_status}
 
 
@@ -440,8 +464,8 @@ async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
             response = await client.get(url, headers=headers)
             if response.status_code == 200:
                 midtrans_payload = response.json()
-                await _apply_transaction_status(db, payment, midtrans_payload)
-                await db.commit()
+                # Commit DB terlebih dahulu sebelum memicu webhook Chatbot
+                await _apply_transaction_status(db, payment, midtrans_payload, commit=True)
                 await db.refresh(payment)
     except Exception as e:
         logger.error(f"Failed to refresh pending payment {payment.id} status: {e}")
@@ -453,10 +477,15 @@ async def get_payments_by_order(db: AsyncSession, order_id: int) -> List[Payment
     return await payment_repo.get_payments_by_order_id(db, order_id)
 
 
-async def process_refund(db: AsyncSession, order_id: int, reason: str) -> None:
+async def process_refund(db: AsyncSession, order_id: int, reason: str) -> str:
     """
     Proses refund untuk transaksi yang berstatus Success.
-    Mencoba memanggil API Refund/Cancel Midtrans, dengan fallback ke Refund Manual (offline).
+    Mencoba memanggil API Refund/Cancel Midtrans, dengan fallback ke Refund Manual (offline)
+    bila transaksi berupa VA / QRIS (HTTP 412) atau unsupported method.
+    
+    Mengembalikan mode refund:
+    - 'auto': jika direct refund Midtrans berhasil (200/201)
+    - 'manual': jika direct refund gagal (412 / unsupported / error) dan dicatat sebagai manual refund
     """
     payments = await get_payments_by_order(db, order_id)
     success_payments = [p for p in payments if p.payment_status == PaymentStatusEnum.success]
@@ -467,7 +496,11 @@ async def process_refund(db: AsyncSession, order_id: int, reason: str) -> None:
             detail="Tidak ada pembayaran sukses yang bisa di-refund untuk pesanan ini."
         )
 
+    refund_modes: list[str] = []
+
     for payment in success_payments:
+        payment_refund_mode = "manual"
+
         # Panggil API Refund/Cancel Midtrans jika memungkinkan
         if payment.pg_transaction_id:
             url = f"{settings.midtrans_api_url}/{payment.pg_transaction_id}/refund"
@@ -483,35 +516,75 @@ async def process_refund(db: AsyncSession, order_id: int, reason: str) -> None:
             }
             
             try:
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(timeout=10.0) as client:
                     response = await client.post(url, json=payload, headers=headers)
-                    res_json = response.json()
                     
-                    midtrans_status = str(res_json.get("status_code", ""))
-                    if not midtrans_status.startswith("2"):
+                    # 1. Error 412: Transaksi VA / QRIS tidak mendukung Direct Refund via API
+                    if response.status_code == 412:
                         logger.warning(
-                            "[REFUND_AUDIT] midtrans_api_failed | payment_id=%s | "
-                            "status_code=%s | message=%s | fallback=manual",
-                            payment.id, midtrans_status, res_json.get("status_message")
+                            "[REFUND_AUDIT] midtrans_api_unsupported_412 | payment_id=%s | "
+                            "method=%s | fallback=manual",
+                            payment.id, payment.payment_method
                         )
-                        # Fallback manual refund
+                        payment_refund_mode = "manual"
+                    elif response.status_code in [200, 201]:
+                        res_json = response.json()
+                        midtrans_status = str(res_json.get("status_code", ""))
+                        if midtrans_status.startswith("2"):
+                            payment_refund_mode = "auto"
+                            logger.info(
+                                "[REFUND_AUDIT] midtrans_api_success | payment_id=%s | "
+                                "refund_key=%s | refund_mode=auto",
+                                payment.id, payload["refund_key"]
+                            )
+                        elif midtrans_status == "412":
+                            logger.warning(
+                                "[REFUND_AUDIT] midtrans_api_unsupported_412_body | payment_id=%s | "
+                                "message=%s | fallback=manual",
+                                payment.id, res_json.get("status_message")
+                            )
+                            payment_refund_mode = "manual"
+                        else:
+                            logger.warning(
+                                "[REFUND_AUDIT] midtrans_api_failed | payment_id=%s | "
+                                "status_code=%s | message=%s | fallback=manual",
+                                payment.id, midtrans_status, res_json.get("status_message")
+                            )
+                            payment_refund_mode = "manual"
                     else:
-                        logger.info(
-                            "[REFUND_AUDIT] midtrans_api_success | payment_id=%s | "
-                            "refund_key=%s",
-                            payment.id, payload["refund_key"]
+                        logger.warning(
+                            "[REFUND_AUDIT] midtrans_api_non_2xx | payment_id=%s | "
+                            "http_status=%s | fallback=manual",
+                            payment.id, response.status_code
                         )
+                        payment_refund_mode = "manual"
             except Exception as e:
                 logger.error(f"Midtrans Refund API error for payment {payment.id}: {e}")
                 logger.warning(f"[REFUND_AUDIT] fallback=manual for payment {payment.id}")
-                
-        # Update status DB (Offline / Fallback manual if API fails, or Success if API succeeds)
-        # Because we already handled the order and stock rollback in _apply_transaction_status
+                payment_refund_mode = "manual"
+        else:
+            logger.info(f"[REFUND_AUDIT] No pg_transaction_id for payment {payment.id} | fallback=manual")
+            payment_refund_mode = "manual"
+
+        refund_modes.append(payment_refund_mode)
+
+        # Update status DB (Offline / Fallback manual jika API gagal, atau Success jika API berhasil)
+        # Dilakukan dengan commit=False agar seluruh payment diproses dalam satu atomic transaction
         fake_payload = {
             "transaction_status": "refund",
             "transaction_id": payment.pg_transaction_id,
             "order_id": str(order_id)
         }
-        await _apply_transaction_status(db, payment, fake_payload)
-        
+        await _apply_transaction_status(db, payment, fake_payload, commit=False)
+
+    # Commit seluruh mutasi status ke database terlebih dahulu
     await db.commit()
+
+    # Evaluasi status mode refund keseluruhan
+    overall_refund_mode = "auto" if refund_modes and all(m == "auto" for m in refund_modes) else "manual"
+
+    # Pemicu Webhook Chatbot dieksekusi SETELAH db.commit() berhasil dilakukan
+    await notify_refund_status(order_id)
+
+    return overall_refund_mode
+

@@ -636,10 +636,10 @@ async def cancel_and_refund_order(
     reason: str,
     is_service: bool = False,
     customer_phone: Optional[str] = None,
-) -> Order:
+):
     from app.services.payment_service import process_refund
-    from app.services.chatbot_notify import notify_chatbot_order_event
     from app.utils.phone import normalize_phone
+    from app.schemas.order import RefundResponse
     
     result = await db.execute(
         select(Order)
@@ -698,12 +698,13 @@ async def cancel_and_refund_order(
             detail="Hanya pesanan dengan status pembayaran DP/Lunas yang dapat diproses refund. Gunakan cancel biasa."
         )
 
-    # Call payment_service to do the API request & status change
-    await process_refund(db, order_id, reason)
+    # Panggil payment_service untuk eksekusi API Midtrans, commit DB, dan kirim webhook post-commit
+    refund_mode = await process_refund(db, order_id, reason)
 
-    # Trigger Chatbot Webhook untuk event refunded
-    await notify_chatbot_order_event(order_id, "refunded")
-    
-    # Re-fetch after updates
-    order_refetched = await order_repo.get_order_with_details(db, order_id)
-    return await _attach_payment_amounts(db, order_refetched)
+    return RefundResponse(
+        message="Order refund processed successfully",
+        order_id=order.id,
+        status=OrderStatusEnum.cancelled.value,
+        payment_status="refunded",
+        refund_mode=refund_mode,
+    )

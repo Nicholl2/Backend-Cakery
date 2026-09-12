@@ -136,8 +136,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `POST` | `/orders` | `X-Service-Key` | Buat order baru via chatbot (reservasi stok bahan via Optimistic Locking, generate invoice). |
 | `GET` | `/orders/latest` | `X-Service-Key` | Ambil order terbaru pelanggan berdasarkan query `?nomor_wa=...` |
 | `POST` | `/orders/{order_id}/cancel` | `X-Service-Key` | Pembatalan otomatis oleh pelanggan (hanya jika invoice `unpaid`, stok bahan dikembalikan). |
-| `PATCH` | `/orders/{order_id}/status` | Staff / Admin / Owner | Update status pesanan (`pending`, `in_process`, `ready`, `delivered`, `picked_up`, `cancelled`). Otomatis mengembalikan stok jika status diubah ke `cancelled` dan menembak push webhook saat `ready`. |
-| `POST` | `/orders/{order_id}/refund` | Staff/Admin/Owner OR `X-Service-Key` | Memproses pembatalan sekaligus refund untuk pesanan berstatus DP/Lunas. Memicu API Midtrans, rollback stok, dan trigger webhook `/refunded` ke Chatbot. Mendukung panggilan via `X-Service-Key` (Chatbot) dengan validasi kepemilikan `nomor_wa` dan status wajib `pending`. |
+| `POST` | `/orders/{order_id}/refund` | Staff/Admin/Owner OR `X-Service-Key` | Memproses pembatalan sekaligus refund untuk pesanan berstatus DP/Lunas. Memicu API Midtrans, rollback stok, dan trigger webhook `/refunded` ke Chatbot SETELAH database commit. Mendukung panggilan via `X-Service-Key` (Chatbot) dengan validasi kepemilikan `nomor_wa` dan status wajib `pending`. Mengembalikan payload DTO dengan penanda `refund_mode` (`auto` jika direct API Midtrans berhasil, atau `manual` jika metode VA/QRIS 412 yang mewajibkan transfer manual). |
 
 ---
 
@@ -216,10 +215,21 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 
 ### N. Outgoing Webhooks ke Chatbot Service
 
-Backend FastAPI mengirimkan notifikasi HTTP asynchronous (fire-and-forget, non-blocking) ke service Chatbot saat terjadi event-event penting pada pesanan:
+Backend FastAPI mengirimkan notifikasi HTTP asynchronous (fire-and-forget, non-blocking) ke service Chatbot saat terjadi event-event penting pada pesanan. Seluruh webhook ini dijamin dieksekusi **SETELAH `db.commit()`** berhasil dilakukan di database backend untuk mencegah *race condition* (misalnya Chatbot langsung memanggil `GET /payments/{id}/status` atau `/orders/{id}` namun mendapati data belum committed):
 
 | Target Chatbot Endpoint | Pemicu (Trigger Event) | Header Autentikasi | Request Body | Deskripsi |
 | :--- | :--- | :--- | :--- | :--- |
 | `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/ready` | Update status pesanan ke `ready` (`PATCH /orders/{order_id}/status`) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim pesan WA ke pelanggan bahwa pesanan kue sudah selesai dan siap diambil/dikirim. |
 | `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/paid` | Transaksi pembayaran berhasil settlement DP / Lunas (`_apply_transaction_status` pada Midtrans webhook & status check) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim notifikasi konfirmasi pembayaran berhasil ke WhatsApp pelanggan. |
 | `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/refunded` | Pembatalan & refund pesanan berhasil (`cancel_and_refund_order`) atau webhook status refund dari Midtrans | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot bahwa dana pesanan pelanggan telah direfund. |
+
+#### Struktur Response Endpoint Refund (`POST /orders/{order_id}/refund`):
+```json
+{
+  "message": "Order refund processed successfully",
+  "order_id": 57,
+  "status": "cancelled",
+  "payment_status": "refunded",
+  "refund_mode": "manual" // "auto" (direct API Midtrans sukses) atau "manual" (metode VA/QRIS 412 / pencatatan manual)
+}
+```

@@ -21,6 +21,7 @@ from app.schemas.order import (
     OrderOut,
     OrderStatusUpdate,
     RefundRequest,
+    RefundResponse,
 )
 from app.services import order_service
 
@@ -197,14 +198,14 @@ async def update_order_status(
     return OrderOut.model_validate(order)
 
 
-@router.post("/{order_id}/refund", response_model=OrderOut,
+@router.post("/{order_id}/refund", response_model=RefundResponse,
              summary="Proses refund untuk order yang sudah dibayar (Staff/Admin/Owner atau Chatbot Service Key)")
 async def refund_order(
     order_id: int,
     data: RefundRequest,
     auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
     db: AsyncSession = Depends(get_db),
-) -> OrderOut:
+) -> RefundResponse:
     """
     Melakukan proses refund untuk tagihan (Invoice) yang telah dibayar sebagian (DP) atau lunas.
     Dapat dipanggil oleh:
@@ -214,6 +215,9 @@ async def refund_order(
        - Hanya diizinkan jika status pesanan masih 'pending' (400 jika sudah in_process atau seterusnya).
     2. Internal Seller (Staff/Admin/Owner via Bearer JWT):
        - Fleksibel sesuai kebijakan toko.
+
+    Respons mengembalikan penanda refund_mode ('auto' jika API direct refund Midtrans berhasil,
+    atau 'manual' jika pembayaran via VA/QRIS 412 yang memerlukan refund manual).
     """
     if auth.is_service:
         is_service_call = True
@@ -231,11 +235,10 @@ async def refund_order(
             detail="Akses ditolak untuk peran ini."
         )
 
-    order = await order_service.cancel_and_refund_order(
+    return await order_service.cancel_and_refund_order(
         db=db,
         order_id=order_id,
         reason=data.reason,
         is_service=is_service_call,
         customer_phone=data.nomor_wa,
     )
-    return OrderOut.model_validate(order)

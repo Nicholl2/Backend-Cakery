@@ -99,6 +99,19 @@ class RefundRequest(BaseModel):
         return sanitize_text(v)
 
 
+class RefundResponse(BaseModel):
+    message: str = "Order refund processed successfully"
+    order_id: int
+    status: str
+    payment_status: str
+    refund_mode: str  # "auto" | "manual"
+
+    model_config = ConfigDict(from_attributes=True)
+
+    def __getitem__(self, item):
+        return getattr(self, item)
+
+
 # ── OUTPUT ───────────────────────────────────────────────────────────────────
 
 class CustomerOrderOut(BaseModel):

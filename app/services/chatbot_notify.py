@@ -32,3 +32,20 @@ async def notify_chatbot_order_event(order_id: int, event: str) -> None:
         logger.error(
             f"[CHATBOT_WEBHOOK_ERROR] Failed notifying chatbot for order {order_id} (event: '{event}'): {e}"
         )
+
+
+async def notify_payment_status(order_id: int, status: str = "paid") -> None:
+    """
+    Kirim notifikasi status pembayaran berhasil ke webhook Chatbot.
+    Harus dieksekusi SETELAH db.commit() selesai.
+    """
+    await notify_chatbot_order_event(order_id, status)
+
+
+async def notify_refund_status(order_id: int) -> None:
+    """
+    Kirim notifikasi refund berhasil ke webhook Chatbot.
+    Harus dieksekusi SETELAH db.commit() selesai.
+    """
+    await notify_chatbot_order_event(order_id, "refunded")
+

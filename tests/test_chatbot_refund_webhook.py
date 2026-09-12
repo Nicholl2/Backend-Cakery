@@ -262,7 +262,11 @@ async def run_chatbot_refund_tests():
             assert res.status_code == 200, f"Expected 200 for chatbot refund on pending order, got {res.status_code} - {res.text}"
             order_resp = res.json()
             assert order_resp["status"] == "cancelled"
-            print(f"  ✓ Chatbot successfully refunded order 1 (status={order_resp['status']})")
+            assert order_resp["order_id"] == 1
+            assert order_resp["payment_status"] == "refunded"
+            assert "refund_mode" in order_resp
+            assert order_resp["refund_mode"] in ["auto", "manual"]
+            print(f"  ✓ Chatbot successfully refunded order 1 (status={order_resp['status']}, refund_mode={order_resp['refund_mode']})")
 
             # Check that refunded webhook was called for order 1
             mock_webhook.assert_called()
@@ -283,8 +287,13 @@ async def run_chatbot_refund_tests():
                 headers=admin_headers,
             )
             assert res.status_code == 200, f"Admin refund failed: {res.status_code} - {res.text}"
-            assert res.json()["status"] == "cancelled"
-            print("  ✓ Admin successfully refunded 'in_process' order without nomor_wa (200 OK)")
+            admin_resp = res.json()
+            assert admin_resp["status"] == "cancelled"
+            assert admin_resp["order_id"] == 2
+            assert admin_resp["payment_status"] == "refunded"
+            assert "refund_mode" in admin_resp
+            assert admin_resp["refund_mode"] in ["auto", "manual"]
+            print(f"  ✓ Admin successfully refunded 'in_process' order without nomor_wa (200 OK, refund_mode={admin_resp['refund_mode']})")
 
             # Check that refunded webhook was called for order 2
             mock_webhook.assert_called()
@@ -332,16 +341,15 @@ async def run_chatbot_refund_tests():
             db.add(pay3)
             await db.commit()
 
-        # Simulate settlement webhook or _apply_transaction_status
+        # Simulate settlement webhook or _apply_transaction_status with commit=True
         from app.services.payment_service import _apply_transaction_status
         with patch("app.services.chatbot_notify.notify_chatbot_order_event", new_callable=AsyncMock) as mock_webhook:
             async with TestSessionLocal() as db:
                 p = await db.scalar(select(Payment).where(Payment.id == 3))
-                await _apply_transaction_status(db, p, {"transaction_status": "settlement"})
-                await db.commit()
+                await _apply_transaction_status(db, p, {"transaction_status": "settlement"}, commit=True)
 
             mock_webhook.assert_called_with(3, "paid")
-            print("  ✓ Chatbot webhook 'paid' event successfully triggered on settlement!")
+            print("  ✓ Chatbot webhook 'paid' event successfully triggered on settlement post-commit!")
 
     app.dependency_overrides.clear()
     print("\n🎉 ALL CHATBOT REFUND & WEBHOOK INTEGRATION TESTS PASSED!\n")

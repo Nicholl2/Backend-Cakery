@@ -6,6 +6,30 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001f. Post-Commit Webhook Notifications & Refund Mode Indicator (Auto vs Manual 412 Handling)
+- **Urutan Pemanggilan Webhook Notification (Post-Commit Execution) (`app/services/payment_service.py`, `app/services/chatbot_notify.py`)**:
+  - Memastikan panggilan webhook notifikasi keluar ke Chatbot (`notify_payment_status` / `notify_refund_status`) **DIJAMIN** dieksekusi **SETELAH `db.commit()`** berhasil dilakukan di database backend.
+  - Memperbarui fungsi `_apply_transaction_status` dengan parameter `commit: bool = False` yang mengumpulkan daftar event tertunda (`events_to_notify`). Jika `commit=True`, fungsi akan mengeksekusi `await db.commit()` terlebih dahulu sebelum menembak notifikasi HTTP ke Chatbot.
+  - Mencegah potensi *race condition* di mana Chatbot yang menerima webhook secara instan melakukan query `GET /payments/{id}/status` atau `/orders/{id}` namun mendapati status transaksi belum ter-update karena database masih dalam status *uncommitted*.
+- **Penanda `refund_mode` & Penanganan Direct Midtrans Refund Failure (VA / QRIS HTTP 412) (`app/services/payment_service.py`, `app/services/order_service.py`, `app/schemas/order.py`, `app/api/routes/order.py`)**:
+  - Transaksi berbasis Virtual Account (BCA VA, BNI VA, dll.) dan QRIS tidak mendukung Direct Refund via API Midtrans (Midtrans mengembalikan respons HTTP 412 *Precondition Failed*).
+  - Memperbarui fungsi `process_refund()` agar menangani HTTP 412, body status `412`, non-2xx status, atau error koneksi secara elegan tanpa melempar exception fatal, dan otomatis jatuh ke mekanisme *manual refund* (pembukuan database backend tetap diselesaikan).
+  - Menambahkan schema baru `RefundResponse` pada `app/schemas/order.py` dan memperbarui respons endpoint `POST /orders/{order_id}/refund`:
+    ```json
+    {
+      "message": "Order refund processed successfully",
+      "order_id": 57,
+      "status": "cancelled",
+      "payment_status": "refunded",
+      "refund_mode": "manual"
+    }
+    ```
+    - `"refund_mode": "auto"`: Panggilan API Direct Refund ke Midtrans berhasil (status 200/201).
+    - `"refund_mode": "manual"`: Panggilan API Midtrans gagal (error HTTP 412 untuk VA/QRIS, gateway error, atau pencatatan refund manual admin).
+- **Pengujian & Verifikasi Terintegrasi**:
+  - Diperbarui pada `tests/test_refund.py`: Pengujian alur refund sukses (`refund_mode: "auto"`) serta skenario uji khusus Midtrans HTTP 412 (VA method) yang memverifikasi fallback ke `refund_mode: "manual"`.
+  - Diperbarui pada `tests/test_chatbot_refund_webhook.py`: Verifikasi response payload `RefundResponse` lengkap dan pemicu webhook notifikasi post-commit.
+
 ### 001e. Chatbot Webhook Triggers & Service-to-Service Refund
 - **Sentralisasi Notifikasi Webhook Chatbot (`app/services/chatbot_notify.py`, `app/services/payment_service.py`, `app/services/order_service.py`)**:
   - Disediakan helper asinkron `notify_chatbot_order_event(order_id: int, event: str)` yang mengirimkan HTTP POST non-blocking (fire-and-forget) ke endpoint Chatbot internal dengan header `X-Internal-Key: <CHATBOT_INTERNAL_KEY>`.
@@ -531,7 +555,17 @@ curl -X POST "http://localhost:8000/orders/1/refund" \
      -H "Content-Type: application/json" \
      -d '{"reason": "Pelanggan membatalkan pesanan", "nomor_wa": "081234567890"}'
 ```
-*Ekspektasi*: HTTP 200 OK dengan status order berubah ke `cancelled` dan webhook `POST {CHATBOT_URL}/webhook/internal/orders/1/refunded` tertembak.
+*Ekspektasi*: HTTP 200 OK dengan format response:
+```json
+{
+  "message": "Order refund processed successfully",
+  "order_id": 1,
+  "status": "cancelled",
+  "payment_status": "refunded",
+  "refund_mode": "auto" // atau "manual" jika metode pembayaran VA/QRIS (HTTP 412)
+}
+```
+dan webhook `POST {CHATBOT_URL}/webhook/internal/orders/1/refunded` tertembak **SETELAH** commit database selesai.
 
 - **Refund Ditolak Karena Nomor WA Berbeda**:
 ```bash

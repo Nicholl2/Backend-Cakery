@@ -87,6 +87,7 @@ async def test_order_refund_flow():
             # Mock success response dari Midtrans Refund API
             from unittest.mock import AsyncMock
             mock_response = MagicMock()
+            mock_response.status_code = 200
             mock_response.json.return_value = {
                 "status_code": "200",
                 "status_message": "Refund success",
@@ -95,10 +96,13 @@ async def test_order_refund_flow():
             mock_client.return_value.__aenter__.return_value.post = AsyncMock(return_value=mock_response)
             
             # Panggil service
-            refunded_order = await cancel_and_refund_order(db, order.id, "Stok habis")
+            refund_res = await cancel_and_refund_order(db, order.id, "Stok habis")
             
             # Verifikasi mock terpanggil
             assert mock_client.return_value.__aenter__.return_value.post.called
+            assert refund_res.refund_mode == "auto", f"Expected auto refund_mode, got {refund_res.refund_mode}"
+            assert refund_res.status == "cancelled"
+            assert refund_res.payment_status == "refunded"
 
             # Verifikasi perubahan statenya
             await db.refresh(order)
@@ -108,7 +112,53 @@ async def test_order_refund_flow():
             assert order.status == OrderStatusEnum.cancelled, f"Order status should be cancelled, got {order.status}"
             assert invoice.status == InvoiceStatusEnum.refunded, f"Invoice status should be refunded, got {invoice.status}"
             assert payment.payment_status == PaymentStatusEnum.refunded, f"Payment status should be refunded, got {payment.payment_status}"
-            print("✓ Service Refund memicu update DB dengan benar (Order cancelled, Invoice refunded, Payment refunded)")
+            print("✓ Service Refund memicu update DB dengan benar (Order cancelled, Invoice refunded, Payment refunded, refund_mode=auto)")
+
+        # 3. Test HTTP 412 Midtrans Fallback to Manual Refund (VA / QRIS)
+        # Buat order baru dengan status in_process & payment success
+        order412 = Order(
+            customer_id=customer.id,
+            status=OrderStatusEnum.in_process,
+            total_harga_pesanan=Decimal("80000.00"),
+            metode_pengiriman=MetodePengirimanEnum.pickup
+        )
+        db.add(order412)
+        await db.flush()
+        
+        invoice412 = Invoice(
+            order_id=order412.id,
+            nomor_invoice="INV-REFUND-412",
+            total_tagihan=Decimal("80000.00"),
+            status=InvoiceStatusEnum.partial
+        )
+        db.add(invoice412)
+        await db.flush()
+        
+        payment412 = Payment(
+            invoice_id=invoice412.id,
+            pg_transaction_id="mock-pg-id-412",
+            jumlah_bayar=Decimal("40000.00"),
+            payment_method="bank_transfer", # VA method unsupported for direct refund
+            payment_status=PaymentStatusEnum.success,
+            payment_type=PaymentTypeEnum.dp
+        )
+        db.add(payment412)
+        await db.commit()
+
+        with patch('app.services.payment_service.httpx.AsyncClient') as mock_client_412:
+            mock_412 = MagicMock()
+            mock_412.status_code = 412
+            mock_412.json.return_value = {
+                "status_code": "412",
+                "status_message": "Merchant cannot refund this transaction"
+            }
+            mock_client_412.return_value.__aenter__.return_value.post = AsyncMock(return_value=mock_412)
+
+            res_412 = await cancel_and_refund_order(db, order412.id, "Batal VA")
+            assert res_412.refund_mode == "manual", f"Expected manual refund_mode for 412, got {res_412.refund_mode}"
+            assert res_412.status == "cancelled"
+            assert res_412.payment_status == "refunded"
+            print("✓ HTTP 412 Midtrans ditangani dengan baik dan jatuh ke refund_mode=manual")
 
     await test_engine.dispose()
     print("✅ Refund DP Flow Test Passed!")
