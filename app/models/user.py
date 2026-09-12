@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, inspect
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -22,10 +22,16 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
-    role = relationship("Role")
+    role = relationship("Role", lazy="selectin")
 
     @property
     def role_name(self) -> str:
+        try:
+            ins = inspect(self)
+            if ins is not None and "role" in ins.unloaded:
+                return ""
+        except Exception:
+            pass
         if self.role:
             return self.role.nama_role
         return ""

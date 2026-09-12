@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status, UploadFile
 from app.repositories import user_repo
 from app.schemas.user import (
@@ -55,8 +56,6 @@ async def update_takeover_handler(
     return UserTakeoverResponse.model_validate(user)
 
 
-from sqlalchemy import select, func
-
 async def create_user(db: AsyncSession, data: UserCreate) -> User:
     # 1. Map role to role_id jika role_id tidak dikirim tapi role dikirim
     if data.role_id is None:
@@ -96,7 +95,8 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
     # 4. Cek role eksistensi di DB
     role_stmt = select(Role).where(Role.id == data.role_id)
     role_res = await db.execute(role_stmt)
-    if not role_res.scalars().first():
+    role_obj = role_res.scalars().first()
+    if not role_obj:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Role ID {data.role_id} tidak valid/tidak ditemukan"
@@ -115,12 +115,15 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
         email=data.email,
         phone_number=data.phone_number,
     )
+    new_user.role = role_obj
     
     try:
         db.add(new_user)
         await db.commit()
-        await db.refresh(new_user)
-        return new_user
+        stmt = select(User).options(selectinload(User.role)).where(User.id == new_user.id)
+        result = await db.execute(stmt)
+        user = result.scalars().first()
+        return user or new_user
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Gagal menyimpan user: {str(e)}")
@@ -165,8 +168,9 @@ async def bootstrap_owner(db: AsyncSession, data: UserBootstrap) -> User:
     )
     db.add(owner_user)
     await db.commit()
-    await db.refresh(owner_user)
-    return owner_user
+    stmt = select(User).options(selectinload(User.role)).where(User.id == owner_user.id)
+    result = await db.execute(stmt)
+    return result.scalars().first() or owner_user
 
 
 async def upload_user_avatar(db: AsyncSession, user_id: int, file: UploadFile) -> User:
@@ -236,8 +240,9 @@ async def update_user_profile(db: AsyncSession, user_id: int, data: UserProfileU
         user.nomor_wa_admin = data.nomor_wa_admin
 
     await db.commit()
-    await db.refresh(user)
-    return user
+    stmt = select(User).options(selectinload(User.role)).where(User.id == user.id)
+    res = await db.execute(stmt)
+    return res.scalars().first() or user
 
 
 async def change_user_password(db: AsyncSession, user_id: int, data: ChangePasswordRequest) -> None:
@@ -314,12 +319,14 @@ async def admin_update_user(
     # Update role jika disediakan
     if data.role_id is not None:
         role_res = await db.execute(select(Role).where(Role.id == data.role_id))
-        if not role_res.scalars().first():
+        role_obj = role_res.scalars().first()
+        if not role_obj:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Role ID {data.role_id} tidak valid"
             )
         user.role_id = data.role_id
+        user.role = role_obj
     elif data.role is not None:
         role_input = data.role.strip().lower()
         role_res = await db.execute(select(Role).where(func.lower(Role.nama_role) == role_input))
@@ -330,6 +337,7 @@ async def admin_update_user(
                 detail=f"Role '{data.role}' tidak valid. Pilihan: owner, admin, staff"
             )
         user.role_id = role_obj.id
+        user.role = role_obj
 
     if data.handles_takeover is not None:
         user.handles_takeover = data.handles_takeover
@@ -346,8 +354,9 @@ async def admin_update_user(
         user.password_hash = hash_password(data.password)
 
     await db.commit()
-    await db.refresh(user)
-    return user
+    stmt = select(User).options(selectinload(User.role)).where(User.id == user.id)
+    res = await db.execute(stmt)
+    return res.scalars().first() or user
 
 
 async def deactivate_user(db: AsyncSession, target_user_id: int, current_user_id: int) -> User:
@@ -365,8 +374,9 @@ async def deactivate_user(db: AsyncSession, target_user_id: int, current_user_id
         )
     user.is_active = False
     await db.commit()
-    await db.refresh(user)
-    return user
+    stmt = select(User).options(selectinload(User.role)).where(User.id == user.id)
+    res = await db.execute(stmt)
+    return res.scalars().first() or user
 
 
 async def delete_user(db: AsyncSession, target_user_id: int, current_user_id: int) -> dict:

@@ -6,6 +6,20 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001g. User Service Eager Loading & Fix MissingGreenlet (POST /users & User Queries)
+- **Eager Loading Relasi Role & Proteksi `role_name` (`app/models/user.py`)**:
+  - Menetapkan konfigurasi `lazy="selectin"` pada relasi `role = relationship("Role", lazy="selectin")` di model `User`, sehingga setiap kali model `User` dimuat oleh SQLAlchemy secara asinkron, data relasi `Role` otomatis di-eager load tanpa memicu eksekusi IO sinkron tersembunyi.
+  - Memperbarui property `role_name` dengan pemeriksaan status `inspect(self).unloaded`. Jika relasi `role` belum dimuat atau dalam status unattached/detached, property secara aman mengembalikan `""` (empty string) alih-alih mencoba melakukan lazy loading sinkron yang memicu fatal error `sqlalchemy.exc.MissingGreenlet`.
+- **Eager Loading pada Repository & Service User (`app/repositories/user_repo.py`, `app/services/user_service.py`)**:
+  - Pada `app/repositories/user_repo.py`, seluruh query pengguna (`get_user_by_username`, `get_user_by_id`, `get_user_role_level`, `get_takeover_handlers`, `get_user_by_email`, `get_user_by_phone`, `get_all_users`) kini secara konsisten menggunakan opsi eager loading `selectinload(User.role)`.
+  - Fungsi `update_avatar_url` kini me-reload user dengan `selectinload(User.role)` setelah `await db.commit()`.
+  - Pada `app/services/user_service.py`, fungsi `create_user()` kini mengaitkan instance `new_user.role = role_obj` secara eksplisit dan melakukan re-fetch user lengkap dengan `options(selectinload(User.role))` setelah `await db.commit()`. Hal ini menjamin saat FastAPI mereturn response Pydantic `UserOut.model_validate(user)`, atribut `role_name` dan `role` sudah siap terbaca tanpa error 500.
+  - Perbaikan re-query serupa juga diterapkan pada mutasi user lainnya (`bootstrap_owner`, `update_user_profile`, `admin_update_user`, `deactivate_user`). Pada `admin_update_user`, pengubahan `role` atau `role_id` langsung mengikat objek role baru (`user.role = role_obj`) sehingga serialisasi response konsisten seketika.
+- **Automated Test Suite Baru (`tests/test_user_management.py`)**:
+  - Verifikasi pembuatan user baru via `POST /users` (Owner) untuk Admin (`role_id=2`) dan Staff (`role="staff"`) menghasilkan HTTP 201 dengan `role_name` & `role` terisi lengkap tanpa melempar HTTP 500 `MissingGreenlet`.
+  - Verifikasi `GET /users`, `GET /users/me`, `PUT /users/me`, `PUT /users/{id}`, dan `PATCH /users/{id}/deactivate`.
+  - Verifikasi eksekusi direct service `create_user` dalam session terisolasi untuk mereplikasi siklus request asinkron murni.
+
 ### 001f. Post-Commit Webhook Notifications & Refund Mode Indicator (Auto vs Manual 412 Handling)
 - **Urutan Pemanggilan Webhook Notification (Post-Commit Execution) (`app/services/payment_service.py`, `app/services/chatbot_notify.py`)**:
   - Memastikan panggilan webhook notifikasi keluar ke Chatbot (`notify_payment_status` / `notify_refund_status`) **DIJAMIN** dieksekusi **SETELAH `db.commit()`** berhasil dilakukan di database backend.

@@ -204,7 +204,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `POST` | `/users/me/change-password` | Authenticated User | Ubah password akun user yang sedang login dengan memverifikasi `old_password` terlebih dahulu |
 | `POST` | `/users/me/avatar` | Authenticated User | Upload foto avatar akun internal langsung di-stream ke Cloudinary (`toti-cakery/avatars/`, maks 5MB, format JPEG/PNG/WEBP), simpan `secure_url` ke database |
 | `GET` | `/users` | Owner Only | List seluruh akun pengguna internal (Owner, Admin, Staff). Dilindungi guard RBAC: Admin & Staff ditolak (403 Forbidden) |
-| `POST` | `/users` | Owner Only | Daftarkan akun internal baru (Owner, Admin, atau Staff) |
+| `POST` | `/users` | Owner Only | Daftarkan akun internal baru (Owner, Admin, atau Staff). Response mengembalikan `UserOut` lengkap (`id`, `username`, `role_id`, `role_name`, `role`, `handles_takeover`, `is_active`, dll.) dengan relasi `role` yang di-eager load |
 | `PUT` / `PATCH` | `/users/{user_id}` | Owner Only | Edit data akun pengguna internal lain oleh Owner (role, handles_takeover, status aktif, reset password, dll.). Owner tidak bisa menonaktifkan diri sendiri |
 | `PATCH` | `/users/{user_id}/deactivate` | Owner Only | Deaktivasi akun pengguna internal (`is_active = False`) oleh Owner. Owner tidak bisa menonaktifkan diri sendiri |
 | `DELETE` | `/users/{user_id}` | Owner Only | Hapus akun pengguna internal (atau soft-deactivate jika terdapat riwayat transaksi) oleh Owner |
