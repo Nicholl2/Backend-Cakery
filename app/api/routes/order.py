@@ -5,7 +5,7 @@ from typing import Optional
 from app.core.rate_limiter import limiter, RATE_ORDER_CREATE
 
 from app.core.database import get_db
-from app.api.dependencies import require_service_key, require_admin_or_owner, get_current_buyer
+from app.api.dependencies import require_service_key, require_internal_user, get_current_buyer
 from app.models.buyer import Buyer
 from app.models.order import OrderStatusEnum
 from app.schemas.order import (
@@ -78,8 +78,8 @@ async def get_buyer_order_detail(
 # ── CHATBOT & ADMIN/SELLER ORDER ENDPOINTS ──────────────────────────────────
 
 @router.get("", response_model=list[OrderOut],
-            dependencies=[Depends(require_admin_or_owner)],
-            summary="List seluruh pesanan toko (Khusus Admin/Owner/Seller)")
+            dependencies=[Depends(require_internal_user)],
+            summary="List seluruh pesanan toko (Khusus Staff/Admin/Owner)")
 async def list_seller_orders(
     status: Optional[OrderStatusEnum] = Query(None, description="Filter status pesanan"),
     limit: int = Query(100, ge=1, le=500, description="Jumlah data per halaman"),
@@ -87,7 +87,7 @@ async def list_seller_orders(
     db: AsyncSession = Depends(get_db),
 ) -> list[OrderOut]:
     """
-    Mengambil daftar seluruh pesanan untuk Seller/Admin dengan relasi lengkap (Customer, OrderItems, Invoice, Payments).
+    Mengambil daftar seluruh pesanan untuk Seller (Staff/Admin/Owner) dengan relasi lengkap (Customer, OrderItems, Invoice, Payments).
     """
     orders = await order_service.get_seller_orders(
         db,
@@ -121,8 +121,8 @@ async def create_order(
 
 
 @router.post("/custom", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
-             dependencies=[Depends(require_admin_or_owner)],
-             summary="Buat custom order tanpa master produk (Khusus Admin/Owner/Seller)")
+             dependencies=[Depends(require_internal_user)],
+             summary="Buat custom order tanpa master produk (Khusus Staff/Admin/Owner)")
 @limiter.limit(RATE_ORDER_CREATE)
 async def create_custom_order(
     request: Request,
@@ -161,29 +161,29 @@ async def cancel_order(
 
 
 @router.get("/{order_id}", response_model=OrderOut,
-            dependencies=[Depends(require_admin_or_owner)],
-            summary="Detail pesanan berdasarkan ID (Khusus Admin/Owner/Seller)")
+            dependencies=[Depends(require_internal_user)],
+            summary="Detail pesanan berdasarkan ID (Khusus Staff/Admin/Owner)")
 async def get_seller_order_detail(
     order_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
     """
-    Mengambil detail pesanan spesifik untuk Admin/Owner dengan relasi lengkap.
+    Mengambil detail pesanan spesifik untuk Seller (Staff/Admin/Owner) dengan relasi lengkap.
     """
     order = await order_service.get_seller_order_by_id(db, order_id)
     return OrderOut.model_validate(order)
 
 
 @router.patch("/{order_id}/status", response_model=OrderOut,
-              dependencies=[Depends(require_admin_or_owner)],
-              summary="Update status order oleh admin")
+              dependencies=[Depends(require_internal_user)],
+              summary="Update status order oleh seller")
 async def update_order_status(
     order_id: int,
     data: OrderStatusUpdate,
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
     """
-    Update status order oleh Admin/Owner. Nilai status: pending, in_process, ready, delivered, picked_up, cancelled.
+    Update status order oleh Seller (Staff/Admin/Owner). Nilai status: pending, in_process, ready, delivered, picked_up, cancelled.
     Jika status diubah menjadi 'ready', memicu push notification webhook ke Chatbot Service.
     Jika status diubah menjadi 'cancelled', stok bahan baku pesanan biasa akan dikembalikan secara otomatis.
     """
@@ -192,8 +192,8 @@ async def update_order_status(
 
 
 @router.post("/{order_id}/refund", response_model=OrderOut,
-             dependencies=[Depends(require_admin_or_owner)],
-             summary="Proses refund untuk order yang sudah dibayar (Khusus Admin/Owner)")
+              dependencies=[Depends(require_internal_user)],
+              summary="Proses refund untuk order yang sudah dibayar (Khusus Staff/Admin/Owner)")
 async def refund_order(
     order_id: int,
     data: RefundRequest,

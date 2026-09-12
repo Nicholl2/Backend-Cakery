@@ -344,7 +344,18 @@ async def _attach_payment_amounts(db: AsyncSession, order: Order) -> Order:
         
     order.amount_paid = amount_paid
     order.amount_due = amount_due
+
+    # Pastikan setiap order item memiliki product_name terisi dari relasi database
+    if order.order_items:
+        for item in order.order_items:
+            if not getattr(item, "product_name", None):
+                if item.product:
+                    item.product_name = getattr(item.product, "nama_produk", None) or getattr(item.product, "name", None)
+                elif item.custom_product_name:
+                    item.product_name = item.custom_product_name
+
     return order
+
 
 
 async def get_seller_orders(

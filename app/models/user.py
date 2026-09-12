@@ -23,6 +23,13 @@ class User(Base):
 
     # Relationships
     role = relationship("Role")
+
+    @property
+    def role_name(self) -> str:
+        if self.role:
+            return self.role.nama_role
+        return ""
+
     faq_items = relationship("FaqItem", back_populates="created_by_user", foreign_keys="FaqItem.created_by")
     expenses = relationship("Expense", back_populates="recorded_by_user")
     stock_items_updated = relationship("StockItem", back_populates="last_updated_by_user")

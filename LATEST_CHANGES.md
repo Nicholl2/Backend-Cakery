@@ -6,6 +6,30 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001d. Frontend ↔ Backend Integration Fixes (Order & Seller Settings)
+- **Penyesuaian RBAC Order Seller (`app/api/routes/order.py`, `app/api/dependencies.py`)**:
+  - Mengubah dependency guard pada endpoint manajemen order seller (`GET /orders`, `POST /orders/custom`, `GET /orders/{order_id}`, `PATCH /orders/{order_id}/status`, `POST /orders/{order_id}/refund`) dari `require_admin_or_owner` menjadi `require_internal_user` (level 3).
+  - Role **Staff** kini diizinkan penuh mengelola pesanan seller dan tidak lagi menerima error HTTP 403 Forbidden.
+- **Product Name di OrderItem Schema (`app/schemas/order.py`, `app/models/order.py`, `app/models/product.py`, `app/services/order_service.py`)**:
+  - Menambahkan field `product_name: Optional[str] = None` pada schema `OrderItemOut` beserta alias `OrderItemRead` & `OrderItemResponse`.
+  - Menambahkan properti `name` pada model `Product` dan properti `product_name` dengan getter/setter pada model `OrderItem`.
+  - Memastikan seluruh order item pada respons diperkaya dengan nama produk dari relasi database (`item.product.nama_produk` untuk master product atau `item.custom_product_name` untuk custom order) sehingga Frontend tidak lagi fallback ke 'Product #ID'.
+- **Hardening Exception Polling Payment (`app/api/routes/payment.py`, `app/api/dependencies.py`)**:
+  - Endpoint `GET /payments/{order_id}/status` kini melakukan validasi eksistensi order lebih awal (mengembalikan 404 jika tidak ditemukan).
+  - Membungkus seluruh alur pemeriksaan status dalam `try-except` spesifik untuk menangani `HTTPException`, `SQLAlchemyError` (500), `AttributeError` (500), dan `Exception` tak terduga.
+  - Memperbaiki dependency `get_auth_identity_optional_service_or_jwt` agar error internal database melempar status 500, bukan 401. Memastikan Frontend tidak keliru menganggap sesi login kedaluwarsa saat terjadi kendala internal.
+- **Modul Seller Settings & User Management Endpoints (`app/api/routes/user.py`, `app/schemas/user.py`, `app/repositories/user_repo.py`, `app/services/user_service.py`)**:
+  - `GET /users/me`: Mengambil data profil user seller internal yang sedang login (dilengkapi field `role_name` dan `role`).
+  - `PUT/PATCH /users/me`: Update profil user yang sedang login (`username`, `email`, `phone_number`, `nomor_wa_admin`) dengan validasi keunikan.
+  - `POST /users/me/change-password`: Ubah password user yang sedang login dengan memverifikasi `old_password` menggunakan hashing Bcrypt.
+  - `GET /users`: List seluruh akun internal (Owner, Admin, Staff). Diproteksi dengan RBAC `require_owner` (Admin & Staff menerima 403 Forbidden).
+  - `PUT/PATCH /users/{user_id}`: Edit data akun pengguna internal lain oleh Owner. Dilengkapi guard pencegahan Owner menonaktifkan akun sendiri.
+  - `PATCH /users/{user_id}/deactivate`: Deaktivasi akun pengguna internal (`is_active = False`) oleh Owner.
+  - `DELETE /users/{user_id}`: Hapus/deaktivasi akun pengguna internal oleh Owner dengan penanganan aman terhadap relasi foreign key transaksi.
+- **Automated Test Suite Baru**:
+  - `tests/test_order_settings_audit.py`: Menguji seluruh perbaikan integrasi secara komprehensif (Staff order RBAC, OrderItem product_name, payment polling 401 handling, profil user, password change, dan Owner RBAC guard).
+  - Penyesuaian assertion pada `tests/test_seller_orders.py` agar mengonfirmasi akses Staff (200 OK).
+
 ### 001c. Fix CI Integration Tests & Test Data Isolation
 - **Test Database Isolation (`test_owner_numbers.py` & `test_refund.py`)**:
   - Memperbaiki isu di mana status `dependency_overrides` bocor atau terhapus oleh test lain saat dieksekusi bersamaan oleh `pytest`.

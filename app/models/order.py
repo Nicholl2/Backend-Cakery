@@ -1,5 +1,6 @@
 import enum
 from decimal import Decimal
+from typing import Optional
 
 from sqlalchemy import (
     Column, Integer, String, Numeric, ForeignKey,
@@ -77,6 +78,20 @@ class OrderItem(Base):
 
     order = relationship("Order", back_populates="order_items")
     product = relationship("Product")
+
+    @property
+    def product_name(self) -> Optional[str]:
+        if hasattr(self, "_product_name") and self._product_name is not None:
+            return self._product_name
+        if self.custom_product_name:
+            return self.custom_product_name
+        if self.product:
+            return getattr(self.product, "nama_produk", None) or getattr(self.product, "name", None)
+        return None
+
+    @product_name.setter
+    def product_name(self, value: Optional[str]):
+        self._product_name = value
 
     def __repr__(self):
         return f"<OrderItem(id={self.id}, order_id={self.order_id}, product_id={self.product_id})>"

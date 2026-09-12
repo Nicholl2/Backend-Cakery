@@ -140,8 +140,13 @@ async def run_seller_order_tests():
         print("✓ Unauthenticated request rejected (401)")
 
         res_staff = await client.get("/orders", headers={"Authorization": f"Bearer {token_staff}"})
-        assert res_staff.status_code == 403, f"Expected 403, got {res_staff.status_code}"
-        print("✓ Staff request rejected (403 Forbidden)")
+        assert res_staff.status_code == 200, f"Expected 200, got {res_staff.status_code}"
+        print("✓ Staff request granted (200 OK)")
+
+        res_buyer = await client.get("/orders", headers={"Authorization": f"Bearer {token_buyer}"})
+        assert res_buyer.status_code == 403, f"Expected 403 for Buyer, got {res_buyer.status_code}"
+        print("✓ Buyer request rejected (403 Forbidden)")
+
 
         res_admin = await client.get("/orders", headers={"Authorization": f"Bearer {token_admin}"})
         assert res_admin.status_code == 200, f"Expected 200, got {res_admin.status_code}"

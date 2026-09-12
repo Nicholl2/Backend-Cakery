@@ -127,6 +127,7 @@ class OrderItemOut(BaseModel):
     id: int
     product_id: Optional[int] = None
     custom_product_name: Optional[str] = None
+    product_name: Optional[str] = None
     jumlah: int
     custom_decoration_charge: Decimal = Decimal("0.00")
     subtotal: Decimal
@@ -138,6 +139,12 @@ class OrderItemOut(BaseModel):
         return _round2(v)
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# Aliases for compatibility
+OrderItemRead = OrderItemOut
+OrderItemResponse = OrderItemOut
+
 
 
 class OrderOut(BaseModel):

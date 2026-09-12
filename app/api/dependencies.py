@@ -4,10 +4,14 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer
 from fastapi.security.http import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
 from app.core.database import get_db
 from app.core.security import decode_token
 from app.repositories import user_repo
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
@@ -131,7 +135,14 @@ async def get_auth_identity_optional_service_or_jwt(
                 return AuthIdentity(auth_type="user", user_id=sub_id, role=payload.get("role_level"))
         except HTTPException:
             raise
-        except Exception:
+        except SQLAlchemyError as err:
+            logger.error(f"Database error during authentication: {err}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database error during authentication"
+            )
+        except Exception as e:
+            logger.warning(f"Invalid auth token: {e}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authorization token"
@@ -197,4 +208,19 @@ def require_role(required_level: int):
 # Convenience dependencies for specific roles
 require_owner = require_role(1)  # Only Owner (level 1)
 require_admin_or_owner = require_role(2)  # Admin (2) or Owner (1)
-require_staff_or_above = require_role(3)  # Anyone (3, 2, 1)
+require_staff_or_above = require_role(3)  # Staff, Admin, or Owner (levels 1, 2, 3)
+require_internal_user = require_staff_or_above  # All internal users (Staff, Admin, Owner)
+
+
+async def get_current_user(
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get currently authenticated User object with role details loaded"""
+    user = await user_repo.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    return user

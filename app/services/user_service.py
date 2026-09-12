@@ -2,10 +2,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import HTTPException, status, UploadFile
 from app.repositories import user_repo
-from app.schemas.user import UserTakeoverUpdate, UserTakeoverResponse, UserCreate, UserBootstrap
+from app.schemas.user import (
+    UserTakeoverUpdate,
+    UserTakeoverResponse,
+    UserCreate,
+    UserBootstrap,
+    UserProfileUpdate,
+    ChangePasswordRequest,
+    UserAdminUpdate,
+)
 from app.models.user import User
 from app.models.role import Role
-from app.core.security import hash_password
+from app.core.security import hash_password, verify_password
 from app.utils.cloudinary_helper import upload_image_to_cloudinary
 from app.utils.phone import normalize_phone
 
@@ -172,4 +180,216 @@ async def upload_user_avatar(db: AsyncSession, user_id: int, file: UploadFile) -
     secure_url = await upload_image_to_cloudinary(file, folder="toti-cakery/avatars")
     updated_user = await user_repo.update_avatar_url(db, user, secure_url)
     return updated_user
+
+
+async def get_user_profile(db: AsyncSession, user_id: int) -> User:
+    """Get profile of currently logged-in internal user."""
+    user = await user_repo.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User tidak ditemukan"
+        )
+    return user
+
+
+async def update_user_profile(db: AsyncSession, user_id: int, data: UserProfileUpdate) -> User:
+    """Update profile of currently logged-in internal user."""
+    user = await user_repo.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User tidak ditemukan"
+        )
+
+    # Validasi keunikan username jika diubah
+    if data.username and data.username != user.username:
+        existing = await user_repo.get_user_by_username(db, data.username)
+        if existing and existing.id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username sudah digunakan"
+            )
+        user.username = data.username
+
+    # Validasi keunikan email jika diubah
+    if data.email and data.email != user.email:
+        existing = await user_repo.get_user_by_email(db, data.email)
+        if existing and existing.id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email sudah digunakan"
+            )
+        user.email = data.email
+
+    # Validasi keunikan nomor telepon jika diubah
+    if data.phone_number and data.phone_number != user.phone_number:
+        existing = await user_repo.get_user_by_phone(db, data.phone_number)
+        if existing and existing.id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Nomor telepon sudah digunakan"
+            )
+        user.phone_number = data.phone_number
+
+    if data.nomor_wa_admin is not None:
+        user.nomor_wa_admin = data.nomor_wa_admin
+
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def change_user_password(db: AsyncSession, user_id: int, data: ChangePasswordRequest) -> None:
+    """Change password for currently logged-in user with old password verification."""
+    user = await user_repo.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User tidak ditemukan"
+        )
+
+    if not verify_password(data.old_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password lama tidak sesuai"
+        )
+
+    user.password_hash = hash_password(data.new_password)
+    await db.commit()
+
+
+async def get_all_internal_users(db: AsyncSession, limit: int = 100, offset: int = 0) -> list[User]:
+    """Get all internal users list (Owner only)."""
+    return await user_repo.get_all_users(db, limit=limit, offset=offset)
+
+
+async def admin_update_user(
+    db: AsyncSession,
+    target_user_id: int,
+    data: UserAdminUpdate,
+    current_user_id: int
+) -> User:
+    """Owner edits internal user details (role, status, credentials, etc.)."""
+    user = await user_repo.get_user_by_id(db, target_user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User tidak ditemukan"
+        )
+
+    # Validasi keunikan username jika diubah
+    if data.username and data.username != user.username:
+        existing = await user_repo.get_user_by_username(db, data.username)
+        if existing and existing.id != target_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username sudah digunakan"
+            )
+        user.username = data.username
+
+    # Validasi keunikan email jika diubah
+    if data.email and data.email != user.email:
+        existing = await user_repo.get_user_by_email(db, data.email)
+        if existing and existing.id != target_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email sudah digunakan"
+            )
+        user.email = data.email
+
+    # Validasi keunikan nomor telepon jika diubah
+    if data.phone_number and data.phone_number != user.phone_number:
+        existing = await user_repo.get_user_by_phone(db, data.phone_number)
+        if existing and existing.id != target_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Nomor telepon sudah digunakan"
+            )
+        user.phone_number = data.phone_number
+
+    if data.nomor_wa_admin is not None:
+        user.nomor_wa_admin = data.nomor_wa_admin
+
+    # Update role jika disediakan
+    if data.role_id is not None:
+        role_res = await db.execute(select(Role).where(Role.id == data.role_id))
+        if not role_res.scalars().first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Role ID {data.role_id} tidak valid"
+            )
+        user.role_id = data.role_id
+    elif data.role is not None:
+        role_input = data.role.strip().lower()
+        role_res = await db.execute(select(Role).where(func.lower(Role.nama_role) == role_input))
+        role_obj = role_res.scalars().first()
+        if not role_obj:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Role '{data.role}' tidak valid. Pilihan: owner, admin, staff"
+            )
+        user.role_id = role_obj.id
+
+    if data.handles_takeover is not None:
+        user.handles_takeover = data.handles_takeover
+
+    if data.is_active is not None:
+        if target_user_id == current_user_id and not data.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tidak dapat menonaktifkan akun sendiri"
+            )
+        user.is_active = data.is_active
+
+    if data.password:
+        user.password_hash = hash_password(data.password)
+
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def deactivate_user(db: AsyncSession, target_user_id: int, current_user_id: int) -> User:
+    """Deactivate user account (Owner only)."""
+    if target_user_id == current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tidak dapat menonaktifkan akun sendiri"
+        )
+    user = await user_repo.get_user_by_id(db, target_user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User tidak ditemukan"
+        )
+    user.is_active = False
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def delete_user(db: AsyncSession, target_user_id: int, current_user_id: int) -> dict:
+    """Delete or soft-deactivate user account (Owner only)."""
+    if target_user_id == current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tidak dapat menghapus akun sendiri"
+        )
+    user = await user_repo.get_user_by_id(db, target_user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User tidak ditemukan"
+        )
+    try:
+        await user_repo.delete_user(db, user)
+        return {"message": "User berhasil dihapus", "id": target_user_id}
+    except Exception:
+        await db.rollback()
+        # Fallback to soft-deactivate if related records exist (FK constraints)
+        user.is_active = False
+        await db.commit()
+        return {"message": "User dinonaktifkan karena memiliki riwayat relasi data", "id": target_user_id}
+
 

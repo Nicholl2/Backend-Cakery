@@ -1,7 +1,11 @@
 from decimal import Decimal
+import logging
 from fastapi import APIRouter, Depends, Request, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 from app.core.database import get_db
 from app.core.rate_limiter import limiter, RATE_PAYMENT_CREATE, RATE_WEBHOOK
@@ -69,57 +73,89 @@ async def get_order_payment_status(
     """
     Mengambil summary status pembayaran terakhir dari suatu order (Chatbot atau Buyer JWT).
     """
-    if auth.is_buyer:
-        customer = await customer_repo.get_by_nomor_wa(db, auth.buyer.phone)
+    try:
+        # Validasi order lebih awal
         order = await order_repo.get_order_by_id(db, order_id)
-        if not order or not customer or order.customer_id != customer.id:
+        if not order:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Order tidak ditemukan"
             )
-    payments = await payment_service.get_payments_by_order(db, order_id)
-    
-    # Refresh status if any payment is pending
-    refreshed_payments = []
-    for p in payments:
-        refreshed = await payment_service.refresh_if_pending(db, p)
-        refreshed_payments.append(refreshed)
-    payments = refreshed_payments
 
-    order = await order_repo.get_order_by_id(db, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order tidak ditemukan")
+        if auth.is_buyer:
+            customer = await customer_repo.get_by_nomor_wa(db, auth.buyer.phone)
+            if not customer or order.customer_id != customer.id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Order tidak ditemukan"
+                )
+
+        payments = await payment_service.get_payments_by_order(db, order_id)
         
-    amount_paid = Decimal("0.00")
-    for p in payments:
-        if p.payment_status == PaymentStatusEnum.success:
-            amount_paid += p.jumlah_bayar
+        # Refresh status if any payment is pending
+        refreshed_payments = []
+        for p in payments:
+            try:
+                refreshed = await payment_service.refresh_if_pending(db, p)
+                refreshed_payments.append(refreshed)
+            except Exception as e:
+                logger.warning(f"[PAYMENT_STATUS_REFRESH] Failed refreshing payment {p.id}: {e}")
+                refreshed_payments.append(p)
+        payments = refreshed_payments
+
+        # Re-fetch order dengan relasi terupdate jika invoice/order berubah saat refresh
+        order = await order_repo.get_order_by_id(db, order_id) or order
             
-    amount_due = Decimal("0.00")
-    invoice_status = "unpaid"
-    if order.invoice:
-        amount_due = Decimal(str(order.invoice.total_tagihan)) - amount_paid
-        invoice_status = order.invoice.status
-        
-    return {
-        "order_id": order_id,
-        "invoice_status": invoice_status,
-        "amount_paid": amount_paid,
-        "amount_due": amount_due,
-        "payments": [
-            {
-                "id": p.id,
-                "pg_transaction_id": p.pg_transaction_id,
-                "jumlah_bayar": p.jumlah_bayar,
-                "payment_method": p.payment_method,
-                "payment_status": p.payment_status,
-                "payment_type": p.payment_type,
-                "va_number": p.va_number,
-                "qris_url": p.qris_url,
-                "created_at": p.created_at
-            } for p in payments
-        ]
-    }
+        amount_paid = Decimal("0.00")
+        for p in payments:
+            if p.payment_status == PaymentStatusEnum.success:
+                amount_paid += p.jumlah_bayar
+                
+        amount_due = Decimal("0.00")
+        invoice_status = "unpaid"
+        if order.invoice:
+            amount_due = Decimal(str(order.invoice.total_tagihan)) - amount_paid
+            invoice_status = order.invoice.status
+            
+        return {
+            "order_id": order_id,
+            "invoice_status": invoice_status,
+            "amount_paid": amount_paid,
+            "amount_due": amount_due,
+            "payments": [
+                {
+                    "id": p.id,
+                    "pg_transaction_id": p.pg_transaction_id,
+                    "jumlah_bayar": p.jumlah_bayar,
+                    "payment_method": p.payment_method,
+                    "payment_status": p.payment_status,
+                    "payment_type": p.payment_type,
+                    "va_number": p.va_number,
+                    "qris_url": p.qris_url,
+                    "created_at": p.created_at
+                } for p in payments
+            ]
+        }
+    except HTTPException:
+        raise
+    except SQLAlchemyError as db_err:
+        logger.error(f"[PAYMENT_POLL_ERROR] Database error on order {order_id}: {db_err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Terjadi kendala pada database saat memeriksa status pembayaran"
+        )
+    except AttributeError as attr_err:
+        logger.error(f"[PAYMENT_POLL_ERROR] Attribute error on order {order_id}: {attr_err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Terjadi inkonsistensi struktur data saat memeriksa status pembayaran"
+        )
+    except Exception as e:
+        logger.error(f"[PAYMENT_POLL_ERROR] Unexpected error on order {order_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal memeriksa status pembayaran: {str(e)}"
+        )
 
 # 3. Endpoint POST /payments/notify (PUBLIC - webhook)
 @router.post("/notify", status_code=status.HTTP_200_OK,

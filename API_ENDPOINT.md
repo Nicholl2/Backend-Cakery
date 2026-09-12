@@ -127,17 +127,17 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/orders` | Admin / Owner | List seluruh pesanan toko untuk Seller/Admin dengan relasi lengkap (Customer, OrderItems, Invoice, Payments, amount_paid, amount_due). Filter: `status`, `limit`, `offset`. |
-| `GET` | `/orders/{order_id}` | Admin / Owner | Detail pesanan spesifik untuk Admin/Owner beserta customer, item kustom/produk, invoice, dan ringkasan pembayaran. |
-| `POST` | `/orders/custom` | Admin / Owner | Buat pesanan kustom buatan seller tanpa master produk (otomatis create customer, bypass stock deduction, generate invoice, set `created_via = 'seller'`). |
+| `GET` | `/orders` | Staff / Admin / Owner | List seluruh pesanan toko untuk Seller (Staff/Admin/Owner) dengan relasi lengkap (Customer, OrderItems, Invoice, Payments, amount_paid, amount_due). Filter: `status`, `limit`, `offset`. |
+| `GET` | `/orders/{order_id}` | Staff / Admin / Owner | Detail pesanan spesifik untuk Seller beserta customer, item kustom/produk (dengan field `product_name`), invoice, dan ringkasan pembayaran. |
+| `POST` | `/orders/custom` | Staff / Admin / Owner | Buat pesanan kustom buatan seller tanpa master produk (otomatis create customer, bypass stock deduction, generate invoice, set `created_via = 'seller'`). |
 | `POST` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Buat order baru khusus Buyer (otomatis derive `customer_id` dari identitas JWT, reservasi stok bahan via Optimistic Locking, generate invoice). |
 | `GET` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Ambil seluruh riwayat pesanan milik Buyer yang sedang login. |
 | `GET` | `/orders/buyer/{id}` | Buyer JWT (`get_current_buyer`) | Detail pesanan spesifik milik Buyer (isolasi data aman antarpembeli). |
 | `POST` | `/orders` | `X-Service-Key` | Buat order baru via chatbot (reservasi stok bahan via Optimistic Locking, generate invoice). |
 | `GET` | `/orders/latest` | `X-Service-Key` | Ambil order terbaru pelanggan berdasarkan query `?nomor_wa=...` |
 | `POST` | `/orders/{order_id}/cancel` | `X-Service-Key` | Pembatalan otomatis oleh pelanggan (hanya jika invoice `unpaid`, stok bahan dikembalikan). |
-| `PATCH` | `/orders/{order_id}/status` | Admin / Owner | Update status pesanan (`pending`, `in_process`, `ready`, `delivered`, `picked_up`, `cancelled`). Otomatis mengembalikan stok jika status diubah ke `cancelled` dan menembak push webhook saat `ready`. |
-| `POST` | `/orders/{order_id}/refund` | Admin / Owner | Memproses pembatalan sekaligus refund untuk pesanan berstatus DP/Lunas. Memicu panggilan Midtrans API dan otomatis mengembalikan persediaan bahan baku. |
+| `PATCH` | `/orders/{order_id}/status` | Staff / Admin / Owner | Update status pesanan (`pending`, `in_process`, `ready`, `delivered`, `picked_up`, `cancelled`). Otomatis mengembalikan stok jika status diubah ke `cancelled` dan menembak push webhook saat `ready`. |
+| `POST` | `/orders/{order_id}/refund` | Staff / Admin / Owner | Memproses pembatalan sekaligus refund untuk pesanan berstatus DP/Lunas. Memicu panggilan Midtrans API dan otomatis mengembalikan persediaan bahan baku. |
 
 ---
 
@@ -200,7 +200,14 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/users` | Owner Only | Daftarkan akun internal baru (Owner, Admin, atau Staff) |
-| `PATCH` | `/users/{user_id}/takeover-handler` | Owner Only | Set status apakah admin tersebut bertugas menangani live takeover |
+| `GET` | `/users/me` | Authenticated User | Ambil profil lengkap user internal/seller yang sedang login (termasuk field `role_name`, `role`, `email`, `phone_number`, `avatar_url`) |
+| `PUT` / `PATCH` | `/users/me` | Authenticated User | Update profil user yang sedang login (`username`, `email`, `phone_number`, `nomor_wa_admin`) dengan validasi keunikan |
+| `POST` | `/users/me/change-password` | Authenticated User | Ubah password akun user yang sedang login dengan memverifikasi `old_password` terlebih dahulu |
 | `POST` | `/users/me/avatar` | Authenticated User | Upload foto avatar akun internal langsung di-stream ke Cloudinary (`toti-cakery/avatars/`, maks 5MB, format JPEG/PNG/WEBP), simpan `secure_url` ke database |
+| `GET` | `/users` | Owner Only | List seluruh akun pengguna internal (Owner, Admin, Staff). Dilindungi guard RBAC: Admin & Staff ditolak (403 Forbidden) |
+| `POST` | `/users` | Owner Only | Daftarkan akun internal baru (Owner, Admin, atau Staff) |
+| `PUT` / `PATCH` | `/users/{user_id}` | Owner Only | Edit data akun pengguna internal lain oleh Owner (role, handles_takeover, status aktif, reset password, dll.). Owner tidak bisa menonaktifkan diri sendiri |
+| `PATCH` | `/users/{user_id}/deactivate` | Owner Only | Deaktivasi akun pengguna internal (`is_active = False`) oleh Owner. Owner tidak bisa menonaktifkan diri sendiri |
+| `DELETE` | `/users/{user_id}` | Owner Only | Hapus akun pengguna internal (atau soft-deactivate jika terdapat riwayat transaksi) oleh Owner |
+| `PATCH` | `/users/{user_id}/takeover-handler` | Owner Only | Set status apakah admin tersebut bertugas menangani live takeover |
 | `GET` | `/users/owner-numbers` | `X-Service-Key` | Ambil daftar seluruh nomor WhatsApp berformat E.164 (tanpa '+') milik user aktif dengan role Owner (Level 1) untuk keperluan verifikasi hak akses pada service Chatbot |

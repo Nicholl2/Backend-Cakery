@@ -32,6 +32,10 @@ class Product(Base):
     @property
     def parent_category(self) -> Optional[str]:
         return self.kategori
+
+    @property
+    def name(self) -> str:
+        return self.nama_produk
     
     # Relationships
     recipes = relationship("Recipe", back_populates="product", cascade="all, delete-orphan", lazy="selectin")

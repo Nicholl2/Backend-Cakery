@@ -15,10 +15,11 @@ async def get_user_by_username(db: AsyncSession, username: str) -> Optional[User
     return result.scalars().first()
 
 async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
-    """Get user by ID"""
-    stmt = select(User).where(User.id == user_id)
+    """Get user by ID with role details loaded"""
+    stmt = select(User).options(joinedload(User.role)).where(User.id == user_id)
     result = await db.execute(stmt)
     return result.scalars().first()
+
 
 async def get_user_role_level(db: AsyncSession, user_id: int) -> Optional[int]:
     """Get user's role level"""
@@ -75,3 +76,22 @@ async def update_avatar_url(db: AsyncSession, user: User, avatar_url: str) -> Us
     await db.commit()
     await db.refresh(user)
     return user
+
+
+async def get_all_users(db: AsyncSession, limit: int = 100, offset: int = 0) -> list[User]:
+    """Get all internal users ordered by ID with role details loaded"""
+    stmt = (
+        select(User)
+        .options(joinedload(User.role))
+        .order_by(User.id.asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def delete_user(db: AsyncSession, user: User) -> None:
+    """Delete user from database"""
+    await db.delete(user)
+    await db.commit()
