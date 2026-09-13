@@ -261,23 +261,9 @@ async def _apply_transaction_status(
             
             old_invoice_status = invoice.status
 
-            # Update status invoice dan order status
+            # Update status invoice (order.status tetap pending agar dapat diajukan refund sebelum masuk proses produksi)
             if total_success >= Decimal(str(invoice.total_tagihan)):
                 invoice.status = InvoiceStatusEnum.paid
-                
-                # Ubah status pesanan induk menjadi 'in_process'
-                order_res = await db.execute(
-                    select(Order).where(Order.id == invoice.order_id)
-                )
-                order = order_res.scalars().first()
-                if order and order.status == OrderStatusEnum.pending:
-                    order.status = OrderStatusEnum.in_process
-                    logger.info(
-                        "[PAYMENT_AUDIT] order_auto_transition | order_id=%s | "
-                        "old_status=pending | new_status=in_process | "
-                        "trigger=payment_settlement",
-                        order.id,
-                    )
             else:
                 invoice.status = InvoiceStatusEnum.partial
 

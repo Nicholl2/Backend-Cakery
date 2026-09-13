@@ -6,6 +6,22 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001j. PostgreSQL Enum Migration Fix & Order Pending Preservation on Settlement
+- **PostgreSQL Enum Migration (`app/core/migrations.py`, `app/main.py`)**:
+  - Menambahkan fungsi migrasi async `ensure_order_status_enum(conn: AsyncConnection)` di `app/core/migrations.py`.
+  - Menggunakan eksekusi autocommit `conn.execution_options(isolation_level="AUTOCOMMIT")` untuk menjalankan statement DDL PostgreSQL:
+    `ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS 'refunded';`
+    Hal ini mencegah error PostgreSQL `25001: ALTER TYPE ... ADD cannot run inside a transaction block`.
+  - Menyediakan fallback aman yang membuka koneksi mandiri jika connection sedang berada dalam transaction block.
+  - Memanggil `ensure_order_status_enum` di `app/main.py` saat startup aplikasi dalam siklus `lifespan`.
+- **Preservasi Status Pesanan `pending` saat Pelunasan (`app/services/payment_service.py`)**:
+  - Menghapus blok transisi otomatis yang mengubah `order.status` menjadi `OrderStatusEnum.in_process` saat pembayaran lunas/settlement (`total_success >= invoice.total_tagihan`).
+  - Menjaga status invoice ter-update menjadi `InvoiceStatusEnum.paid`, namun membiarkan `order.status` tetap berada di `OrderStatusEnum.pending`.
+  - Hal ini menjamin pembeli yang telah melunasi pesanan tetap dapat membatalkan dan mengajukan refund sebelum admin toko secara manual memulai proses produksi di dapur (status `in_process`).
+- **Automated Test Suite (`tests/test_settlement_and_migrations.py`)**:
+  - Memvalidasi fungsi migrasi `ensure_order_status_enum` pada dialect non-PostgreSQL (skip) dan PostgreSQL (autocommit DDL).
+  - Memvalidasi alur pelunasan pembayaran via `_apply_transaction_status`, memastikan `invoice.status == 'paid'` sementara `order.status == 'pending'`.
+
 ### 001i. Order Invoice PDF Generation & Download Endpoint (`GET /orders/{id}/invoice/pdf`)
 - **Dependency & Utilitas PDF Generator (`requirements.txt`, `app/utils/pdf_generator.py`)**:
   - Menambahkan dependency `reportlab==5.0.1` pada `requirements.txt`.

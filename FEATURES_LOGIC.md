@@ -87,7 +87,7 @@ Alur kerja saat Midtrans memanggil webhook listener `POST /payments/notify`:
    - **Kondisi Lunas Penuh**:
      Jika $\text{total\_success} \ge \text{invoice.total\_tagihan}$:
      - `invoice.status` diubah menjadi `paid`.
-     - `order.status` otomatis bertransisi dari `pending` menjadi `in_process` (memulai produksi).
+     - `order.status` tetap berada di `pending` (memungkinkan pembeli mengajukan refund sebelum admin secara manual memulai proses produksi kue di dapur).
    - **Kondisi Uang Muka (DP)**:
      Jika $\text{total\_success} < \text{invoice.total\_tagihan}$:
      - `invoice.status` diubah menjadi `partial`.

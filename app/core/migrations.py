@@ -147,4 +147,26 @@ async def ensure_order_columns(conn: AsyncConnection):
     await conn.execute(text("ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL;"))
 
 
+async def ensure_order_status_enum(conn: AsyncConnection):
+    """
+    Ensure 'refunded' value exists in PostgreSQL enum 'orderstatusenum'.
+    PostgreSQL requires ALTER TYPE ADD VALUE to run outside transaction blocks (autocommit mode).
+    """
+    if conn.dialect.name != "postgresql":
+        return
+    # PENTING: ALTER TYPE ADD VALUE tidak boleh berjalan di dalam transaksi biasa
+    try:
+        autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+        await autocommit_conn.execute(text(
+            "ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS 'refunded';"
+        ))
+    except Exception:
+        async with conn.engine.connect() as auto_conn:
+            autocommit_conn = await auto_conn.execution_options(isolation_level="AUTOCOMMIT")
+            await autocommit_conn.execute(text(
+                "ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS 'refunded';"
+            ))
+
+
+
 
