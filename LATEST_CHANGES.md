@@ -6,6 +6,32 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001i. Order Invoice PDF Generation & Download Endpoint (`GET /orders/{id}/invoice/pdf`)
+- **Dependency & Utilitas PDF Generator (`requirements.txt`, `app/utils/pdf_generator.py`)**:
+  - Menambahkan dependency `reportlab==5.0.1` pada `requirements.txt`.
+  - Mengembangkan modul `app/utils/pdf_generator.py` dengan fungsi `generate_order_invoice_pdf(order: Order) -> io.BytesIO` yang menghasilkan file PDF Invoice pesanan A4 berdesain profesional dan rapi:
+    * **Header Brand**: Nama "TOTI CAKERY", tagline toko, nomor invoice, tanggal order, dan badge status pembayaran (LUNAS / SETTLEMENT, DP / SEBAGIAN, BELUM LUNAS, REFUNDED).
+    * **Informasi Pelanggan & Pengiriman**: Nama customer, nomor WhatsApp/kontak, alamat pengiriman, metode pengiriman (Pickup / Delivery), estimasi due date, dan status pesanan.
+    * **Tabel Rincian Pesanan**: Kolom nomor urut, deskripsi nama produk/item (termasuk penanda biaya custom/dekorasi), jumlah (qty), harga satuan, dan subtotal dengan layout tabel zebra-striped.
+    * **Ringkasan Tagihan & Catatan**: Catatan pesanan, total tagihan, total jumlah yang sudah terbayar (`amount_paid`), dan sisa tagihan (`amount_due`).
+    * **Riwayat Transaksi Pembayaran**: Tabel rincian transaksi pembayaran (waktu transaksi, tipe DP/Final, metode pembayaran, status transaksi, nominal).
+    * **Footer**: Ucapan terima kasih dan keterangan keabsahan dokumen invoice resmi.
+- **FastAPI Endpoint Baru (`app/api/routes/order.py`)**:
+  - Menambahkan endpoint `GET /orders/{id}/invoice/pdf`:
+    * Menggunakan autentikasi gabungan `get_auth_identity_optional_service_or_jwt`.
+    * Memvalidasi otorisasi: Buyer hanya diizinkan mengunduh invoice pesanannya sendiri (pencocokan nomor WhatsApp pelanggan dengan akun login buyer -> HTTP 404 jika tidak cocok agar tidak terjadi enumerasi).
+    * Mengizinkan pengguna internal Seller (Staff dengan level 3, Admin dengan level 2, Owner dengan level 1).
+    * Mengembalikan HTTP 404 jika order tidak ditemukan di database.
+    * Eager-loading seluruh relasi terkait: `customer`, `order_items` beserta `product`, serta `invoice` beserta `payments`.
+    * Mengembalikan `StreamingResponse` dengan header `Content-Disposition: attachment; filename="Invoice-TotiCakery-{order_id}.pdf"` dan `media_type="application/pdf"`.
+- **Pengujian Terintegrasi & Verifikasi Unit Test (`tests/test_order_invoice_pdf.py`)**:
+  - Menguji alur lengkap unduh PDF oleh Buyer pemilik pesanan (HTTP 200, validitas magic bytes `%PDF-`, header filename).
+  - Menguji akses oleh seluruh role internal (Staff, Admin, Owner) -> HTTP 200.
+  - Menguji pencegahan akses oleh Buyer lain terhadap pesanan yang bukan miliknya -> HTTP 404.
+  - Menguji request tanpa autentikasi -> HTTP 401.
+  - Menguji penolakan peran tidak berhak (level > 3) -> HTTP 403.
+  - Menguji pesanan yang tidak terdaftar -> HTTP 404.
+
 ### 001h. State Machine Adjustment (`cancelled -> refunded`) & Dual-Signal Refund Webhooks ke Chatbot
 - **State Machine & Enum Order Baru (`app/models/order.py`, `app/core/state_machine.py`)**:
   - Menambahkan nilai status baru `refunded = "refunded"` pada enum `OrderStatusEnum`.

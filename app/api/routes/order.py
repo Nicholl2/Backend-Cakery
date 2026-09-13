@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query, Request, status, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
@@ -23,7 +24,9 @@ from app.schemas.order import (
     RefundRequest,
     RefundResponse,
 )
+from app.repositories import customer_repo, order_repo
 from app.services import order_service
+from app.utils.pdf_generator import generate_order_invoice_pdf
 
 router = APIRouter(
     tags=["Orders"],
@@ -242,4 +245,64 @@ async def refund_order(
         reason=data.reason,
         is_service=is_service_call,
         customer_phone=data.nomor_wa,
+    )
+
+
+@router.get("/{id}/invoice/pdf",
+            summary="Download PDF Invoice pesanan (Buyer pemilik atau Staff/Admin/Owner)")
+async def download_order_invoice_pdf(
+    id: int,
+    auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Menghasilkan dan mengunduh file PDF invoice pesanan Toti Cakery:
+    - Eager-loads data order, customer, items, product, invoice, dan payments.
+    - Autentikasi:
+      * Buyer pemilik pesanan (nomor WA customer pada order cocok dengan akun Buyer login).
+      * Internal Staff / Admin / Owner (role level 1, 2, 3).
+    - Menghasilkan 404 jika order tidak ditemukan atau jika Buyer mencoba mengakses order milik orang lain.
+    """
+    order = await order_repo.get_order_with_details(db, id)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order tidak ditemukan",
+        )
+
+    # Validasi Otorisasi
+    if auth.is_buyer:
+        customer = await customer_repo.get_by_nomor_wa(db, auth.buyer.phone)
+        if not customer or order.customer_id != customer.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Order tidak ditemukan",
+            )
+    elif auth.auth_type == "user":
+        role_level = int(auth.role) if auth.role is not None else 99
+        if role_level > 3:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Akses ditolak untuk peran ini.",
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak.",
+        )
+
+    # Attach payment amounts & ensure item product names
+    await order_service._attach_payment_amounts(db, order)
+
+    pdf_buffer = generate_order_invoice_pdf(order)
+
+    filename = f"Invoice-TotiCakery-{id}.pdf"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    }
+
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers=headers,
     )
