@@ -1,7 +1,7 @@
 import base64
 import hashlib
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional, List
 import httpx
@@ -243,6 +243,8 @@ async def _apply_transaction_status(
 
     # ── ATURAN OTOMASI: Jika status payment berubah menjadi 'Success' ────────
     if new_status == PaymentStatusEnum.success:
+        if not payment.settled_at:
+            payment.settled_at = datetime.now(timezone.utc)
         invoice_res = await db.execute(
             select(Invoice).where(Invoice.id == payment.invoice_id)
         )

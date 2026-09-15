@@ -40,6 +40,7 @@ class Payment(Base):
         default=PaymentTypeEnum.final,
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    settled_at = Column(DateTime(timezone=True), nullable=True)
     va_number = Column(String(50), nullable=True)
     qris_url = Column(Text, nullable=True)
 

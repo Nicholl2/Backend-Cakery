@@ -229,3 +229,38 @@ Sistem backend mengintegrasikan pemisahan status operasional seller dan ketersed
    - Endpoint pemesanan (`POST /orders` dan `POST /orders/buyer`) memvalidasi status ketersediaan secara ketat sebelum reservasi stok.
    - Jika pembeli mencoba memesan produk dengan `is_in_stock == False` atau `stock_quantity == 0`, pesanan ditolak dengan HTTP `400 Bad Request` ("Stok produk 'X' sedang habis.").
    - Jika kuantitas yang dipesan melebihi `stock_quantity`, pesanan ditolak dengan HTTP `400 Bad Request`.
+
+---
+
+## 14. Akuntansi Laporan Keuangan & Konsistensi Date Basis (Matching Principle)
+
+Untuk memastikan laporan laba rugi (`GET /reports/financial`) akurat dan mencerminkan prinsip akuntansi (*matching principle*):
+1. **Konsistensi Basis Tanggal (Settlement-Based Allocation)**:
+   - Revenue dan HPP (Harga Pokok Penjualan) dihitung menggunakan basis tanggal penyelesaian pembayaran yang sama (`settled_at` atau `created_at` pembayaran sukses).
+   - Jika pesanan dibuat di akhir suatu bulan (misalnya 30 Januari) dan baru dibayar lunas pada bulan berikutnya (misalnya 2 Februari), maka Revenue dan HPP pesanan tersebut sama-sama dialokasikan ke bulan Februari. Hal ini mencegah bergesernya *Gross Profit* dan *Net Profit* antarpariode.
+2. **Eksklusi Total Pesanan Unpaid / Pending**:
+   - Query HPP dan Revenue hanya memperhitungkan pesanan yang status invoice-nya sudah lunas (`InvoiceStatusEnum.paid`) dan memiliki pembayaran berstatus `Success`.
+   - Pesanan berstatus *unpaid* atau *pending payment* **dikeluarkan total** dari perhitungan Revenue, HPP, Gross Profit, dan Net Profit.
+3. **Metrik Finansial Tambahan**:
+   - `outstanding_payments`: Menghitung total piutang atau tagihan yang belum dibayar (`Invoice.total_tagihan` dikurangi pembayaran parsial sukses) untuk pesanan aktif yang berstatus `unpaid` atau `partial` pada periode tersebut.
+   - `full_product_profitability`: Menghitung rincian performa per item produk dari pesanan yang lunas (kuantitas terjual, total revenue, total HPP snapshot, gross profit, dan margin persentase).
+   - `supplier_spending`: Mengagregasikan total pengeluaran belanja PO dan frekuensi pesanan per supplier pada rentang periode yang dipilih.
+
+---
+
+## 15. Integrasi Purchase Order ke Inventory & Weighted Average Costing
+
+Sistem mengotomasi pencatatan stok dan pembaruan harga pokok bahan baku saat Purchase Order (PO) diterima:
+1. **Pemicu Penerimaan PO (`PUT /purchases/purchases/{purchase_id}`)**:
+   - Saat status PO ditandai diterima (`is_received = True` dari sebelumnya `False`), sistem otomatis mencatat `tanggal_diterima = now()`.
+2. **Penambahan Stok Bahan Baku (`stok_tersedia`)**:
+   - Untuk setiap item pembelian (`PurchaseItem`), kuantitas barang yang diterima (`jumlah`) secara otomatis ditambahkan ke `stock_items.stok_tersedia`.
+3. **Kalkulasi Weighted Average Costing**:
+   - Harga pokok per satuan bahan baku diperbarui menggunakan rumus rata-rata tertimbang:
+     $$\text{harga\_baru} = \frac{(\text{stok\_lama} \times \text{harga\_lama}) + (\text{qty\_masuk} \times \text{harga\_satuan\_baru})}{\text{stok\_lama} + \text{qty\_masuk}}$$
+   - Nilai baru disimpan ke `stock_items.harga_per_satuan` dengan pembulatan 4 angka desimal, dan `version` diinkremen.
+4. **Rekalkulasi Otomatis HPP Produk Resep Terkait**:
+   - Setelah harga bahan baku ter-update, sistem otomatis memicu kalkulasi ulang HPP produk (`Product.hpp_total`) dan harga jual (`Product.harga_jual` jika markup percentage aktif) untuk semua produk resep yang menggunakan bahan baku tersebut.
+5. **Proteksi & Idempotensi**:
+   - Status PO yang sudah berstatus diterima (`is_received = True`) tidak dapat diubah kembali menjadi belum diterima (`is_received = False`) demi mencegah inkonsistensi stok (melempar HTTP `409 Conflict`).
+   - Pembaruan field lain (seperti catatan) pada PO yang sudah diterima tidak akan memicu penambahan stok berulang.

@@ -1,6 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from decimal import Decimal, ROUND_HALF_UP
 from app.models.stock_item import StockItem
 from app.schemas.stock import StockCreate, StockUpdate
 from typing import Optional
@@ -48,15 +49,18 @@ async def delete(db: AsyncSession, item: StockItem) -> bool:
 async def update_average_cost(
     db: AsyncSession,
     stock_id: int,
-    qty_masuk: float,
-    harga_beli_total: float,
-) -> StockItem:
+    qty_masuk: Decimal | float,
+    harga_beli_total: Decimal | float,
+    commit: bool = True,
+) -> Optional[StockItem]:
     """
-    Average Costing — spek bagian 2.3.1 poin 2 & Use Case 8 (Record Purchases).
+    Weighted Average Costing & Inventory Addition.
+    Tambahkan jumlah barang yang diterima ke stok_tersedia dan
+    hitung average cost baru dengan presisi Decimal.
 
     Rumus:
-        harga_baru = (stok_lama * harga_lama + qty_masuk * harga_satuan_baru)
-                     / (stok_lama + qty_masuk)
+        harga_rata_rata = (stok_lama * harga_lama + qty_masuk * harga_satuan_baru)
+                          / (stok_lama + qty_masuk)
     """
     result = await db.execute(
         select(StockItem)
@@ -67,22 +71,30 @@ async def update_average_cost(
     if not item:
         return None
 
-    harga_satuan_baru = harga_beli_total / qty_masuk if qty_masuk else 0
+    qty_in = Decimal(str(qty_masuk))
+    total_cost_in = Decimal(str(harga_beli_total))
+    harga_satuan_baru = (total_cost_in / qty_in) if qty_in > 0 else Decimal("0")
 
-    stok_lama = float(item.stok_tersedia)
-    harga_lama = float(item.harga_per_satuan)
+    stok_lama = Decimal(str(item.stok_tersedia or "0"))
+    harga_lama = Decimal(str(item.harga_per_satuan or "0"))
 
-    if stok_lama + qty_masuk > 0:
+    new_stok = stok_lama + qty_in
+
+    if new_stok > 0:
         harga_rata_rata = (
-            (stok_lama * harga_lama) + (qty_masuk * harga_satuan_baru)
-        ) / (stok_lama + qty_masuk)
+            (stok_lama * harga_lama) + (qty_in * harga_satuan_baru)
+        ) / new_stok
     else:
         harga_rata_rata = harga_satuan_baru
 
-    item.harga_per_satuan = round(harga_rata_rata, 4)
-    item.stok_tersedia = stok_lama + qty_masuk
+    item.harga_per_satuan = harga_rata_rata.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    item.stok_tersedia = new_stok.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     item.version += 1
 
-    await db.commit()
-    await db.refresh(item)
+    if commit:
+        await db.commit()
+        await db.refresh(item)
+    else:
+        await db.flush()
+
     return item

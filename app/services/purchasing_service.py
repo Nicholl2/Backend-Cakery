@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import desc, func, select
@@ -180,8 +181,36 @@ async def update_purchase(
             detail="Tidak dapat mengubah status pemesanan yang sudah diterima.",
         )
 
+    # Deteksi transisi menjadi received
+    is_becoming_received = (not purchase.is_received) and (data.is_received is True)
+
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(purchase, field, value)
+
+    if is_becoming_received:
+        if not purchase.tanggal_diterima:
+            purchase.tanggal_diterima = datetime.now(timezone.utc)
+
+        affected_stock_ids: set[int] = set()
+        for item in purchase.purchase_items:
+            await stock_repo.update_average_cost(
+                db=db,
+                stock_id=item.stock_item_id,
+                qty_masuk=item.jumlah,
+                harga_beli_total=item.harga_total,
+                commit=False,
+            )
+            affected_stock_ids.add(item.stock_item_id)
+
+        # Recalculate HPP produk resep yang menggunakan bahan baku tersebut
+        for stock_id in affected_stock_ids:
+            rows = await db.execute(
+                select(Recipe.product_id)
+                .where(Recipe.stock_item_id == stock_id)
+                .distinct()
+            )
+            for (pid,) in rows.all():
+                await product_repo.calculate_and_update_product_price(db, pid)
 
     await db.commit()
     await db.refresh(purchase)

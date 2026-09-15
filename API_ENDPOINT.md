@@ -103,7 +103,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `POST` | `/purchases/purchases` | Authenticated User | Buat Purchase Order (PO) baru beserta item bahan yang dibeli |
 | `GET` | `/purchases/purchases` | Internal | List PO (Filter: `only_received`, `supplier_id`) |
 | `GET` | `/purchases/purchases/{purchase_id}` | Internal | Detail PO beserta daftar item pemesanan |
-| `PUT` | `/purchases/purchases/{purchase_id}` | Internal | Update status PO (misal: tandai sudah diterima, tanggal diterima) |
+| `PUT` | `/purchases/purchases/{purchase_id}` | Internal | Update status PO. Saat `is_received = True`, sistem otomatis menambah `stok_tersedia` pada model `StockItem`, memperbarui `harga_per_satuan` menggunakan formula Weighted Average Costing, dan memicu kalkulasi ulang HPP/harga jual produk resep terkait. Dicegah membatalkan (un-receive) status PO yang sudah diterima (HTTP 409). |
 | `DELETE` | `/purchases/purchases/{purchase_id}` | Internal | Hapus PO (dicegah jika PO sudah berstatus diterima) |
 
 ---
@@ -168,7 +168,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/reports/summary` | `X-Service-Key` | Ringkasan finansial (Revenue, Expenses, Order Count, AOV, Top 5 Products) untuk bot |
-| `GET` | `/reports/financial` | Owner Only | Laporan komprehensif Laba/Rugi (P&L), Gross Profit, Net Profit |
+| `GET` | `/reports/financial` | Owner Only | Laporan komprehensif Laba/Rugi (P&L): `total_revenue`, `total_expenses`, `total_hpp_cost`, `gross_profit`, `net_profit`, `outstanding_payments` (total piutang / pembayaran belum lunas), `full_product_profitability` (rincian qty terjual, revenue, HPP, gross profit, margin % per produk), dan `supplier_spending` (total belanja dan frekuensi PO per supplier). Menggunakan basis tanggal pembayaran lunas yang konsisten (menghindari pergeseran periode) dan mengeluarkan seluruh order unpaid/pending dari HPP & profit. |
 | `GET` | `/reports/analytics` | Owner Only | Analitik penjualan bulanan, tren produk terlaris, dan distribusi rating |
 
 ---

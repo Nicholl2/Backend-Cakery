@@ -1,3 +1,4 @@
+from decimal import Decimal
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,3 +54,26 @@ async def delete_stock(db: AsyncSession, stock_id: int) -> bool:
             ),
         )
     return await stock_repo.delete(db, item)
+
+
+async def receive_stock_from_purchase(
+    db: AsyncSession,
+    stock_id: int,
+    qty_masuk: Decimal | float,
+    harga_beli_total: Decimal | float,
+    commit: bool = True,
+) -> StockItem:
+    """
+    Update stok_tersedia and recalculate Weighted Average Cost when purchase is received.
+    """
+    item = await stock_repo.update_average_cost(
+        db=db,
+        stock_id=stock_id,
+        qty_masuk=qty_masuk,
+        harga_beli_total=harga_beli_total,
+        commit=commit,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Stock item tidak ditemukan.")
+    return item
+

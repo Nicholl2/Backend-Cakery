@@ -22,12 +22,36 @@ class FinancialReportSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ProductProfitabilityItem(BaseModel):
+    product_id: int
+    nama_produk: str
+    qty_sold: int
+    total_revenue: Decimal
+    total_hpp: Decimal
+    gross_profit: Decimal
+    margin_percentage: float
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SupplierSpendingItem(BaseModel):
+    supplier_id: int
+    nama_supplier: str
+    total_spending: Decimal
+    purchase_count: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class FinancialReportDetail(BaseModel):
     total_revenue: Decimal
     total_expenses: Decimal
     total_hpp_cost: Decimal
     gross_profit: Decimal
     net_profit: Decimal
+    outstanding_payments: Decimal
+    full_product_profitability: List[ProductProfitabilityItem]
+    supplier_spending: List[SupplierSpendingItem]
 
     model_config = ConfigDict(from_attributes=True)
 

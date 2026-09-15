@@ -45,8 +45,8 @@ async def get_report_summary(
         select(func.sum(Payment.jumlah_bayar))
         .where(
             Payment.payment_status == PaymentStatusEnum.success,
-            Payment.created_at >= start_dt,
-            Payment.created_at <= end_dt
+            func.coalesce(Payment.settled_at, Payment.created_at) >= start_dt,
+            func.coalesce(Payment.settled_at, Payment.created_at) <= end_dt
         )
     )
     revenue = revenue_query.scalar() or Decimal("0.00")

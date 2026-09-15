@@ -121,15 +121,10 @@ async def calculate_and_update_product_price(
     ) if markup else product.harga_jual  # jaga harga manual jika markup = 0
 
     # 4. Update & commit
-    await db.execute(
-        update(Product)
-        .where(Product.id == product_id)
-        .values(hpp_total=hpp_total, harga_jual=harga_jual)
-    )
-    await db.commit()
-
     product.hpp_total = hpp_total
     product.harga_jual = harga_jual
+    await db.commit()
+    await db.refresh(product)
     return product
 
 

@@ -6,6 +6,35 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001k. Financial Report Accounting Fix, Date Basis Consistency & Purchase-to-Stock Integration
+- **Konsistensi Basis Tanggal Laporan Keuangan (`app/repositories/report_repo.py`, `app/services/report_service.py`)**:
+  - Mengubah kalkulasi Revenue dan HPP (Harga Pokok Penjualan) pada `GET /reports/financial` agar konsisten menggunakan tanggal penyelesaian pembayaran sukses (`settled_at` atau `created_at` dari pembayaran sukses).
+  - Mengatasi masalah pergeseran periode (cross-month order): pesanan yang dibuat di akhir Januari namun baru dibayar pada Februari dialokasikan secara utuh ke bulan Februari (Revenue dan HPP sama-sama berada di Februari), menjaga akurasi *Gross Profit* dan *Net Profit*.
+- **Eksklusi Pesanan Unpaid dari HPP & Profit (`app/repositories/report_repo.py`)**:
+  - Menyaring query HPP agar hanya menghitung pesanan yang berstatus lunas (`InvoiceStatusEnum.paid` dan berstatus aktif non-cancelled/non-refunded).
+  - Pesanan *unpaid* atau *pending payment* dikeluarkan secara total dari Revenue, HPP, Gross Profit, dan Net Profit.
+- **Model Payment & Migrasi Database (`app/models/payment.py`, `app/core/migrations.py`, `app/main.py`)**:
+  - Menambahkan kolom `settled_at TIMESTAMPTZ` pada model `Payment`.
+  - Membuat fungsi migrasi `ensure_payment_columns` di `app/core/migrations.py` untuk menambahkan kolom pada PostgreSQL dan mem-backfill record yang sudah berstatus Success.
+  - Memperbarui `_apply_transaction_status` di `app/services/payment_service.py` untuk otomatis mengisi `payment.settled_at = now()` saat pembayaran sukses.
+- **Kelengkapan Response DTO Finansial (`app/schemas/report.py`)**:
+  - Menambahkan field baru ke `FinancialReportDetail`:
+    * `outstanding_payments: Decimal`: total piutang/pembayaran pending dari invoice aktif berstatus `unpaid` atau `partial`.
+    * `full_product_profitability: List[ProductProfitabilityItem]`: rincian performa per item produk (qty terjual, revenue, HPP, gross profit, margin persentase).
+    * `supplier_spending: List[SupplierSpendingItem]`: ringkasan total pengeluaran dan frekuensi PO per supplier.
+- **Integrasi Purchase Order ke Inventory & Weighted Average Costing (`app/repositories/stock_repo.py`, `app/services/stock_service.py`, `app/services/purchasing_service.py`)**:
+  - Mengembangkan otomasi saat PO ditandai diterima (`PUT /purchases/purchases/{purchase_id}` dengan `is_received = True`):
+    * Menambahkan kuantitas barang diterima ke `stock_items.stok_tersedia`.
+    * Menghitung ulang harga pokok rata-rata tertimbang (`stock_items.harga_per_satuan`) via formula Weighted Average Costing berpresisi Decimal.
+    * Memicu rekalkulasi otomatis HPP produk resep terkait (`product_repo.calculate_and_update_product_price`).
+    * Memproteksi status PO yang sudah diterima agar tidak dapat diubah kembali menjadi belum diterima (HTTP 409 Conflict) dan mencegah duplikasi penambahan stok.
+- **Automated Test Suite (`tests/test_financial_report.py`, `tests/test_purchasing_stock_integration.py`)**:
+  - `test_financial_report_date_consistency_and_unpaid_exclusion`: memvalidasi alokasi tanggal settlement, eksklusi order unpaid, kalkulasi gross profit & net profit, serta validitas field DTO baru.
+  - `test_partial_payment_and_cancelled_orders_handling`: memvalidasi penanganan DP parsial dan eksklusi total pesanan cancelled/refunded dari outstanding payments.
+  - `test_purchase_received_updates_stock_and_weighted_average_cost`: memvalidasi penambahan stok, kalkulasi Weighted Average Costing, dan tanggal diterima.
+  - `test_purchase_receive_protections`: memvalidasi proteksi HTTP 409 pada un-receive dan proteksi stok dari double-counting.
+  - `test_product_hpp_recalculation_on_purchase_received`: memvalidasi rekalkulasi otomatis HPP produk resep saat bahan baku baru diterima dengan harga berbeda.
+
 ### 001j. PostgreSQL Enum Migration Fix & Order Pending Preservation on Settlement
 - **PostgreSQL Enum Migration (`app/core/migrations.py`, `app/main.py`)**:
   - Menambahkan fungsi migrasi async `ensure_order_status_enum(conn: AsyncConnection)` di `app/core/migrations.py`.
