@@ -25,6 +25,8 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 - **Email**: Format email standar, maksimal 100 karakter.
 - **Teks Bebas (Nama, Alamat, Notes, Review)**: Maksimal karakter ketat diberlakukan (contoh: notes/alamat maks 500 karakter, komentar review maks 1000). 
 - **Pencegahan XSS / Script Injection**: Seluruh field berupa string/teks akan menolak string yang mengandung tag berbahaya (seperti `<script>`, `javascript:`, `<iframe>`, `<object>`, `<form>`). API akan langsung mengembalikan HTTP 422 Unprocessable Entity atau HTTP 400 Bad Request jika mendeteksi payload berbahaya.
+- **Upload Size Limit (Max 5MB)**: Middleware `MaxBodySizeMiddleware` menolak setiap request yang payload/body-nya melebihi 5MB (5,242,880 bytes) dengan response `HTTP 413 Payload Too Large`.
+- **Spending Cap / Transaction Limit**: Proteksi nilai pesanan anomali membatasi transaksi maksimal **Rp 50.000.000** per order pada `create_new_order` dan `create_custom_order`. Request yang melebihi batas ini ditolak dengan `HTTP 400 Bad Request`.
 
 ---
 
@@ -55,7 +57,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/products/` | Admin / Owner | Buat master produk baru (HPP default 0 sebelum resep diisi, `is_available` default `true`) |
-| `GET` | `/products/` | Public | List katalog produk (Filter: `only_active`, `kategori`, `only_available`). Default menampilkan semua produk aktif (termasuk yang stok habis). Field response memuat `is_available: bool` (manual seller), `stock_quantity: int` (ketersediaan bahan/resep), dan `is_in_stock: bool` (computed property). Filter `only_available=true` hanya mereturn produk dengan `is_in_stock == true`. |
+| `GET` | `/products/` | Public | List katalog produk (Filter: `only_active`, `kategori`, `only_available`). Dilengkapi **in-memory TTL cache (5 menit)** dengan auto-invalidation saat ada operasi create/update/delete/pricing/image produk. Default menampilkan semua produk aktif (termasuk yang stok habis). Field response memuat `is_available: bool` (manual seller), `stock_quantity: int` (ketersediaan bahan/resep), dan `is_in_stock: bool` (computed property). Filter `only_available=true` hanya mereturn produk dengan `is_in_stock == true`. |
 | `GET` | `/products/{product_id}` | Public | Detail produk lengkap beserta ketersediaan manual (`is_available`), stok bahan (`stock_quantity`), dan status siap beli (`is_in_stock`) |
 | `PUT` | `/products/{product_id}` | Admin / Owner | Update data produk (nama, deskripsi, kategori, is_active, is_available, slug, minimum_order, dll.) |
 | `DELETE` | `/products/{product_id}` | Admin / Owner | Hapus produk beserta seluruh relasi resep dan riwayat harganya |
@@ -190,7 +192,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/faq` | Admin / Owner | Tambah item pertanyaan & jawaban FAQ baru |
-| `GET` | `/faq` | Public | List FAQ (Filter: `only_active`, paginasi) |
+| `GET` | `/faq` | Public | List FAQ (Filter: `only_active`, paginasi). Dilengkapi **in-memory TTL cache (5 menit)** dengan auto-invalidation saat ada operasi create/update/delete FAQ. |
 | `GET` | `/faq/{faq_id}` | Public | Detail FAQ |
 | `PUT` | `/faq/{faq_id}` | Admin / Owner | Update pertanyaan/jawaban FAQ |
 | `DELETE` | `/faq/{faq_id}` | Admin / Owner | Hapus item FAQ |
@@ -246,3 +248,29 @@ Backend FastAPI mengirimkan notifikasi HTTP asynchronous (fire-and-forget, non-b
   "refund_mode": "auto" // "auto" (direct API Midtrans sukses) atau "manual" (metode VA/QRIS 412 yang mewajibkan transfer manual seller)
 }
 ```
+
+---
+
+### O. Uptime & Health Check (`/health`)
+
+Endpoint pemantauan status liveness dan konektivitas database untuk load balancer, Docker, atau monitoring service (UptimeRobot, Datadog, Prometheus).
+
+| Method | Endpoint | Auth / Permission | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health` | Public (No Auth) | Memeriksa ketersediaan aplikasi dan konektivitas async database via query `SELECT 1`. |
+
+#### Format Response:
+- **HTTP 200 OK** (Database connected):
+  ```json
+  {
+    "status": "ok",
+    "database": "connected"
+  }
+  ```
+- **HTTP 503 Service Unavailable** (Database disconnected):
+  ```json
+  {
+    "status": "error",
+    "database": "disconnected"
+  }
+  ```

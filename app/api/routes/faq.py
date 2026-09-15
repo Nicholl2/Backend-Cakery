@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
+from app.core.cache import app_cache
 from app.schemas.faq import FaqCreate, FaqUpdate, FaqDetailResponse
 from app.services import faq_service
 from app.api.dependencies import get_current_user_id, require_admin_or_owner
@@ -28,7 +29,9 @@ async def create_faq(
     
     Only users with role level 1 (Owner) or 2 (Admin) can create FAQ items.
     """
-    return await faq_service.create_faq(db, faq_data, created_by=user_id)
+    result = await faq_service.create_faq(db, faq_data, created_by=user_id)
+    app_cache.invalidate_prefix("faqs:")
+    return result
 
 
 @router.get("", response_model=List[FaqDetailResponse], status_code=status.HTTP_200_OK)
@@ -45,7 +48,13 @@ async def list_faqs(
     - **limit**: Maximum items to return (max 1000)
     - **only_active**: Filter to show only active FAQ items
     """
-    return await faq_service.list_faqs(db, skip, limit, only_active)
+    cache_key = f"faqs:list:{skip}:{limit}:{only_active}"
+    cached = app_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    result = await faq_service.list_faqs(db, skip, limit, only_active)
+    app_cache.set(cache_key, result)
+    return result
 
 
 @router.get("/{faq_id}", response_model=FaqDetailResponse, status_code=status.HTTP_200_OK)
@@ -72,7 +81,9 @@ async def update_faq(
     
     Only users with role level 1 (Owner) or 2 (Admin) can update FAQ items.
     """
-    return await faq_service.update_faq(db, faq_id, faq_data)
+    result = await faq_service.update_faq(db, faq_id, faq_data)
+    app_cache.invalidate_prefix("faqs:")
+    return result
 
 
 @router.delete("/{faq_id}", status_code=status.HTTP_200_OK)
@@ -87,4 +98,6 @@ async def delete_faq(
     
     Only users with role level 1 (Owner) or 2 (Admin) can delete FAQ items.
     """
-    return await faq_service.delete_faq(db, faq_id)
+    result = await faq_service.delete_faq(db, faq_id)
+    app_cache.invalidate_prefix("faqs:")
+    return result

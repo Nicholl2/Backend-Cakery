@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from app.core.database import get_db
+from app.core.cache import app_cache
 from app.api.dependencies import require_admin_or_owner
 from app.schemas.product import (
     ProductCreate, ProductUpdate, ProductOut,
@@ -20,7 +21,9 @@ router = APIRouter(tags=["Products"])
              dependencies=[Depends(require_admin_or_owner)],
              summary="Buat produk baru — hpp_total dimulai dari 0, isi resep dulu")
 async def create_product(data: ProductCreate, db: AsyncSession = Depends(get_db)):
-    return await product_service.create_product(db, data)
+    result = await product_service.create_product(db, data)
+    app_cache.invalidate_prefix("products:")
+    return result
 
 
 @router.get("/", response_model=list[ProductOut],
@@ -31,12 +34,18 @@ async def list_products(
     only_available: bool = Query(False, description="True = hanya produk dengan stok tersedia (is_in_stock == True)"),
     db: AsyncSession = Depends(get_db),
 ):
-    return await product_service.get_all_products(
+    cache_key = f"products:list:{only_active}:{kategori}:{only_available}"
+    cached = app_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    result = await product_service.get_all_products(
         db,
         only_active=only_active,
         kategori=kategori,
         only_available=only_available,
     )
+    app_cache.set(cache_key, result)
+    return result
 
 
 @router.get("/{product_id}", response_model=ProductOut)
@@ -49,14 +58,18 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
              dependencies=[Depends(require_admin_or_owner)],
              summary="Edit produk (Admin/Owner) — nama, deskripsi, kategori, is_active")
 async def update_product(product_id: int, data: ProductUpdate, db: AsyncSession = Depends(get_db)):
-    return await product_service.update_product(db, product_id, data)
+    result = await product_service.update_product(db, product_id, data)
+    app_cache.invalidate_prefix("products:")
+    return result
 
 
 @router.delete("/{product_id}",
                dependencies=[Depends(require_admin_or_owner)],
                summary="Hapus produk beserta semua resep dan riwayat harganya")
 async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
-    return await product_service.delete_product(db, product_id)
+    result = await product_service.delete_product(db, product_id)
+    app_cache.invalidate_prefix("products:")
+    return result
 
 
 @router.post("/{product_id}/image", response_model=ProductOut,
@@ -67,7 +80,9 @@ async def upload_product_image(
     file: UploadFile = File(..., description="File gambar produk (JPEG/PNG/WEBP)"),
     db: AsyncSession = Depends(get_db),
 ):
-    return await product_service.upload_product_image(db, product_id, file)
+    result = await product_service.upload_product_image(db, product_id, file)
+    app_cache.invalidate_prefix("products:")
+    return result
 
 
 # ── Pricing — khusus Owner ────────────────────────────────────────────────────
@@ -77,7 +92,9 @@ async def upload_product_image(
               summary="Owner menetapkan harga jual — Use Case 2 (Set Product Prices). "
                       "Sistem beri warning jika harga < HPP. Riwayat perubahan dicatat otomatis.")
 async def set_price(product_id: int, data: SetPriceRequest, db: AsyncSession = Depends(get_db)):
-    return await product_service.set_product_price(db, product_id, data)
+    result = await product_service.set_product_price(db, product_id, data)
+    app_cache.invalidate_prefix("products:")
+    return result
 
 
 @router.get("/{product_id}/pricing", response_model=PricingResponse,

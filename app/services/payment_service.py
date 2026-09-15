@@ -109,7 +109,7 @@ async def create_midtrans_charge(
     }
     
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, json=payload, headers=headers)
             res_json = response.json()
     except Exception as e:
@@ -448,7 +448,7 @@ async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
         "Accept": "application/json"
     }
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(url, headers=headers)
             if response.status_code == 200:
                 midtrans_payload = response.json()

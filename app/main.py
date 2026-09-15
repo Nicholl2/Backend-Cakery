@@ -1,9 +1,27 @@
 from contextlib import asynccontextmanager
 import os
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
+
+# ── Upload Size Limit Middleware ──────────────────────────────────────────────
+MAX_BODY_SIZE = 5 * 1024 * 1024  # 5 MB
+
+class MaxBodySizeMiddleware(BaseHTTPMiddleware):
+    """Reject requests whose Content-Length exceeds MAX_BODY_SIZE (5 MB)."""
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_BODY_SIZE:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Payload melebihi batas maksimal 5 MB."},
+            )
+        return await call_next(request)
 
 try:
     from fastapi.staticfiles import StaticFiles
@@ -112,6 +130,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── UPLOAD SIZE LIMIT ────────────────────────────────────────────────────────
+app.add_middleware(MaxBodySizeMiddleware)
+
 # Include routers
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(faq.router, prefix="/faq", tags=["FAQ Management"])
@@ -131,3 +152,21 @@ app.include_router(payment_router, prefix="/payments", tags=["Payments"])
 app.include_router(report_router, prefix="/reports", tags=["Reports"])
 app.include_router(user_router, prefix="/users", tags=["Users"])
 app.include_router(review_router, prefix="/reviews", tags=["Reviews"])
+
+
+# ── HEALTH CHECK ─────────────────────────────────────────────────────────────
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
+
+@app.get("/health", tags=["Health"])
+async def health_check(db: AsyncSession = Depends(get_db)):
+    """Check API and database connectivity."""
+    try:
+        await db.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "connected"}
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "database": "disconnected"},
+        )

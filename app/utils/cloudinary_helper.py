@@ -70,6 +70,7 @@ async def upload_image_to_cloudinary(
                 folder=folder,
                 resource_type="image",
                 overwrite=True,
+                timeout=10,
             )
 
         upload_result = await anyio.to_thread.run_sync(_sync_upload)

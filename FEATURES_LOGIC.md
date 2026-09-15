@@ -264,3 +264,41 @@ Sistem mengotomasi pencatatan stok dan pembaruan harga pokok bahan baku saat Pur
 5. **Proteksi & Idempotensi**:
    - Status PO yang sudah berstatus diterima (`is_received = True`) tidak dapat diubah kembali menjadi belum diterima (`is_received = False`) demi mencegah inkonsistensi stok (melempar HTTP `409 Conflict`).
    - Pembaruan field lain (seperti catatan) pada PO yang sudah diterima tidak akan memicu penambahan stok berulang.
+
+---
+
+## 16. Stabilitas, Keamanan, & Optimasi Performa
+
+Modul ini mengimplementasikan lapisan perlindungan dan efisiensi resource pada Backend FastAPI:
+
+1. **Upload Size Limit (`MaxBodySizeMiddleware`)**:
+   - Middleware ASGI global di `app/main.py` membaca header `Content-Length`.
+   - Menolak request yang melebihi batas maksimal **5 MB** (5 * 1024 * 1024 byte) dengan status `HTTP 413 Payload Too Large`.
+   - Melindungi server dari potensi Denial of Service (DoS) melalui pengunggahan file atau payload berukuran raksasa.
+
+2. **Timeout Handling pada External HTTP Clients**:
+   - Pemanggilan API eksternal diwajibkan menyertakan parameter `timeout=10.0` detik secara eksplisit:
+     - Midtrans Charge (`payment_service.create_midtrans_charge`)
+     - Midtrans Status Check (`payment_service.refresh_if_pending`)
+     - Midtrans Refund (`payment_service.process_refund`)
+     - Cloudinary Upload (`cloudinary_helper.upload_image_to_cloudinary`)
+   - Mencegah thread/event loop worker hanging tanpa batas akibat latency atau network partition di pihak gateway pembayaran atau CDN.
+
+3. **In-Memory Caching (Katalog Produk & FAQ)**:
+   - Modul `app/core/cache.py` mengimplementasikan singleton `app_cache` berbasis `TTLCache` (in-memory dict dengan default TTL 300 detik / 5 menit).
+   - Diterapkan pada endpoint publik yang bersifat read-heavy:
+     - `GET /products/`: Dikelompokkan per kombinasi query parameter (`only_active`, `kategori`, `only_available`).
+     - `GET /faq`: Dikelompokkan per kombinasi pagination & filter (`skip`, `limit`, `only_active`).
+   - **Cache Invalidation Otomatis**:
+     - Setiap operasi mutasi produk (`POST`, `PUT`, `DELETE`, `PATCH /price`, `POST /image`) memicu pembersihan cache `products:*`.
+     - Setiap operasi mutasi FAQ (`POST`, `PUT`, `DELETE`) memicu pembersihan cache `faqs:*`.
+
+4. **Uptime & Health Check Endpoint (`GET /health`)**:
+   - Endpoint publik tanpa autentikasi untuk health check monitoring (Docker HEALTHCHECK, load balancer, ping tools).
+   - Memverifikasi konektivitas nyata database via query `SELECT 1`.
+   - Mengembalikan `{"status": "ok", "database": "connected"}` (HTTP 200) jika DB sehat, atau `{"status": "error", "database": "disconnected"}` (HTTP 503) jika DB gagal terhubung.
+
+5. **Spending Cap / Transaction Limit Protection**:
+   - Validasi nilai pesanan maksimal **Rp 50.000.000** per order pada `order_service.create_new_order` dan `order_service.create_custom_order`.
+   - Mencegah kesalahan input atau serangan manipulasi nominal sebelum request diteruskan ke payment gateway Midtrans.
+   - Mengembalikan `HTTP 400 Bad Request` jika batas terlampaui.

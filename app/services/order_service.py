@@ -1,5 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
+
+MAX_ORDER_AMOUNT = Decimal("50000000")
 from typing import Optional
 import logging
 import httpx
@@ -124,6 +126,13 @@ async def create_new_order(
                             "stock_item_obj": stock_item
                         }
                     stock_item_requirements[stock_item.id]["total_needed"] += qty_needed
+
+        # ── 2b. Spending Cap — proteksi transaksi anomali ────────────────────
+        if total_harga_pesanan > MAX_ORDER_AMOUNT:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Total pesanan Rp {total_harga_pesanan:,.0f} melebihi batas maksimal Rp {MAX_ORDER_AMOUNT:,.0f} per order.",
+            )
 
         # ── 3. Validasi & Kurangi Stok (Optimistic Locking + Auto-Retry) ────
         MAX_STOCK_RETRY = 3
@@ -282,6 +291,13 @@ async def create_custom_order(
                 "subtotal": subtotal,
                 "hpp_snapshot": Decimal("0.00"),
             })
+
+        # Spending Cap — proteksi transaksi anomali
+        if total_harga_pesanan > MAX_ORDER_AMOUNT:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Total pesanan Rp {total_harga_pesanan:,.0f} melebihi batas maksimal Rp {MAX_ORDER_AMOUNT:,.0f} per order.",
+            )
 
         # Buat Order (created_via = "seller")
         order_obj = Order(

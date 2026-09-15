@@ -6,6 +6,32 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001l. Stability, Security, and Performance Enhancements
+- **Upload Size Limit (`app/main.py`)**:
+  - Menambahkan middleware ASGI `MaxBodySizeMiddleware` yang membaca header `Content-Length`.
+  - Me-reject request dengan ukuran body melebihi 5 MB (5,242,880 bytes) dengan response `HTTP 413 Payload Too Large`.
+  - Melindungi server backend dari ancaman overload resource / DoS upload.
+- **External HTTP Client Timeout Handling (`app/services/payment_service.py`, `app/utils/cloudinary_helper.py`)**:
+  - Menambahkan parameter `timeout=10.0` detik secara eksplisit pada `httpx.AsyncClient` di `create_midtrans_charge` dan `refresh_if_pending`.
+  - Menambahkan parameter `timeout=10` pada `cloudinary.uploader.upload` di `cloudinary_helper.py`.
+  - Menghindari server blocking/hanging permanen jika gateway pembayaran atau service CDN mengalami degradasi jaringan.
+- **In-Memory Caching Katalog & FAQ (`app/core/cache.py`, `app/api/routes/product.py`, `app/api/routes/faq.py`)**:
+  - Mengimplementasikan class `TTLCache` murni Python dengan eviction berbasis `time.monotonic()` dan default TTL 300 detik (5 menit).
+  - Menyediakan singleton `app_cache` dengan fungsionalitas `get`, `set`, `invalidate`, dan `invalidate_prefix`.
+  - Menerapkan cache pada `GET /products/` (berbasis query parameter: `only_active`, `kategori`, `only_available`).
+  - Menerapkan cache pada `GET /faq` (berbasis query parameter: `skip`, `limit`, `only_active`).
+  - Menambahkan auto cache-invalidation saat ada operasi penambahan/pengubahan data produk (`POST /products/`, `PUT /products/{id}`, `DELETE /products/{id}`, `POST /products/{id}/image`, `PATCH /products/{id}/price`) atau FAQ (`POST /faq`, `PUT /faq/{id}`, `DELETE /faq/{id}`).
+- **Uptime & Health Check Endpoint (`app/main.py`)**:
+  - Menambahkan endpoint publik `GET /health` (`/api/health` jika via root_path) yang mengeksekusi `SELECT 1` pada database PostgreSQL/SQLite.
+  - Mengembalikan `{"status": "ok", "database": "connected"}` (HTTP 200) atau `{"status": "error", "database": "disconnected"}` (HTTP 503).
+- **Spending Cap / Transaction Limit Protection (`app/services/order_service.py`)**:
+  - Menambahkan konstanta `MAX_ORDER_AMOUNT = Decimal("50000000")` (Rp 50.000.000).
+  - Menerapkan validasi limit transaksi sebelum pengecekan stok pada `create_new_order` dan `create_custom_order`.
+  - Menolak pembuatan pesanan yang nominalnya di atas batas maksimal dengan `HTTP 400 Bad Request`.
+- **Automated Test Suite (`tests/test_stability_features.py`)**:
+  - 9 unit tests baru mencakup: health check endpoint, upload size limit rejection (>5MB) & allowance (<=5MB), spending cap rejection (>50 juta) & allowance (<=50 juta), serta operasi dasar, expiry, prefix invalidation, dan single key invalidation pada TTLCache.
+  - Seluruh test suite (39 tests) berstatus **PASSED**.
+
 ### 001k. Financial Report Accounting Fix, Date Basis Consistency & Purchase-to-Stock Integration
 - **Konsistensi Basis Tanggal Laporan Keuangan (`app/repositories/report_repo.py`, `app/services/report_service.py`)**:
   - Mengubah kalkulasi Revenue dan HPP (Harga Pokok Penjualan) pada `GET /reports/financial` agar konsisten menggunakan tanggal penyelesaian pembayaran sukses (`settled_at` atau `created_at` dari pembayaran sukses).
