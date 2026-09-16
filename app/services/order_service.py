@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 MAX_ORDER_AMOUNT = Decimal("50000000")
@@ -613,6 +613,7 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
                 for payment in order.invoice.payments:
                     if payment.payment_status == PaymentStatusEnum.success:
                         payment.payment_status = PaymentStatusEnum.refunded
+                        payment.updated_at = datetime.now(timezone.utc)
 
     order.status = new_status_enum
     await db.commit()

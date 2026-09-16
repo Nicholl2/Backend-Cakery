@@ -15,6 +15,9 @@ class TopProductSummary(BaseModel):
 class FinancialReportSummary(BaseModel):
     revenue: Decimal
     expenses: Decimal
+    cash_received: Decimal = Decimal("0.00")
+    cash_refunded: Decimal = Decimal("0.00")
+    net_cash_flow: Decimal = Decimal("0.00")
     order_count: int
     avg_order_value: Decimal
     top_products: List[TopProductSummary]
@@ -47,6 +50,8 @@ class FinancialReportDetail(BaseModel):
     revenue: Decimal
     total_revenue: Decimal
     cash_received: Decimal = Decimal("0.00")
+    cash_refunded: Decimal = Decimal("0.00")
+    net_cash_flow: Decimal = Decimal("0.00")
     hpp_total: Decimal
     total_hpp_cost: Decimal
     gross_profit: Decimal

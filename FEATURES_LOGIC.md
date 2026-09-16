@@ -241,17 +241,22 @@ Untuk memastikan laporan laba rugi (`GET /reports/financial`) akurat dan mencerm
 2. **Eksklusi Total Pesanan Unpaid / Pending**:
    - Query HPP dan Revenue hanya memperhitungkan pesanan yang status invoice-nya sudah lunas (`InvoiceStatusEnum.paid`) dan memiliki pembayaran berstatus `Success`.
    - Pesanan berstatus *unpaid* atau *pending payment* **dikeluarkan total** dari perhitungan Revenue, HPP, Gross Profit, dan Net Profit.
-3. **Arus Kas Masuk Nyata (`cash_received` - Cash Basis Flow)**:
-   - Menghitung seluruh akumulasi dana riil yang masuk dari transaksi pembayaran sukses (`Payment.payment_status == 'Success'`) berdasarkan `Payment.created_at` pada rentang periode filter (`start_date` s.d. `end_date`).
-   - Mencakup seluruh pembayaran DP, pelunasan pesanan lunas, maupun DP dari pesanan yang dibatalkan tanpa refund.
-4. **Perhitungan Piutang Kumulatif (`outstanding_payments`)**:
+3. **Arus Kas Masuk Nyata (`cash_received` - Cash Basis Flow & Historical Integrity)**:
+   - Menghitung seluruh akumulasi dana riil yang masuk dari transaksi pembayaran yang diproses sukses (`Payment.payment_status.in_(['Success', 'Refunded'])`) berdasarkan `Payment.created_at` pada rentang periode filter (`start_date` s.d. `end_date`).
+   - **Integritas Historis (Historical Integrity)**: Transaksi pembayaran yang berhasil diproses di masa lalu tidak dihapus dari `cash_received` periode tersebut meskipun di kemudian hari dibatalkan dan direfund.
+4. **Arus Kas Keluar via Refund (`cash_refunded`)**:
+   - Menghitung total pengembalian dana kepada pelanggan (`Payment.payment_status == 'Refunded'`) berdasarkan tanggal eksekusi refund (`coalesce(Payment.updated_at, Payment.created_at)`) yang jatuh dalam rentang periode filter.
+5. **Arus Kas Bersih (`net_cash_flow`)**:
+   - Mengukur pergerakan kas netto pada periode yang bersangkutan:
+     $$\text{net\_cash\_flow} = \text{cash\_received} - \text{cash\_refunded}$$
+6. **Perhitungan Piutang Kumulatif (`outstanding_payments`)**:
    - Menghitung SELURUH sisa tagihan invoice yang belum lunas per titik akhir periode (`end_date`), termasuk akumulasi piutang dari pesanan-pesanan pada periode sebelumnya yang belum selesai pembayarannya (`Order.created_at <= end_date`).
    - Formula: $\sum (\text{Invoice.total\_tagihan} - \text{pembayaran\_sukses\_hingga\_end\_date})$ untuk semua invoice berstatus `unpaid` atau `partial` pada order non-cancelled/non-refunded.
-5. **Penanganan DP Hangus (`non_refundable_dp_income` / `other_income`)**:
+7. **Penanganan DP Hangus (`non_refundable_dp_income` / `other_income`)**:
    - Pesanan berstatus `cancelled` yang memiliki transaksi pembayaran sukses (DP) yang tidak direfund diperlakukan sebagai pendapatan lain-lain (*other income*).
    - Nominal DP tersebut tetap tercatat di `cash_received` dan dihitung ke dalam laba bersih:
      $$\text{net\_profit} = \text{gross\_profit} - \text{expenses\_total} + \text{non\_refundable\_dp\_income}$$
-6. **Metrik Finansial Tambahan**:
+8. **Metrik Finansial Tambahan**:
    - `full_product_profitability` / `product_profitability`: Menghitung rincian performa per item produk dari pesanan yang lunas (kuantitas terjual, total revenue, total HPP snapshot, gross profit, dan margin persentase).
    - `supplier_spending`: Mengagregasikan total pengeluaran belanja PO dan frekuensi pesanan per supplier pada rentang periode yang dipilih.
 

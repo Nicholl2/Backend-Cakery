@@ -6,6 +6,25 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001n. Financial Report Cash Flow, Historical Integrity & Refund Recognition
+- **Integritas Historis `cash_received` (Opsi 2) (`app/repositories/report_repo.py`, `app/api/routes/report.py`)**:
+  - Memastikan pembayaran yang berhasil diproses pada periode berjalan tetap dihitung ke dalam `cash_received` berdasarkan `Payment.created_at`, meskipun di kemudian hari (periode berikutnya) status pembayaran tersebut berubah menjadi `Refunded`.
+  - Melindungi integritas data historis sehingga laporan arus kas masuk pada bulan-bulan lampau tidak terdistorsi atau berkurang akibat refund di masa mendatang.
+- **Penambahan Field `cash_refunded` (`app/repositories/report_repo.py`, `app/schemas/report.py`, `app/api/routes/report.py`)**:
+  - Mengimplementasikan query kalkulasi total pengembalian dana riil (`cash_refunded`) berdasarkan timestamp eksekusi refund (`coalesce(Payment.updated_at, Payment.created_at)`) yang jatuh dalam rentang periode filter.
+  - Menambahkan kolom `updated_at` pada model `Payment` dan memperbarui `ensure_payment_columns` di `app/core/migrations.py`.
+  - Mencatat timestamp `payment.updated_at = now()` saat webhook refund diproses atau saat seller/admin mengubah status pesanan menjadi `refunded`.
+- **Perhitungan Arus Kas Bersih `net_cash_flow` (`app/repositories/report_repo.py`, `app/schemas/report.py`)**:
+  - Mengkalkulasikan pergerakan kas bersih per periode: `net_cash_flow = cash_received - cash_refunded`.
+  - Memasukkan `cash_refunded` dan `net_cash_flow` ke dalam `FinancialReportResponse`, `FinancialReportDetail`, dan `FinancialReportSummary`.
+- **Automated Test Suite (`tests/test_financial_report.py`)**:
+  - Memperbarui assertions pada seluruh unit test finansial untuk memvalidasi `cash_refunded` dan `net_cash_flow`.
+  - Menambahkan unit test baru `test_cross_period_refund_and_historical_integrity`:
+    * Memvalidasi pembayaran di bulan Januari tetap tercatat di `cash_received` Januari meskipun di-refund pada Februari.
+    * Memvalidasi bulan Februari secara akurat mencatat `cash_refunded` dan `net_cash_flow = -150.000`.
+    * Memvalidasi rekonsiliasi periode gabungan menghasilkan `net_cash_flow = 0.00`.
+  - Seluruh 41 unit tests di test suite berjalan lancar (**100% PASSED**).
+
 ### 001m. Financial Report Cash Received, Cumulative Outstanding & Non-Refundable DP Logic
 - **Penambahan Field `cash_received` (Cash Basis Flow) (`app/repositories/report_repo.py`, `app/schemas/report.py`)**:
   - Mengakumulasikan total riil nominal pembayaran sukses berdasarkan `Payment.created_at` yang jatuh dalam rentang filter tanggal (`start_date` s.d. `end_date`).

@@ -41,6 +41,7 @@ class Payment(Base):
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     settled_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
     va_number = Column(String(50), nullable=True)
     qris_url = Column(Text, nullable=True)
 

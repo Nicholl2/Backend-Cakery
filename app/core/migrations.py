@@ -178,6 +178,7 @@ async def ensure_payment_columns(conn: AsyncConnection):
 
     await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;"))
     await conn.execute(text("UPDATE payments SET settled_at = created_at WHERE settled_at IS NULL AND payment_status = 'Success';"))
+    await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;"))
 
 
 

@@ -51,16 +51,30 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     )
     total_revenue = revenue_query.scalar() or Decimal("0.00")
 
-    # ── 3. Cash Received (Cash Basis Flow): All successful payments in period ───
+    # ── 3. Cash Received (Cash Basis Flow): All payments processed in period ───
+    # Maintain historical integrity: payments received in period count even if later refunded
     cash_received_query = await db.execute(
         select(func.sum(Payment.jumlah_bayar))
         .where(
-            Payment.payment_status == PaymentStatusEnum.success,
+            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.refunded]),
             Payment.created_at >= start_dt,
             Payment.created_at <= end_dt
         )
     )
     cash_received = cash_received_query.scalar() or Decimal("0.00")
+
+    # ── 3b. Cash Refunded: Total refunds executed in period ─────────────────────
+    cash_refunded_query = await db.execute(
+        select(func.sum(Payment.jumlah_bayar))
+        .where(
+            Payment.payment_status == PaymentStatusEnum.refunded,
+            func.coalesce(Payment.updated_at, Payment.created_at) >= start_dt,
+            func.coalesce(Payment.updated_at, Payment.created_at) <= end_dt
+        )
+    )
+    cash_refunded = cash_refunded_query.scalar() or Decimal("0.00")
+
+    net_cash_flow = cash_received - cash_refunded
 
     # ── 4. Total Expenses: Operating expenses within the date range ────────────
     expense_query = await db.execute(
@@ -201,6 +215,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         "revenue": total_revenue,
         "total_revenue": total_revenue,
         "cash_received": cash_received,
+        "cash_refunded": cash_refunded,
+        "net_cash_flow": net_cash_flow,
         "hpp_total": total_hpp_cost,
         "total_hpp_cost": total_hpp_cost,
         "gross_profit": gross_profit,

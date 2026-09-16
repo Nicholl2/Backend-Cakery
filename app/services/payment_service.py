@@ -281,6 +281,7 @@ async def _apply_transaction_status(
             events_to_notify.append((invoice.order_id, "paid"))
 
     elif new_status == PaymentStatusEnum.refunded:
+        payment.updated_at = datetime.now(timezone.utc)
         invoice_res = await db.execute(
             select(Invoice).where(Invoice.id == payment.invoice_id)
         )

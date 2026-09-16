@@ -67,6 +67,28 @@ async def get_report_summary(
     )
     expenses = expense_query.scalar() or Decimal("0.00")
 
+    # 2b. Cash Received & Refunded (Cash Flow)
+    cash_received_query = await db.execute(
+        select(func.sum(Payment.jumlah_bayar))
+        .where(
+            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.refunded]),
+            Payment.created_at >= start_dt,
+            Payment.created_at <= end_dt
+        )
+    )
+    cash_received = cash_received_query.scalar() or Decimal("0.00")
+
+    cash_refunded_query = await db.execute(
+        select(func.sum(Payment.jumlah_bayar))
+        .where(
+            Payment.payment_status == PaymentStatusEnum.refunded,
+            func.coalesce(Payment.updated_at, Payment.created_at) >= start_dt,
+            func.coalesce(Payment.updated_at, Payment.created_at) <= end_dt
+        )
+    )
+    cash_refunded = cash_refunded_query.scalar() or Decimal("0.00")
+    net_cash_flow = cash_received - cash_refunded
+
     # 3. Order Count & Avg Order Value
     order_stats_query = await db.execute(
         select(
@@ -117,6 +139,9 @@ async def get_report_summary(
     return FinancialReportSummary(
         revenue=revenue,
         expenses=expenses,
+        cash_received=cash_received,
+        cash_refunded=cash_refunded,
+        net_cash_flow=net_cash_flow,
         order_count=order_count,
         avg_order_value=avg_order_value,
         top_products=top_products

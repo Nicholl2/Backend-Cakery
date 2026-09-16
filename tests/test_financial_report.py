@@ -175,6 +175,8 @@ async def test_financial_report_date_consistency_and_unpaid_exclusion(db_session
     assert jan_report.total_revenue == Decimal("0.00")
     assert jan_report.revenue == Decimal("0.00")
     assert jan_report.cash_received == Decimal("0.00")
+    assert jan_report.cash_refunded == Decimal("0.00")
+    assert jan_report.net_cash_flow == Decimal("0.00")
     assert jan_report.total_hpp_cost == Decimal("0.00")
     assert jan_report.hpp_total == Decimal("0.00")
     assert jan_report.gross_profit == Decimal("0.00")
@@ -192,6 +194,8 @@ async def test_financial_report_date_consistency_and_unpaid_exclusion(db_session
     assert feb_report.total_revenue == Decimal("150000.00")
     assert feb_report.revenue == Decimal("150000.00")
     assert feb_report.cash_received == Decimal("150000.00")
+    assert feb_report.cash_refunded == Decimal("0.00")
+    assert feb_report.net_cash_flow == Decimal("150000.00")
     assert feb_report.total_hpp_cost == Decimal("80000.00")
     assert feb_report.hpp_total == Decimal("80000.00")
     assert feb_report.total_expenses == Decimal("20000.00")
@@ -323,6 +327,8 @@ async def test_partial_payment_and_cancelled_orders_handling(db_session: AsyncSe
 
     # Cash received must capture the DP paid in March (60,000)
     assert report.cash_received == Decimal("60000.00")
+    assert report.cash_refunded == Decimal("0.00")
+    assert report.net_cash_flow == Decimal("60000.00")
     assert report.non_refundable_dp_income == Decimal("0.00")
 
     # Outstanding payments must be 140,000 (200,000 - 60,000 DP).
@@ -489,30 +495,113 @@ async def test_cumulative_outstanding_and_non_refundable_dp(db_session: AsyncSes
     feb_report = await report_service.get_financial_report(db_session, "2026-02-01", "2026-02-28")
 
     # 1. Cash received:
-    # 30,000 (from order_feb_partial DP) + 20,000 (from order_feb_cancelled DP) = 50,000
-    # (Refunded payment is NOT success, order_jan had no payment)
-    assert feb_report.cash_received == Decimal("50000.00")
+    # 30,000 (from order_feb_partial DP) + 20,000 (from order_feb_cancelled DP) + 40,000 (order_feb_refunded payment) = 90,000
+    # Maintains historical integrity: payments processed in February count in cash_received
+    assert feb_report.cash_received == Decimal("90000.00")
 
-    # 2. Non-refundable DP income:
+    # 2. Cash refunded & Net cash flow:
+    # 40,000 refunded in February
+    assert feb_report.cash_refunded == Decimal("40000.00")
+    assert feb_report.net_cash_flow == Decimal("50000.00")  # 90,000 - 40,000
+
+    # 3. Non-refundable DP income:
     # 20,000 from order_feb_cancelled (status cancelled, payment success, within Feb)
     assert feb_report.non_refundable_dp_income == Decimal("20000.00")
     assert feb_report.other_income == Decimal("20000.00")
 
-    # 3. Revenue & Gross profit:
+    # 4. Revenue & Gross profit:
     # No fully settled (paid) orders in Feb -> 0.00
     assert feb_report.revenue == Decimal("0.00")
     assert feb_report.gross_profit == Decimal("0.00")
 
-    # 4. Expenses: 10,000
+    # 5. Expenses: 10,000
     assert feb_report.expenses_total == Decimal("10000.00")
 
-    # 5. Net profit: gross_profit (0) - expenses (10,000) + non_refundable_dp (20,000) = 10,000!
+    # 6. Net profit: gross_profit (0) - expenses (10,000) + non_refundable_dp (20,000) = 10,000!
     assert feb_report.net_profit == Decimal("10000.00")
 
-    # 6. Cumulative Outstanding payments as of 2026-02-28:
+    # 7. Cumulative Outstanding payments as of 2026-02-28:
     # - Order #1 from January: 100,000 (unpaid) -> MUST BE INCLUDED!
     # - Order #2 from February: 80,000 - 30,000 = 50,000 (partial)
     # - Order #3 (cancelled) and Order #4 (refunded): EXCLUDED!
     # Total outstanding = 100,000 + 50,000 = 150,000
     assert feb_report.outstanding_payments == Decimal("150000.00")
+
+
+@pytest.mark.asyncio
+async def test_cross_period_refund_and_historical_integrity(db_session: AsyncSession):
+    """
+    Test that:
+    1. A payment made in January retains historical integrity: January cash_received includes it,
+       even though the order and payment are refunded later in February.
+    2. February report correctly records cash_refunded for the refund executed in February,
+       with net_cash_flow = cash_received (0) - cash_refunded (150,000) = -150,000.
+    3. Full year report sums cash_received and cash_refunded to net_cash_flow = 0.
+    """
+    customer = Customer(id=4, nama="Rian Pembeli", nomor_wa="081299990004")
+    db_session.add(customer)
+
+    jan_pay_date = datetime(2026, 1, 10, 10, 0, 0, tzinfo=timezone.utc)
+    feb_refund_date = datetime(2026, 2, 20, 15, 0, 0, tzinfo=timezone.utc)
+
+    # Order created in January
+    order = Order(
+        id=901,
+        customer_id=customer.id,
+        status=OrderStatusEnum.refunded,
+        metode_pengiriman=MetodePengirimanEnum.delivery,
+        total_harga_pesanan=Decimal("150000.00"),
+        created_at=jan_pay_date,
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    inv = Invoice(
+        id=1001,
+        order_id=order.id,
+        nomor_invoice="INV-JAN-REFUNDED-LATER",
+        total_tagihan=Decimal("150000.00"),
+        status=InvoiceStatusEnum.refunded,
+        created_at=jan_pay_date,
+    )
+    db_session.add(inv)
+    await db_session.flush()
+
+    # Payment: created in January (cash received in Jan), but refunded in February (updated_at = Feb)
+    payment = Payment(
+        id=1101,
+        invoice_id=inv.id,
+        jumlah_bayar=Decimal("150000.00"),
+        payment_method="bca_va",
+        payment_status=PaymentStatusEnum.refunded,
+        payment_type=PaymentTypeEnum.final,
+        created_at=jan_pay_date,
+        settled_at=jan_pay_date,
+        updated_at=feb_refund_date,
+    )
+    db_session.add(payment)
+    await db_session.commit()
+
+    # ── Test January Report (Historical Integrity Check) ─────────────────────
+    jan_report = await report_service.get_financial_report(db_session, "2026-01-01", "2026-01-31")
+    # Cash was received in Jan: 150,000
+    assert jan_report.cash_received == Decimal("150000.00")
+    # Refund did NOT happen in Jan
+    assert jan_report.cash_refunded == Decimal("0.00")
+    assert jan_report.net_cash_flow == Decimal("150000.00")
+
+    # ── Test February Report (Refund Recognition Check) ──────────────────────
+    feb_report = await report_service.get_financial_report(db_session, "2026-02-01", "2026-02-28")
+    # No new cash received in Feb for this payment
+    assert feb_report.cash_received == Decimal("0.00")
+    # Refund executed in Feb: 150,000
+    assert feb_report.cash_refunded == Decimal("150000.00")
+    # Net cash flow in Feb: 0 - 150,000 = -150,000
+    assert feb_report.net_cash_flow == Decimal("-150000.00")
+
+    # ── Test Combined Period Report (Net Reconciliation Check) ───────────────
+    combined_report = await report_service.get_financial_report(db_session, "2026-01-01", "2026-02-28")
+    assert combined_report.cash_received == Decimal("150000.00")
+    assert combined_report.cash_refunded == Decimal("150000.00")
+    assert combined_report.net_cash_flow == Decimal("0.00")
 
