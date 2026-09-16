@@ -62,6 +62,10 @@ class ReviewOut(BaseModel):
     comment: Optional[str] = None
     created_at: datetime
 
+    # Direct name fields for frontend convenience
+    product_name: Optional[str] = None
+    customer_name: Optional[str] = None
+
     # Nested response objects
     product: Optional[ProductOut] = None
     customer: Optional[CustomerOut] = None
@@ -69,10 +73,14 @@ class ReviewOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     @model_validator(mode="after")
-    def populate_comment(self):
+    def populate_extra_fields(self):
         if self.comment is None and self.komentar is not None:
             self.comment = self.komentar
         elif self.komentar is None and self.comment is not None:
             self.komentar = self.comment
+        if self.product_name is None and self.product is not None:
+            self.product_name = getattr(self.product, "nama_produk", None) or getattr(self.product, "name", None)
+        if self.customer_name is None and self.customer is not None:
+            self.customer_name = getattr(self.customer, "nama", None)
         return self
 

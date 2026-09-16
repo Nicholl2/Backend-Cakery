@@ -5,9 +5,27 @@ from typing import Optional
 from datetime import datetime
 
 
+from app.utils.phone import get_phone_variants, normalize_phone
+from sqlalchemy.exc import IntegrityError
+
+
 async def get_by_nomor_wa(db: AsyncSession, nomor_wa: str) -> Optional[Customer]:
+    """Find customer by nomor_wa, falling back to all common formatting variants (08xx, 62xx, +62xx)."""
+    if not nomor_wa:
+        return None
+    # 1. Check exact match
     result = await db.execute(select(Customer).where(Customer.nomor_wa == nomor_wa))
-    return result.scalars().first()
+    customer = result.scalars().first()
+    if customer:
+        return customer
+
+    # 2. Check candidate variants
+    variants = get_phone_variants(nomor_wa)
+    if variants:
+        stmt = select(Customer).where(Customer.nomor_wa.in_(variants)).limit(1)
+        res = await db.execute(stmt)
+        return res.scalars().first()
+    return None
 
 
 async def upsert(
@@ -19,6 +37,7 @@ async def upsert(
     """
     Returns (customer, created).
     created=True berarti baru dibuat, False berarti update.
+    Uses get_or_create logic with phone variant matching to prevent 409 / unique constraint conflicts.
     """
     customer = await get_by_nomor_wa(db, nomor_wa)
     if customer:
@@ -28,10 +47,22 @@ async def upsert(
         await db.flush()
         return customer, False
 
-    customer = Customer(nama=nama, nomor_wa=nomor_wa, alamat=alamat)
+    clean_wa = normalize_phone(nomor_wa, as_http_exception=False) or nomor_wa
+    customer = Customer(nama=nama, nomor_wa=clean_wa, alamat=alamat)
     db.add(customer)
-    await db.flush()
-    return customer, True
+    try:
+        await db.flush()
+        return customer, True
+    except IntegrityError:
+        # Race condition or alternate formatting already created in DB: fetch existing
+        customer = await get_by_nomor_wa(db, nomor_wa)
+        if customer:
+            customer.nama = nama
+            if alamat is not None:
+                customer.alamat = alamat
+            await db.flush()
+            return customer, False
+        raise
 
 
 async def set_takeover(

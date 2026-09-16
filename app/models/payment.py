@@ -44,6 +44,7 @@ class Payment(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
     va_number = Column(String(50), nullable=True)
     qris_url = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
 
     # Relationships
     invoice = relationship("Invoice", back_populates="payments")

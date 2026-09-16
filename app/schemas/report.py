@@ -1,6 +1,40 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from decimal import Decimal
-from typing import List
+from typing import List, Optional
+
+
+class RecentOrderSummary(BaseModel):
+    id: int
+    customer_name: Optional[str] = None
+    nama_customer: Optional[str] = None
+    total_price: Optional[Decimal] = None
+    total_harga: Optional[Decimal] = None
+    total_harga_pesanan: Optional[Decimal] = None
+    status: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def sync_aliases(self):
+        name = self.customer_name or self.nama_customer
+        self.customer_name = name
+        self.nama_customer = name
+
+        price = self.total_price if self.total_price is not None else (self.total_harga if self.total_harga is not None else self.total_harga_pesanan)
+        self.total_price = price
+        self.total_harga = price
+        self.total_harga_pesanan = price
+        return self
+
+
+class ReportSummary(BaseModel):
+    total_products: int
+    active_products: int
+    total_revenue: Decimal
+    total_orders: int
+    recent_orders: List[RecentOrderSummary]
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TopProductSummary(BaseModel):

@@ -40,6 +40,22 @@ async def get_all(db: AsyncSession) -> list[Review]:
     return result.scalars().all()
 
 
+async def get_latest(db: AsyncSession, limit: int = 6) -> list[Review]:
+    """Get latest reviews globally with eager loading for product and customer."""
+    stmt = (
+        select(Review)
+        .order_by(Review.created_at.desc(), Review.id.desc())
+        .limit(limit)
+        .options(
+            selectinload(Review.product),
+            selectinload(Review.customer),
+            selectinload(Review.order),
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
 async def get_by_order_and_product(db: AsyncSession, order_id: int, product_id: int) -> Optional[Review]:
     """Get review by order_id and product_id."""
     stmt = select(Review).where(

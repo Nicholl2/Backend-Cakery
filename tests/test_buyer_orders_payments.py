@@ -231,13 +231,85 @@ async def run_tests():
         assert res_pay_stat_cb.status_code == 200
         print("✓ Chatbot checked payment status with X-Service-Key (200)")
 
+        # Test 10: Duplicate Customer / Phone Variant Handling (Fix 409 Conflict)
+        print("\n10. Testing Duplicate Customer / Phone Variant handling (08xx vs 62xx)...")
+        b3_email = "test.buyer3@test.com"
+        b3_phone = "081933333333"
+        pre_cust_phone = "62" + b3_phone[1:]
+        async with TestSessionLocal() as db:
+            # Pre-existing customer with 62 prefix
+            pre_cust = Customer(nama="Existing Customer", nomor_wa=pre_cust_phone)
+            db.add(pre_cust)
+            await db.commit()
+            await db.refresh(pre_cust)
+            pre_cust_id = pre_cust.id
+
+            # Buyer registered with 08 prefix
+            buyer3 = await buyer_repo.create_buyer(
+                db, name="Buyer Tiga", email=b3_email, phone=b3_phone, password_hash="hash3", is_verified=True
+            )
+            buyer3_id = buyer3.id
+
+        token_buyer3 = create_access_token(user_id=buyer3_id, role_level=0, username=b3_email, role="buyer")
+        res_b3_order = await client.post(
+            "/orders/buyer",
+            json=order_payload,
+            headers={"Authorization": f"Bearer {token_buyer3}"}
+        )
+        assert res_b3_order.status_code == 201, f"Expected 201, got {res_b3_order.status_code}: {res_b3_order.text}"
+        b3_order_data = res_b3_order.json()
+        assert b3_order_data["customer_id"] == pre_cust_id, "Must reuse existing customer instead of 409 Conflict"
+        print(f"✓ Duplicate customer successfully handled & reused: Customer ID={b3_order_data['customer_id']}")
+
+        # Test 11: Unique Invoice Number with Suffix
+        print("\n11. Testing Unique Invoice Number with suffix on multiple orders...")
+        res_b2_order = await client.post(
+            "/orders/buyer",
+            json=order_payload,
+            headers={"Authorization": f"Bearer {token_buyer2}"}
+        )
+        assert res_b2_order.status_code == 201
+        order2_data = res_b2_order.json()
+        inv1 = order1_data["invoice"]["nomor_invoice"]
+        inv2 = order2_data["invoice"]["nomor_invoice"]
+        assert inv1 != inv2, "Invoice numbers must be unique"
+        print(f"✓ Unique invoice numbers verified: '{inv1}' vs '{inv2}'")
+
+        # Test 12: Error Handling on POST /orders/buyer (Returns 400 with detail, not 500)
+        print("\n12. Testing Error Handling & Detail on POST /orders/buyer...")
+        b4_email = "test.buyer4@test.com"
+        b4_phone = "081944444444"
+        async with TestSessionLocal() as db:
+            buyer4 = await buyer_repo.create_buyer(
+                db, name="Buyer Empat", email=b4_email, phone=b4_phone, password_hash="hash4", is_verified=True
+            )
+            buyer4_id = buyer4.id
+        token_buyer4 = create_access_token(user_id=buyer4_id, role_level=0, username=b4_email, role="buyer")
+
+        invalid_payload = {
+            "metode_pengiriman": "delivery",
+            "items": [
+                {"product_id": 99999, "jumlah": 1, "custom_decoration_charge": "0.00"}
+            ],
+            "created_via": "web"
+        }
+        res_err = await client.post(
+            "/orders/buyer",
+            json=invalid_payload,
+            headers={"Authorization": f"Bearer {token_buyer4}"}
+        )
+        assert res_err.status_code in (400, 422), f"Expected 400 or 422, got {res_err.status_code}: {res_err.text}"
+        assert "detail" in res_err.json()
+        assert res_err.status_code != 500, "Server must not crash with HTTP 500"
+        print(f"✓ Error handled safely without 500 crash: Status={res_err.status_code}, Detail={res_err.json()['detail']}")
+
     # Cleanup test data
     async with TestSessionLocal() as db:
-        for b_id in [buyer1_id, buyer2_id]:
+        for b_id in [buyer1_id, buyer2_id, buyer3_id]:
             b = await buyer_repo.get_buyer_by_id(db, b_id)
             if b:
                 await db.delete(b)
-        for ph in [b1_phone, b2_phone, "089999999999"]:
+        for ph in [b1_phone, b2_phone, b3_phone, "628193333333", "089999999999"]:
             c = await customer_repo.get_by_nomor_wa(db, ph)
             if c:
                 ord_res = await db.execute(select(Order).where(Order.customer_id == c.id))

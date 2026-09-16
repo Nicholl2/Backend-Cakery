@@ -6,6 +6,65 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001r. Implementasi Kontrak Endpoint Frontend: Dashboard Summary, Manual Payment & Global Reviews
+- **Dashboard Summary (`app/api/routes/report.py`, `app/schemas/report.py`, `app/services/report_service.py`, `app/repositories/report_repo.py`)**:
+  - Memperbarui endpoint `GET /reports/summary`: Menghapus proteksi `require_service_key` (X-Service-Key) dan menggantikannya dengan otorisasi JWT untuk role OWNER, ADMIN, dan STAFF (`require_internal_user` / `require_staff_or_above`).
+  - Menambahkan schema Pydantic `ReportSummary` dan `RecentOrderSummary` dengan struktur:
+    - `total_products: int`: Total seluruh produk terdaftar di sistem.
+    - `active_products: int`: Jumlah produk berstatus aktif (`is_active = True`).
+    - `total_revenue: Decimal`: Total akumulasi penerimaan pembayaran sukses (`PaymentStatusEnum.success`).
+    - `total_orders: int`: Total seluruh pesanan yang masuk di sistem.
+    - `recent_orders: List[RecentOrderSummary]`: 5 pesanan terbaru lengkap dengan `id`, `customer_name` (dan alias `nama_customer`), `total_price` (dan alias `total_harga`/`total_harga_pesanan`), serta `status`.
+  - Mendukung query parameter opsional `start_date` dan `end_date` (jika tidak disertakan, metrik dihitung secara akumulatif all-time).
+
+- **Manual Payment (`app/api/routes/payment.py`, `app/schemas/payment.py`, `app/services/payment_service.py`, `app/models/payment.py`, `app/models/order.py`)**:
+  - Menambahkan endpoint `POST /payments/manual` dengan request body schema `ManualPaymentRequest`:
+    - `order_id: str` (mendukung string/integer)
+    - `amount: float` (nominal pembayaran)
+    - `payment_method: str` (contoh: `'CASH'`, `'TRANSFER'`)
+    - `notes: Optional[str]` (catatan pembayaran kasir/admin)
+  - Menambahkan response schema `ManualPaymentResponse` dengan status pembayaran `payment_status: "PAID"`.
+  - Logika bisnis manual payment:
+    - Memvalidasi keberadaan `Order` dan membuat `Invoice` jika belum tersedia.
+    - Membuat record transaksi `Payment` baru dengan status `PaymentStatusEnum.success`, metode pembayaran yang dipilih, `settled_at = now()`, dan `notes`.
+    - Memperbarui status `Invoice` menjadi `paid` (atau `partial` jika belum lunas).
+    - Memperbarui status pesanan terkait dari `pending` menjadi `in_process` sesuai alur produksi dapur.
+    - Menambahkan properti `payment_status` pada model `Order` dengan eager loading `lazy="selectin"` pada relasi invoice.
+    - Mengirimkan sinyal webhook status pembayaran ke Chatbot (`notify_payment_status`) setelah database commit.
+
+- **Global Reviews (`app/api/routes/review.py`, `app/schemas/review.py`, `app/services/review_service.py`, `app/repositories/review_repo.py`, `app/models/review.py`)**:
+  - Menambahkan endpoint `GET /reviews/latest` dengan query parameter `limit` (default 6, type int, range 1-50).
+  - Ditempatkan sebelum route berparameter `GET /{review_id}` untuk mencegah routing conflict pada FastAPI.
+  - Mengambil ulasan terbaru secara global tanpa mewajibkan `product_id`.
+  - Menerapkan eager loading (`selectinload(Review.product)`, `selectinload(Review.customer)`, `selectinload(Review.order)`) untuk mengeliminasi potensi `MissingGreenlet` lazy-loading error.
+  - Menambahkan bidang langsung `product_name` dan `customer_name` pada response model `ReviewOut` dan model ORM `Review`.
+
+- **Automated Tests (`tests/test_frontend_contracts.py`)**:
+  - `test_dashboard_summary_contract`: Memverifikasi RBAC (401 unauthenticated, 403 buyer, 200 staff/admin/owner) dan validasi struktur data `ReportSummary`.
+  - `test_manual_payment_contract`: Memverifikasi pencatatan pembayaran manual, transisi status pembayaran menjadi `PAID`, transisi order menjadi `in_process`, dan pencatatan record `Payment` di database.
+  - `test_global_reviews_latest_contract`: Memverifikasi pengambilan review terbaru secara global dengan parameter `limit`, urutan kronologis terbaru, serta kelengkapan `product_name` dan `customer_name`.
+  - Seluruh 53 unit tests di suite pengujian pytest berjalan sukses (**100% PASSED**).
+
+### 001q. Stabilitas & Keamanan Endpoint Pembuatan Order Buyer (POST /orders/buyer)
+- **Penanganan Duplicate Customer / Phone (Fix 409 Conflict) (`app/services/order_service.py`, `app/repositories/customer_repo.py`, `app/utils/phone.py`)**:
+  - Menambahkan fungsi helper `get_phone_variants(phone)` pada `app/utils/phone.py` yang memproduksi kandidat format nomor telepon (`08xx`, `62xx`, `+62xx`, dll).
+  - Memperbarui `customer_repo.get_by_nomor_wa` dan `customer_repo.upsert` untuk mencari data customer yang sudah ada menggunakan seluruh varian format nomor telepon sebelum memutuskan membuat record baru.
+  - Memperbarui `get_or_create_customer_for_buyer` pada `app/services/order_service.py` untuk mengeliminasi potensi error `UNIQUE constraint failed: customers.nomor_wa` / HTTP 409 Conflict dengan langsung menggunakan record customer yang sudah ada.
+  - Menyelaraskan verifikasi kepemilikan nomor telepon pada `app/services/review_service.py` (`update_review` & `delete_review`) agar tidak gagal saat membandingkan nomor format `08xx` vs `62xx`.
+- **Unik ID Pesanan & Invoice (`app/services/order_service.py`, `app/services/payment_service.py`, `app/models/order.py`, `app/core/migrations.py`)**:
+  - Mengubah pembuatan `nomor_invoice` pada `create_new_order` dan `create_custom_order` dengan format `INV-YYYYMMDD-{order_id}-{random_suffix}` menggunakan random hex suffix 6 karakter (`secrets.token_hex(3)`). Hal ini menjamin nomor invoice selalu unik dan tidak akan bentrok saat buyer melakukan order ulang.
+  - Memperlebar tipe kolom `invoices.nomor_invoice` dari `VARCHAR(30)` menjadi `VARCHAR(50)` pada model `Invoice` dan migrasi PostgreSQL `ensure_order_columns`.
+  - Memperbarui parameter `order_id_midtrans` pada `payment_service.create_midtrans_charge` dengan format `{nomor_invoice}-PAY-{timestamp_ms}-{suffix}` sehingga pembayaran ulang pesanan tidak memicu error duplicate transaction ID di Midtrans.
+- **Exception Handler Terpusat & Anti-Crash CORS (`app/api/routes/order.py`, `app/services/order_service.py`)**:
+  - Membungkus alur `POST /orders/buyer` (`create_order_for_buyer`) dalam blok `try-except Exception as e`.
+  - Mengembalikan `HTTPException(status_code=400, detail=str(e))` lengkap dengan pesan error spesifik jika terjadi kesalahan data pesanan, sehingga backend tidak melempar crash HTTP 500 yang menutup header CORS.
+  - Mengubah penanganan error `create_new_order` agar melempar HTTP 400 Bad Request alih-alih HTTP 500 Internal Server Error saat validasi data gagal.
+- **Automated Tests (`tests/test_buyer_orders_payments.py`)**:
+  - Menambahkan pengujian `Test 10`: Validasi penanganan duplicate customer dengan varian format nomor HP (`62xx` pre-existing vs `08xx` buyer), memastikan record customer digunakan kembali tanpa memicu HTTP 409 Conflict.
+  - Menambahkan pengujian `Test 11`: Validasi keunikan `nomor_invoice` dengan suffix acak antarpesanan.
+  - Menambahkan pengujian `Test 12`: Validasi penanganan error pada `POST /orders/buyer` dengan payload invalid yang mengembalikan status HTTP 4xx (400/422) dengan pesan `detail` spesifik tanpa crash HTTP 500.
+  - Seluruh 50 unit tests di test suite berjalan lancar (**100% PASSED**).
+
 ### 001p. Fitur Review: Order Eligibility, Duplicate Protection & Composite Constraint
 - **Model & Database Migration (`app/models/review.py`, `app/core/migrations.py`, `app/main.py`)**:
   - Menambahkan kolom `order_id` (Foreign Key ke `orders.id`, `nullable=False`, `index=True`) pada model `Review`.

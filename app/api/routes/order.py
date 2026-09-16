@@ -1,7 +1,10 @@
 from fastapi import APIRouter, Depends, Query, Request, status, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from app.core.rate_limiter import limiter, RATE_ORDER_CREATE
 
@@ -53,8 +56,23 @@ async def create_order_for_buyer(
     Membuat pesanan baru untuk Buyer yang sedang login.
     `customer_id` didapatkan otomatis dari nomor HP/identitas Buyer token JWT.
     """
-    order = await order_service.create_buyer_order(db, buyer, data)
-    return OrderOut.model_validate(order)
+    try:
+        order = await order_service.create_buyer_order(db, buyer, data)
+        return OrderOut.model_validate(order)
+    except HTTPException as he:
+        if he.status_code >= 500:
+            logger.error(f"Server error in create_order_for_buyer converted to 400: {he.detail}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(he.detail) if he.detail else "Terjadi kesalahan data saat memproses pesanan.",
+            )
+        raise
+    except Exception as e:
+        logger.error(f"Unhandled exception in create_order_for_buyer: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
 
 
 @router.get("/buyer", response_model=list[OrderOut],

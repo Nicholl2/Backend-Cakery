@@ -1,6 +1,7 @@
 from decimal import Decimal
+from typing import Optional
 import logging
-from fastapi import APIRouter, Depends, Request, status, HTTPException
+from fastapi import APIRouter, Depends, Request, status, HTTPException, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
@@ -8,11 +9,13 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 from app.core.database import get_db
+from app.core.security import decode_token
 from app.core.rate_limiter import limiter, RATE_PAYMENT_CREATE, RATE_WEBHOOK
 from app.api.dependencies import get_auth_identity_optional_service_or_jwt, AuthIdentity
 from app.services import payment_service
 from app.repositories import order_repo, customer_repo
 from app.models.payment import PaymentStatusEnum
+from app.schemas.payment import ManualPaymentRequest, ManualPaymentResponse
 
 router = APIRouter(
     tags=["Payments"],
@@ -60,6 +63,59 @@ async def create_midtrans_payment(
         payment_method=data.payment_method,
         payment_type=data.payment_type,
         amount=data.amount
+    )
+
+# 1b. Endpoint POST /payments/manual (Manual Payment: Cash, Transfer, etc.)
+@router.post("/manual", response_model=ManualPaymentResponse, status_code=status.HTTP_200_OK,
+             summary="Catat pembayaran manual (CASH, TRANSFER, dll.)")
+async def create_manual_payment(
+    data: ManualPaymentRequest,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Mencatat pembayaran manual (CASH, TRANSFER, dll.):
+    - Mengubah payment_status menjadi PAID
+    - Memperbarui status order ke in_process bila berstatus pending
+    - Membuat record transaksi pembayaran baru di database
+    """
+    verified_by = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+        try:
+            payload = decode_token(token)
+            role = payload.get("role")
+            role_level = payload.get("role_level")
+            if role == "buyer" or (role_level is not None and int(role_level) > 3):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Insufficient permissions. Staff, Admin, or Owner required."
+                )
+            verified_by = int(payload.get("sub"))
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Invalid authorization token: {str(e)}"
+            )
+
+    try:
+        order_id_int = int(data.order_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Format order_id tidak valid. Harus berupa angka."
+        )
+
+    amount_dec = Decimal(str(data.amount))
+    return await payment_service.process_manual_payment(
+        db=db,
+        order_id=order_id_int,
+        amount=amount_dec,
+        payment_method=data.payment_method,
+        notes=data.notes,
+        verified_by=verified_by
     )
 
 # 2. Endpoint GET /payments/{order_id}/status (secured via Service Key OR Buyer JWT)

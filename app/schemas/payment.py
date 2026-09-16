@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Optional
+from typing import Optional, Union
 from datetime import datetime
 
 
@@ -8,6 +8,36 @@ def _round2(v) -> Optional[Decimal]:
     if v is None:
         return None
     return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+class ManualPaymentRequest(BaseModel):
+    order_id: str = Field(..., description="ID pesanan yang dibayar")
+    amount: float = Field(..., gt=0, description="Nominal pembayaran")
+    payment_method: str = Field(..., description="Metode pembayaran manual, e.g., CASH, TRANSFER")
+    notes: Optional[str] = Field(None, description="Catatan pembayaran tambahan")
+
+    @field_validator("order_id", mode="before")
+    @classmethod
+    def stringify_order_id(cls, v):
+        return str(v)
+
+
+class ManualPaymentResponse(BaseModel):
+    success: bool = True
+    message: str = "Pembayaran manual berhasil dicatat"
+    payment_id: int
+    order_id: int
+    amount: Decimal
+    payment_method: str
+    payment_status: str = "PAID"
+    order_status: str
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def round_amount(cls, v):
+        return _round2(v)
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PaymentCreate(BaseModel):
@@ -34,5 +64,4 @@ class PaymentOut(BaseModel):
     def round_money(cls, v):
         return _round2(v)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

@@ -133,7 +133,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `GET` | `/orders` | Staff / Admin / Owner | List seluruh pesanan toko untuk Seller (Staff/Admin/Owner) dengan relasi lengkap (Customer, OrderItems, Invoice, Payments, amount_paid, amount_due). Filter: `status`, `limit`, `offset`. |
 | `GET` | `/orders/{order_id}` | Staff / Admin / Owner | Detail pesanan spesifik untuk Seller beserta customer, item kustom/produk (dengan field `product_name`), invoice, dan ringkasan pembayaran. |
 | `POST` | `/orders/custom` | Staff / Admin / Owner | Buat pesanan kustom buatan seller tanpa master produk (otomatis create customer, bypass stock deduction, generate invoice, set `created_via = 'seller'`). |
-| `POST` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Buat order baru khusus Buyer (otomatis derive `customer_id` dari identitas JWT, validasi ketat ketersediaan produk `is_in_stock` & batas `stock_quantity` -> HTTP 400 jika habis/melebihi stok, reservasi stok bahan via Optimistic Locking, generate invoice). |
+| `POST` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Buat order baru khusus Buyer: (1) Otomatis derive `customer_id` via logika `get_or_create` berbasis varian nomor HP untuk mencegah error 409 Conflict / duplicate constraint; (2) Generate `nomor_invoice` unik dengan suffix acak; (3) Validasi ketersediaan produk `is_in_stock` & batas `stock_quantity`, reservasi bahan via Optimistic Locking; (4) Exception handling terpusat yang mereturn HTTP 400 jika ada kesalahan data (mencegah crash HTTP 500 dan mempertahankan header CORS). |
 | `GET` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Ambil seluruh riwayat pesanan milik Buyer yang sedang login. |
 | `GET` | `/orders/buyer/{id}` | Buyer JWT (`get_current_buyer`) | Detail pesanan spesifik milik Buyer (isolasi data aman antarpembeli). |
 | `POST` | `/orders` | `X-Service-Key` | Buat order baru via chatbot (validasi ketat ketersediaan produk `is_in_stock` & batas `stock_quantity` -> HTTP 400 jika habis/melebihi stok, reservasi stok bahan via Optimistic Locking, generate invoice). |
@@ -150,6 +150,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/payments` | `X-Service-Key` / Buyer JWT | Charge pembayaran ke Midtrans (Bank Transfer BCA VA atau QRIS), validasi nominal anti-tampering dan verifikasi kepemilikan order untuk Buyer |
+| `POST` | `/payments/manual` | Staff / Admin / Owner (JWT) / System | Catat transaksi pembayaran manual (CASH, TRANSFER, dll.). Mengubah `payment_status` pesanan menjadi `PAID`, memperbarui status order ke `in_process` bila berstatus pending, serta membuat record pembayaran baru di database |
 | `GET` | `/payments/{order_id}/status` | `X-Service-Key` / Buyer JWT | Cek status tagihan, total terbayar, sisa tagihan, dan refresh transaksi pending untuk Chatbot & Buyer |
 | `POST` | `/payments/notify` | Public Webhook | Listener webhook otomatis Midtrans (validasi signature SHA512, auto-settlement invoice & order) |
 
@@ -170,7 +171,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/reports/summary` | `X-Service-Key` | Ringkasan finansial (Revenue, Expenses, Cash Received, Cash Refunded, Net Cash Flow, Order Count, AOV, Top 5 Products) untuk bot & dashboard |
+| `GET` | `/reports/summary` | Staff / Admin / Owner (JWT) | Ringkasan metrik dashboard Frontend Admin Site: `total_products` (int), `active_products` (int), `total_revenue` (Decimal), `total_orders` (int), dan `recent_orders` (5 pesanan terbaru lengkap dengan ID, nama customer, total harga, dan status) |
 | `GET` | `/reports/financial` | Owner Only | Laporan komprehensif Laba/Rugi (P&L): `revenue`/`total_revenue`, `cash_received` (akumulasi arus kas masuk riil periode ini dengan integritas historis), `cash_refunded` (total arus kas keluar via refund pada periode ini), `net_cash_flow` (`cash_received - cash_refunded`), `hpp_total`/`total_hpp_cost`, `gross_profit`, `expenses_total`/`total_expenses`, `net_profit` (termasuk pendapatan DP hangus), `outstanding_payments` (akumulasi piutang kumulatif seluruh order non-cancelled per titik `end_date`), `non_refundable_dp_income`/`other_income` (pendapatan lain-lain dari DP pesanan yang dibatalkan tanpa refund), `product_profitability`/`full_product_profitability` (rincian qty terjual, revenue, HPP, gross profit, margin % per produk), dan `supplier_spending` (total belanja dan frekuensi PO per supplier). Menggunakan basis tanggal pembayaran lunas yang konsisten (menghindari pergeseran periode) dan mengeluarkan seluruh order unpaid/pending dari HPP & profit. |
 | `GET` | `/reports/analytics` | Owner Only | Analitik penjualan bulanan, tren produk terlaris, dan distribusi rating |
 
@@ -181,6 +182,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/reviews/` | Buyer Auth | Buat ulasan produk baru. Wajib menyertakan `order_id`, `product_id`, `rating` (1-5), dan `comment` / `komentar`. **Validasi ketat**: Pesanan harus ada & berstatus selesai (`completed` / `delivered` / `picked_up`), produk harus merupakan item pesanan terkait, dan 1 item pesanan tidak dapat diulas lebih dari satu kali (*duplicate protection*). |
+| `GET` | `/reviews/latest` | Public | List ulasan terbaru secara global (query param `limit`, default 6) untuk Landing Page / Frontend tanpa memerlukan `product_id`. Eager-loading menyertakan `product_name` dan `customer_name` langsung pada response |
 | `GET` | `/reviews/product/{product_id}` | Public | List semua ulasan untuk produk tertentu (termasuk data buyer & pesanan) |
 | `GET` | `/reviews/{review_id}` | Public | Detail ulasan berdasarkan ID |
 | `PUT` | `/reviews/{review_id}` | Buyer Author | Edit rating / komentar ulasan milik sendiri |

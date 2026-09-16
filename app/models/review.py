@@ -32,5 +32,17 @@ class Review(Base):
     def comment(self, value: Optional[str]):
         self.komentar = value
 
+    @property
+    def product_name(self) -> Optional[str]:
+        if self.product:
+            return getattr(self.product, "nama_produk", None) or getattr(self.product, "name", None)
+        return None
+
+    @property
+    def customer_name(self) -> Optional[str]:
+        if self.customer:
+            return getattr(self.customer, "nama", None)
+        return None
+
     def __repr__(self):
         return f"<Review(id={self.id}, order_id={self.order_id}, product_id={self.product_id}, rating={self.rating})>"

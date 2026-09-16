@@ -60,7 +60,20 @@ class Order(Base):
 
     customer = relationship("Customer", back_populates="orders")
     order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
-    invoice = relationship("Invoice", back_populates="order", uselist=False, cascade="all, delete-orphan")
+    invoice = relationship("Invoice", back_populates="order", uselist=False, cascade="all, delete-orphan", lazy="selectin")
+
+    @property
+    def payment_status(self) -> str:
+        if self.status == OrderStatusEnum.refunded:
+            return "refunded"
+        from sqlalchemy.orm import attributes
+        state = attributes.instance_state(self)
+        if "invoice" in state.unloaded or not self.invoice:
+            return "unpaid"
+        inv_status = self.invoice.status.value if hasattr(self.invoice.status, "value") else str(self.invoice.status)
+        if inv_status.lower() == "paid":
+            return "PAID"
+        return inv_status
 
     def __repr__(self):
         return f"<Order(id={self.id}, status={self.status}, customer_id={self.customer_id})>"
@@ -104,7 +117,7 @@ class Invoice(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, unique=True, index=True)
-    nomor_invoice = Column(String(30), nullable=False, unique=True, index=True)
+    nomor_invoice = Column(String(50), nullable=False, unique=True, index=True)
     total_tagihan = Column(Numeric(10, 2), nullable=False)
     status = Column(
         SAEnum(InvoiceStatusEnum, name="invoicestatusenum"),

@@ -52,5 +52,41 @@ def validate_phone_e164(phone: str | None) -> str | None:
     return normalize_phone(phone_str, as_http_exception=False)
 
 
+def get_phone_variants(phone: str) -> list[str]:
+    """
+    Generate all common variants of a phone number (e.g. 08xx, 62xx, +62xx, raw)
+    to facilitate matching existing database records regardless of prefix differences.
+    """
+    if not phone or not isinstance(phone, str):
+        return []
+    cleaned = phone.strip()
+    if not cleaned:
+        return []
+
+    variants = set()
+    variants.add(cleaned)
+
+    digits = "".join(c for c in cleaned if c.isdigit())
+    if digits:
+        variants.add(digits)
+        if digits.startswith("620"):
+            variants.add("62" + digits[3:])
+            variants.add("0" + digits[3:])
+        elif digits.startswith("62"):
+            variants.add("0" + digits[2:])
+        elif digits.startswith("0"):
+            variants.add("62" + digits[1:])
+
+        # Add international '+' formatted variants
+        variants.add("+" + digits)
+        if digits.startswith("0"):
+            variants.add("+62" + digits[1:])
+        elif digits.startswith("62"):
+            variants.add("+62" + digits[2:])
+
+    return list(variants)
+
+
 # Alias for compatibility
 normalize_phone_number = normalize_phone
+

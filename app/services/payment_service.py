@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional, List
 import httpx
+import secrets
+import time
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -85,7 +87,7 @@ async def create_midtrans_charge(
     
     # 2b. Buat request payload HTTP POST ke Midtrans API Charge (/charge)
     # Order ID di Midtrans dikombinasikan dengan suffix agar unik
-    order_id_midtrans = f"{invoice.nomor_invoice}-PAY-{int(datetime.now().timestamp())}"
+    order_id_midtrans = f"{invoice.nomor_invoice}-PAY-{int(time.time() * 1000)}-{secrets.token_hex(2).upper()}"
     
     payload = {
         "payment_type": payment_method,
@@ -579,4 +581,101 @@ async def process_refund(db: AsyncSession, order_id: int, reason: str) -> str:
         await notify_refund_status(order_id)
 
     return overall_refund_mode
+
+
+async def process_manual_payment(
+    db: AsyncSession,
+    order_id: int,
+    amount: Decimal,
+    payment_method: str,
+    notes: Optional[str] = None,
+    verified_by: Optional[int] = None
+) -> dict:
+    """
+    Eksekusi pembayaran manual (CASH, TRANSFER, dll.):
+    1. Validasi keberadaan order & invoice (buat invoice jika belum ada).
+    2. Buat record transaksi pembayaran baru (status Success).
+    3. Update invoice status -> 'paid' (atau 'partial' jika belum lunas).
+    4. Update status order jika sesuai workflow (pending -> in_process).
+    5. Commit ke database & kirim notifikasi chatbot.
+    """
+    order = await order_repo.get_order_by_id(db, order_id)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order tidak ditemukan"
+        )
+
+    # Pastikan invoice ada
+    invoice = order.invoice
+    if not invoice:
+        inv_res = await db.execute(select(Invoice).where(Invoice.order_id == order.id))
+        invoice = inv_res.scalars().first()
+
+    if not invoice:
+        invoice = Invoice(
+            order_id=order.id,
+            nomor_invoice=f"INV-{int(time.time())}-{secrets.token_hex(2).upper()}",
+            total_tagihan=order.total_harga_pesanan,
+            status=InvoiceStatusEnum.unpaid
+        )
+        db.add(invoice)
+        await db.flush()
+
+    # Buat record transaksi pembayaran baru di database
+    pg_txn_id = f"MANUAL-{order.id}-{int(time.time() * 1000)}-{secrets.token_hex(2).upper()}"
+    payment_obj = Payment(
+        invoice_id=invoice.id,
+        pg_transaction_id=pg_txn_id,
+        jumlah_bayar=amount,
+        payment_method=payment_method,
+        verified_by=verified_by,
+        payment_status=PaymentStatusEnum.success,
+        payment_type=PaymentTypeEnum.final,
+        settled_at=datetime.now(timezone.utc),
+        notes=notes,
+    )
+    db.add(payment_obj)
+    await db.flush()
+
+    # Hitung total pembayaran sukses pada invoice
+    sum_res = await db.execute(
+        select(func.sum(Payment.jumlah_bayar))
+        .where(
+            Payment.invoice_id == invoice.id,
+            Payment.payment_status == PaymentStatusEnum.success
+        )
+    )
+    total_paid = sum_res.scalar() or Decimal("0.00")
+    total_paid = Decimal(str(total_paid))
+
+    if total_paid >= Decimal(str(invoice.total_tagihan)):
+        invoice.status = InvoiceStatusEnum.paid
+    else:
+        invoice.status = InvoiceStatusEnum.partial
+
+    # Perbarui status order jika sesuai workflow (pending -> in_process)
+    if order.status == OrderStatusEnum.pending:
+        order.status = OrderStatusEnum.in_process
+
+    await db.commit()
+    await db.refresh(order)
+    await db.refresh(payment_obj)
+
+    # Kirim webhook notifikasi chatbot
+    try:
+        await notify_payment_status(order.id, status="paid")
+    except Exception as e:
+        logger.warning(f"Gagal mengirim notifikasi chatbot untuk order {order.id}: {e}")
+
+    return {
+        "success": True,
+        "message": "Pembayaran manual berhasil dicatat",
+        "payment_id": payment_obj.id,
+        "order_id": order.id,
+        "amount": amount,
+        "payment_method": payment_method,
+        "payment_status": "PAID",
+        "order_status": order.status.value if hasattr(order.status, "value") else str(order.status),
+    }
 

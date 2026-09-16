@@ -3,7 +3,7 @@ from fastapi import HTTPException, status
 from datetime import datetime, time, timedelta
 from typing import Optional
 from app.repositories import report_repo
-from app.schemas.report import FinancialReportDetail, FinancialReportResponse, AnalyticsReport
+from app.schemas.report import FinancialReportDetail, FinancialReportResponse, AnalyticsReport, ReportSummary
 
 def parse_dates(start_date: Optional[str], end_date: Optional[str]):
     try:
@@ -47,3 +47,33 @@ async def get_analytics_report(
     start_dt, end_dt = parse_dates(start_date, end_date)
     data = await report_repo.get_analytics_report_data(db, start_dt, end_dt)
     return AnalyticsReport(**data)
+
+
+async def get_dashboard_summary(
+    db: AsyncSession,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> ReportSummary:
+    """
+    Retrieve dashboard summary statistics for internal users (Owner, Admin, Staff).
+    """
+    start_dt = None
+    end_dt = None
+    if start_date:
+        try:
+            start_dt = datetime.combine(datetime.strptime(start_date, "%Y-%m-%d"), time.min)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Format tanggal tidak valid. Gunakan format YYYY-MM-DD."
+            )
+    if end_date:
+        try:
+            end_dt = datetime.combine(datetime.strptime(end_date, "%Y-%m-%d"), time.max)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Format tanggal tidak valid. Gunakan format YYYY-MM-DD."
+            )
+    data = await report_repo.get_dashboard_summary_data(db, start_dt, end_dt)
+    return ReportSummary(**data)

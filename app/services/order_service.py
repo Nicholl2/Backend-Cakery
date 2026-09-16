@@ -5,6 +5,7 @@ MAX_ORDER_AMOUNT = Decimal("50000000")
 from typing import Optional
 import logging
 import httpx
+import secrets
 
 from fastapi import HTTPException, status
 from app.core.config import settings
@@ -24,6 +25,7 @@ from app.utils.phone import normalize_phone
 
 
 from app.repositories import customer_repo
+from app.models.customer import Customer
 from app.models.buyer import Buyer
 from app.schemas.order import BuyerOrderCreate, CustomOrderCreate
 
@@ -216,7 +218,8 @@ async def create_new_order(
             )
 
         # ── 6. Generate nomor invoice & buat Invoice ─────────────────────────
-        nomor_invoice = f"INV-{datetime.now().strftime('%Y%m%d')}-{order_obj.id}"
+        unique_suffix = secrets.token_hex(3).upper()
+        nomor_invoice = f"INV-{datetime.now().strftime('%Y%m%d')}-{order_obj.id}-{unique_suffix}"
         await order_repo.create_invoice(
             db,
             Invoice(
@@ -237,8 +240,9 @@ async def create_new_order(
         raise
     except Exception as e:
         await db.rollback()
+        logger.error(f"Gagal membuat order: {e}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Gagal membuat order: {str(e)}",
         )
 
@@ -328,7 +332,8 @@ async def create_custom_order(
             )
 
         # Buat Invoice otomatis
-        nomor_invoice = f"INV-{datetime.now().strftime('%Y%m%d')}-{order_obj.id}"
+        unique_suffix = secrets.token_hex(3).upper()
+        nomor_invoice = f"INV-{datetime.now().strftime('%Y%m%d')}-{order_obj.id}-{unique_suffix}"
         await order_repo.create_invoice(
             db,
             Invoice(
@@ -424,7 +429,12 @@ async def get_customer_latest_order(db: AsyncSession, nomor_wa: str) -> Order:
     return await _attach_payment_amounts(db, order)
 
 
-async def get_or_create_customer_for_buyer(db: AsyncSession, buyer: Buyer):
+async def get_or_create_customer_for_buyer(db: AsyncSession, buyer: Buyer) -> Customer:
+    """
+    Retrieve existing Customer by buyer's phone (matching across all common format variants),
+    or create a new Customer if none exists.
+    Prevents 409 Conflict / duplicate key errors.
+    """
     customer = await customer_repo.get_by_nomor_wa(db, buyer.phone)
     if not customer:
         customer, _ = await customer_repo.upsert(
@@ -433,8 +443,7 @@ async def get_or_create_customer_for_buyer(db: AsyncSession, buyer: Buyer):
             nama=buyer.name,
             alamat=None,
         )
-        await db.commit()
-        await db.refresh(customer)
+        await db.flush()
     return customer
 
 
@@ -466,19 +475,30 @@ async def get_buyer_order_by_id(db: AsyncSession, buyer: Buyer, order_id: int) -
 
 
 async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCreate) -> Order:
-    customer = await get_or_create_customer_for_buyer(db, buyer)
-    order = await create_new_order(
-        db=db,
-        customer_id=customer.id,
-        items=[item.model_dump() for item in data.items],
-        metode_pengiriman=data.metode_pengiriman,
-        created_via=data.created_via,
-        notes=data.notes,
-        due_date=data.due_date,
-        payment_method_preference=data.payment_method_preference,
-    )
-    await _attach_payment_amounts(db, order)
-    return order
+    try:
+        customer = await get_or_create_customer_for_buyer(db, buyer)
+        order = await create_new_order(
+            db=db,
+            customer_id=customer.id,
+            items=[item.model_dump() for item in data.items],
+            metode_pengiriman=data.metode_pengiriman,
+            created_via=data.created_via,
+            notes=data.notes,
+            due_date=data.due_date,
+            payment_method_preference=data.payment_method_preference,
+        )
+        await _attach_payment_amounts(db, order)
+        return order
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error creating buyer order: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Gagal memproses pesanan: {str(e)}",
+        )
+
 
 
 async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:

@@ -1,7 +1,9 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from decimal import Decimal
 from datetime import datetime
+from typing import Optional
 from app.models.payment import Payment, PaymentStatusEnum
 from app.models.expense import Expense
 from app.models.order import Order, OrderItem, OrderStatusEnum, Invoice, InvoiceStatusEnum
@@ -301,4 +303,69 @@ async def get_analytics_report_data(db: AsyncSession, start_dt: datetime, end_dt
         "total_customers": total_customers,
         "conversion_rate_via_chatbot": float(round(conversion_rate_via_chatbot, 2)),
         "most_reviewed_product": most_reviewed_product
+    }
+
+
+async def get_dashboard_summary_data(
+    db: AsyncSession,
+    start_dt: Optional[datetime] = None,
+    end_dt: Optional[datetime] = None
+) -> dict:
+    """
+    Retrieve dashboard summary data for frontend: total products, active products,
+    total revenue, total orders, and 5 most recent orders with eager-loaded customer.
+    """
+    # 1. Total products
+    total_prod_q = await db.execute(select(func.count(Product.id)))
+    total_products = total_prod_q.scalar() or 0
+
+    # 2. Active products
+    active_prod_q = await db.execute(select(func.count(Product.id)).where(Product.is_active == True))
+    active_products = active_prod_q.scalar() or 0
+
+    # 3. Total revenue (successful payments)
+    rev_stmt = select(func.sum(Payment.jumlah_bayar)).where(Payment.payment_status == PaymentStatusEnum.success)
+    if start_dt:
+        rev_stmt = rev_stmt.where(func.coalesce(Payment.settled_at, Payment.created_at) >= start_dt)
+    if end_dt:
+        rev_stmt = rev_stmt.where(func.coalesce(Payment.settled_at, Payment.created_at) <= end_dt)
+    rev_q = await db.execute(rev_stmt)
+    total_revenue = rev_q.scalar() or Decimal("0.00")
+
+    # 4. Total orders
+    orders_stmt = select(func.count(Order.id))
+    if start_dt:
+        orders_stmt = orders_stmt.where(Order.created_at >= start_dt)
+    if end_dt:
+        orders_stmt = orders_stmt.where(Order.created_at <= end_dt)
+    orders_q = await db.execute(orders_stmt)
+    total_orders = orders_q.scalar() or 0
+
+    # 5. Recent 5 orders with customer eager-loaded
+    recent_orders_q = await db.execute(
+        select(Order)
+        .options(selectinload(Order.customer))
+        .order_by(Order.created_at.desc(), Order.id.desc())
+        .limit(5)
+    )
+    recent_orders_rows = recent_orders_q.scalars().all()
+    recent_orders = [
+        {
+            "id": o.id,
+            "customer_name": o.customer.nama if o.customer else "Unknown",
+            "nama_customer": o.customer.nama if o.customer else "Unknown",
+            "total_price": o.total_harga_pesanan,
+            "total_harga": o.total_harga_pesanan,
+            "total_harga_pesanan": o.total_harga_pesanan,
+            "status": o.status.value if hasattr(o.status, "value") else str(o.status),
+        }
+        for o in recent_orders_rows
+    ]
+
+    return {
+        "total_products": total_products,
+        "active_products": active_products,
+        "total_revenue": total_revenue,
+        "total_orders": total_orders,
+        "recent_orders": recent_orders,
     }

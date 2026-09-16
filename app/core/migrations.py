@@ -146,6 +146,10 @@ async def ensure_order_columns(conn: AsyncConnection):
     await conn.execute(text("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS custom_product_name VARCHAR(255);"))
     await conn.execute(text("ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL;"))
 
+    # Invoice column length
+    await conn.execute(text("ALTER TABLE invoices ALTER COLUMN nomor_invoice TYPE VARCHAR(50);"))
+
+
 
 async def ensure_order_status_enum(conn: AsyncConnection):
     """

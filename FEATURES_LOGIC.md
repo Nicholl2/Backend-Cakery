@@ -362,3 +362,27 @@ Untuk menjamin keaslian ulasan dan kredibilitas rating produk di etalase toko:
 
 5. **Rekalkulasi Otomatis Rating & Review Count Produk**:
    - Setiap kali ulasan baru dibuat, diperbarui, atau dihapus, fungsi `recalculate_product_rating` otomatis menghitung ulang `Product.rating` (rata-rata rating) dan `Product.review_count` (jumlah total ulasan).
+
+---
+
+## 19. Keamanan & Stabilitas Alur Pemesanan Buyer (`POST /orders/buyer`)
+
+Untuk mengamankan pengalaman berbelanja pelanggan pada web storefront:
+
+1. **Penanganan Duplicate Customer / Nomor Telepon (`get_or_create`)**:
+   - Sistem menggunakan helper `get_phone_variants` (`app/utils/phone.py`) untuk menghasilkan kandidat representasi nomor HP (seperti format `08xx`, `62xx`, `+62xx`).
+   - Pada `get_or_create_customer_for_buyer` dan `customer_repo.upsert`, sistem mencari record `Customer` yang sudah ada menggunakan seluruh varian format tersebut.
+   - Jika record sudah ditemukan, data customer langsung digunakan kembali tanpa mencoba melakukan operasi `INSERT` yang dapat memicu `UNIQUE constraint failed: customers.nomor_wa` (HTTP 409 Conflict).
+   - Apabila belum ada, barulah customer baru dibuat secara aman dengan penanganan exception race condition.
+
+2. **Jaminan Keunikan Nomor Invoice (`nomor_invoice`) & Order ID Midtrans**:
+   - Format nomor invoice diperbarui dengan menambahkan suffix acak 6-karakter hexadesimal:
+     $$\text{nomor\_invoice} = \text{INV-YYYYMMDD-}\{\text{order\_id}\}\text{-}\{\text{suffix}\}$$
+   - Mencegah bentrok nomor invoice saat buyer melakukan pesanan ulang.
+   - Kolom `nomor_invoice` pada tabel `invoices` dialokasikan `VARCHAR(50)` untuk menampung format unik secara fleksibel.
+   - Pada payment gateway Midtrans, parameter `order_id_midtrans` menyertakan timestamp milidetik dan random suffix (`{nomor_invoice}-PAY-{timestamp_ms}-{suffix}`) agar upaya pembayaran ulang tidak pernah ditolak oleh Midtrans dengan pesan duplicate order.
+
+3. **Exception Handling Terpusat & Anti-Crash CORS (HTTP 400 vs HTTP 500)**:
+   - Seluruh alur `POST /orders/buyer` dibungkus dalam blok `try-except Exception as e`.
+   - Kesalahan data, validasi stok, atau kegagalan bisnis dikembalikan sebagai `HTTPException(status_code=400, detail=str(e))` lengkap dengan detail pesan kesalahan yang jelas.
+   - Mencegah backend melempar unhandled server crash (HTTP 500) yang berisiko menonaktifkan header CORS dan menyulitkan debugging pada Frontend.
