@@ -18,6 +18,7 @@ class OrderStatusEnum(str, enum.Enum):
     ready = "ready"
     delivered = "delivered"
     picked_up = "picked_up"
+    completed = "completed"
     cancelled = "cancelled"
     refunded = "refunded"
 

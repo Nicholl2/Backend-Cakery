@@ -6,6 +6,36 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001p. Fitur Review: Order Eligibility, Duplicate Protection & Composite Constraint
+- **Model & Database Migration (`app/models/review.py`, `app/core/migrations.py`, `app/main.py`)**:
+  - Menambahkan kolom `order_id` (Foreign Key ke `orders.id`, `nullable=False`, `index=True`) pada model `Review`.
+  - Menambahkan composite Unique Constraint `uq_review_order_product_customer` untuk `(order_id, product_id, customer_id)` pada tabel `reviews`.
+  - Menambahkan fungsi migrasi `ensure_review_columns` di `app/core/migrations.py` yang menambahkan kolom `order_id` jika belum ada dan membuat unique index `uq_review_order_product_customer` pada database PostgreSQL.
+  - Memanggil `ensure_review_columns` di siklus hidup aplikasi (`lifespan`) pada `app/main.py`.
+- **Status Pesanan Completed & State Machine (`app/models/order.py`, `app/core/state_machine.py`, `app/core/migrations.py`)**:
+  - Menambahkan nilai status `completed = "completed"` pada enum `OrderStatusEnum`.
+  - Memperbarui state machine transisi status pesanan (`ORDER_TRANSITIONS` & `ORDER_TERMINAL_STATES`) sehingga status `ready`, `delivered`, dan `picked_up` dapat bertransisi ke `completed`.
+  - Menambahkan value `'completed'` pada PostgreSQL enum `orderstatusenum` via `ensure_order_status_enum`.
+- **Perbaikan Request & Response Schema (`app/schemas/review.py`)**:
+  - Memperbarui `ReviewCreate` agar wajib menerima `order_id: int`, `product_id: int`, `rating: int` (1-5), dan `comment: str` (dengan dukungan backward compatibility alias `komentar`).
+  - Memperbarui `ReviewOut` dengan field `order_id`, `comment`, dan `komentar`.
+  - Memperbarui `ReviewUpdate` dengan sanitasi teks dan sinkronisasi `comment`/`komentar`.
+- **Validasi Business Logic & Duplicate Protection (`app/services/review_service.py`, `app/repositories/review_repo.py`)**:
+  - Pada method `create_review`:
+    1. **Order Completion Check**: Memastikan pesanan ada, milik buyer yang sedang login (`customer_id`), dan berstatus selesai (`completed`, `delivered`, atau `picked_up`). Jika tidak, melempar `HTTP 400 Bad Request` dengan detail `"Hanya pesanan yang sudah selesai yang dapat diulas."`.
+    2. **Product in Order Check**: Memverifikasi `product_id` terdapat di dalam `order_items` dari pesanan tersebut. Jika tidak, melempar `HTTP 400 Bad Request` dengan detail `"Produk tidak terdapat dalam pesanan ini."`.
+    3. **Duplicate Check**: Memverifikasi kombinasi `(order_id, product_id)` belum pernah diulas di database melalui query `review_repo.get_by_order_and_product`. Jika sudah ada, melempar `HTTP 400 Bad Request` dengan detail `"Anda sudah memberikan ulasan untuk produk pada pesanan ini."`.
+  - Menambahkan eager loading `selectinload(Review.order)` pada repository query.
+- **Automated Tests (`tests/test_review.py`)**:
+  - Menambahkan 6 unit & integration tests baru:
+    * `test_create_review_success_for_completed_order`: Memvalidasi keberhasilan pembuatan review untuk order completed dan rekalkulasi rating & review count produk.
+    * `test_create_review_delivered_and_picked_up_statuses`: Memvalidasi bahwa status `delivered` dan `picked_up` juga memenuhi syarat order selesai.
+    * `test_create_review_fails_when_order_not_completed`: Memvalidasi penolakan order yang masih in-process (400 "Hanya pesanan yang sudah selesai yang dapat diulas.").
+    * `test_create_review_fails_when_product_not_in_order`: Memvalidasi penolakan jika produk tidak ada dalam item pesanan (400 "Produk tidak terdapat dalam pesanan ini.").
+    * `test_create_review_duplicate_protection`: Memvalidasi penolakan review berulang pada produk dan order yang sama (400 "Anda sudah memberikan ulasan untuk produk pada pesanan ini.").
+    * `test_create_review_fails_for_other_customer_order`: Memvalidasi penolakan jika buyer mencoba mereview pesanan milik customer lain.
+  - Seluruh 50 unit tests di test suite berjalan lancar (**100% PASSED**).
+
 ### 001o. Token Expiry Window & Session Revocation (Logout Endpoint)
 - **Konfigurasi Expiry Window Token (`app/core/config.py`, `app/core/security.py`, `.env`, `README.md`)**:
   - Mengatur masa berlaku JWT Access Token default menjadi **60 menit (1 jam)** via `ACCESS_TOKEN_EXPIRE_MINUTES = 60`.

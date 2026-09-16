@@ -180,11 +180,12 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/reviews/` | Buyer Auth | Buat ulasan produk (rating 1-5 dan komentar) |
-| `GET` | `/reviews/product/{product_id}` | Public | List semua ulasan untuk produk tertentu |
-| `GET` | `/reviews/{review_id}` | Public | Detail ulasan |
-| `PUT` | `/reviews/{review_id}` | Buyer Author | Edit ulasan milik sendiri |
-| `DELETE` | `/reviews/{review_id}` | Buyer Author / Admin / Owner | Hapus ulasan |
+| `POST` | `/reviews/` | Buyer Auth | Buat ulasan produk baru. Wajib menyertakan `order_id`, `product_id`, `rating` (1-5), dan `comment` / `komentar`. **Validasi ketat**: Pesanan harus ada & berstatus selesai (`completed` / `delivered` / `picked_up`), produk harus merupakan item pesanan terkait, dan 1 item pesanan tidak dapat diulas lebih dari satu kali (*duplicate protection*). |
+| `GET` | `/reviews/product/{product_id}` | Public | List semua ulasan untuk produk tertentu (termasuk data buyer & pesanan) |
+| `GET` | `/reviews/{review_id}` | Public | Detail ulasan berdasarkan ID |
+| `PUT` | `/reviews/{review_id}` | Buyer Author | Edit rating / komentar ulasan milik sendiri |
+| `DELETE` | `/reviews/{review_id}` | Buyer Author / Admin / Owner | Hapus ulasan (otomatis rekalkulasi rata-rata rating produk) |
+
 
 ---
 

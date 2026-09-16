@@ -337,3 +337,28 @@ Untuk memastikan keamanan autentikasi pengguna (Owner, Admin, Staff, dan Buyer):
      - `blacklist:token:<token>`
    - Nilai TTL (*Time To Live*) pada cache diset sama persis dengan sisa waktu kedaluwarsa token (`remaining_ttl = exp - now`). Setelah token kedaluwarsa secara alami, entri cache otomatis terhapus tanpa membebani memori server.
    - Setiap pemanggilan fungsi `decode_token` pada seluruh endpoint terproteksi akan memvalidasi apakah token terdapat pada blacklist. Jika ditemukan, sistem langsung melempar `HTTP 401 Unauthorized` dengan pesan `"Token has been revoked"`.
+
+---
+
+## 18. Validasi Kelayakan Ulasan Produk (Order Eligibility & Duplicate Review Protection)
+
+Untuk menjamin keaslian ulasan dan kredibilitas rating produk di etalase toko:
+
+1. **Foreign Key `order_id` & Relasi Pesanan**:
+   - Model `Review` menyertakan kolom `order_id` (Foreign Key ke `orders.id`, `nullable=False`, `index=True`).
+   - Setiap ulasan produk terikat langsung ke pesanan spesifik yang telah dilakukan oleh pembeli.
+
+2. **Validasi Kelayakan Pesanan (Order Eligibility Check)**:
+   - **Kepemilikan Pesanan**: Sistem memverifikasi bahwa pesanan (`data.order_id`) benar-benar milik akun buyer yang sedang login (`order.customer_id == customer.id`).
+   - **Status Penyelesaian**: Ulasan hanya dapat diberikan jika pesanan telah selesai (`OrderStatusEnum.completed`, `OrderStatusEnum.delivered`, atau `OrderStatusEnum.picked_up`). Jika pesanan masih berstatus *pending*, *in_process*, *ready*, atau *cancelled*, sistem menolak ulasan dengan `HTTP 400 Bad Request` ("Hanya pesanan yang sudah selesai yang dapat diulas.").
+
+3. **Validasi Item Produk dalam Pesanan (Product in Order Check)**:
+   - Sistem memverifikasi bahwa `product_id` yang ingin diulas benar-benar terdapat dalam daftar item pesanan terkait (`order.order_items`).
+   - Jika produk tidak ada dalam pesanan tersebut, request ditolak dengan `HTTP 400 Bad Request` ("Produk tidak terdapat dalam pesanan ini.").
+
+4. **Proteksi Ulasan Ganda (Duplicate Review Protection)**:
+   - **Application-Level Check**: Pada `review_service.create_review`, sistem memeriksa apakah kombinasi `(order_id, product_id)` sudah pernah diulas di database. Jika sudah ada, sistem menolak dengan `HTTP 400 Bad Request` ("Anda sudah memberikan ulasan untuk produk pada pesanan ini.").
+   - **Database-Level Constraint**: Tabel `reviews` dilengkapi composite Unique Constraint `uq_review_order_product_customer` untuk tuple `(order_id, product_id, customer_id)` dan migrasi otomatis pada PostgreSQL (`CREATE UNIQUE INDEX IF NOT EXISTS uq_review_order_product_customer`).
+
+5. **Rekalkulasi Otomatis Rating & Review Count Produk**:
+   - Setiap kali ulasan baru dibuat, diperbarui, atau dihapus, fungsi `recalculate_product_rating` otomatis menghitung ulang `Product.rating` (rata-rata rating) dan `Product.review_count` (jumlah total ulasan).

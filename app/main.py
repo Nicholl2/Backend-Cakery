@@ -73,6 +73,7 @@ async def lifespan(app: FastAPI):
                 ensure_order_columns,
                 ensure_order_status_enum,
                 ensure_payment_columns,
+                ensure_review_columns,
             )
             await ensure_product_columns(conn)
             await ensure_buyer_columns(conn)
@@ -83,6 +84,7 @@ async def lifespan(app: FastAPI):
             await ensure_order_columns(conn)
             await ensure_order_status_enum(conn)
             await ensure_payment_columns(conn)
+            await ensure_review_columns(conn)
 
         # Auto-seed initial master data if roles table is empty
         from app.core.database import AsyncSessionLocal, seed_initial_data

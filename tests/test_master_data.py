@@ -24,6 +24,7 @@ from app.models.product import Product
 from app.models.user import User
 from app.models.buyer import Buyer
 from app.models.role import Role
+from app.models.order import Order, OrderItem, OrderStatusEnum, MetodePengirimanEnum
 from app.core.database import ensure_role, ensure_buyer, ensure_user
 
 # Isolated in-memory SQLite engine for standalone & isolated test execution
@@ -210,16 +211,37 @@ async def run_tests():
             buyer_id = buyer.id
             print(f"✓ Temporary buyer created: ID={buyer_id}")
 
+            # Create completed order for the buyer so review can be submitted
+            customer = await review_service.get_or_create_customer_from_buyer(db, buyer_id)
+            order = Order(
+                customer_id=customer.id,
+                status=OrderStatusEnum.completed,
+                metode_pengiriman=MetodePengirimanEnum.delivery,
+                total_harga_pesanan=Decimal("50000.00"),
+            )
+            db.add(order)
+            await db.flush()
+
+            order_item = OrderItem(
+                order_id=order.id,
+                product_id=product.id,
+                jumlah=1,
+                subtotal=Decimal("50000.00"),
+            )
+            db.add(order_item)
+            await db.commit()
+
             # Create Review
             review_data = ReviewCreate(
+                order_id=order.id,
                 product_id=product.id,
                 rating=5,
                 komentar="Kue enak banget!",
-                is_published=True
             )
             review_out = await review_service.create_review(db, buyer_id, review_data)
             print(f"✓ Review created: ID={review_out.id}, Rating={review_out.rating}, Komentar={review_out.komentar}")
             assert review_out.id is not None
+            assert review_out.order_id == order.id
             assert review_out.customer_id is not None
             assert review_out.rating == 5
             

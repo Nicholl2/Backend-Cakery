@@ -149,23 +149,24 @@ async def ensure_order_columns(conn: AsyncConnection):
 
 async def ensure_order_status_enum(conn: AsyncConnection):
     """
-    Ensure 'refunded' value exists in PostgreSQL enum 'orderstatusenum'.
+    Ensure 'refunded' and 'completed' values exist in PostgreSQL enum 'orderstatusenum'.
     PostgreSQL requires ALTER TYPE ADD VALUE to run outside transaction blocks (autocommit mode).
     """
     if conn.dialect.name != "postgresql":
         return
-    # PENTING: ALTER TYPE ADD VALUE tidak boleh berjalan di dalam transaksi biasa
     try:
         autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
-        await autocommit_conn.execute(text(
-            "ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS 'refunded';"
-        ))
+        for val in ["completed", "refunded"]:
+            await autocommit_conn.execute(text(
+                f"ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS '{val}';"
+            ))
     except Exception:
         async with conn.engine.connect() as auto_conn:
             autocommit_conn = await auto_conn.execution_options(isolation_level="AUTOCOMMIT")
-            await autocommit_conn.execute(text(
-                "ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS 'refunded';"
-            ))
+            for val in ["completed", "refunded"]:
+                await autocommit_conn.execute(text(
+                    f"ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS '{val}';"
+                ))
 
 
 async def ensure_payment_columns(conn: AsyncConnection):
@@ -179,6 +180,20 @@ async def ensure_payment_columns(conn: AsyncConnection):
     await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;"))
     await conn.execute(text("UPDATE payments SET settled_at = created_at WHERE settled_at IS NULL AND payment_status = 'Success';"))
     await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;"))
+
+
+async def ensure_review_columns(conn: AsyncConnection):
+    """
+    Ensure order_id column and unique constraint exist on 'reviews' table on PostgreSQL database.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    await conn.execute(text("ALTER TABLE reviews ADD COLUMN IF NOT EXISTS order_id INTEGER REFERENCES orders(id);"))
+    await conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_review_order_product_customer ON reviews (order_id, product_id, customer_id) WHERE order_id IS NOT NULL;"
+    ))
+
 
 
 
