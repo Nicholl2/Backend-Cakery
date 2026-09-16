@@ -49,6 +49,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `POST` | `/auth/seller/forgot-password/request` | Public | Request OTP reset password untuk akun internal/seller |
 | `POST` | `/auth/seller/forgot-password/verify` | Public | Verifikasi kode OTP seller, return `verify_token` |
 | `POST` | `/auth/seller/reset-password` | Public (`verify_token`) | Reset password akun seller menggunakan token verifikasi |
+| `POST` | `/auth/logout` | JWT Authentication (Bearer) | Revoke sesi aktif dan blacklist token JWT (JTI & Signature) ke in-memory cache hingga masa berlaku token habis (durasi token default: 60 menit) |
 
 ---
 

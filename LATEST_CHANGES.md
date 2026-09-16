@@ -6,6 +6,25 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001o. Token Expiry Window & Session Revocation (Logout Endpoint)
+- **Konfigurasi Expiry Window Token (`app/core/config.py`, `app/core/security.py`, `.env`, `README.md`)**:
+  - Mengatur masa berlaku JWT Access Token default menjadi **60 menit (1 jam)** via `ACCESS_TOKEN_EXPIRE_MINUTES = 60`.
+  - Menambahkan property `ACCESS_TOKEN_EXPIRE_MINUTES` pada class `Settings` di `app/core/config.py` dan menyelaraskan konfigurasi di `.env` serta panduan `README.md`.
+  - Memasukkan klaim unik `jti` (UUID v4) ke dalam setiap token yang di-generate via `create_access_token`.
+- **Endpoint Revoke Session (`POST /auth/logout`) (`app/api/routes/auth.py`, `app/schemas/auth.py`)**:
+  - Menambahkan endpoint terproteksi `POST /auth/logout` yang memerlukan header `Authorization: Bearer <token>`.
+  - Mengembalikan schema `LogoutResponse` (`{"status": "ok", "message": "Successfully logged out"}`).
+- **In-Memory Token Blacklist (`app/core/security.py`, `app/core/cache.py`)**:
+  - Mengimplementasikan fungsi `revoke_token` yang mendaftarkan token ke `app_cache` (TTLCache) berdasarkan `jti`, signature token, dan token raw dengan TTL sisa masa kedaluwarsa (`remaining_ttl = exp - now`).
+  - Mengintegrasikan pengecekan blacklist pada fungsi `decode_token`: setiap token yang sudah dicabut langsung ditolak dengan status `HTTP 401 Unauthorized` (`{"detail": "Token has been revoked"}`).
+  - Melindungi seluruh endpoint terproteksi (`get_current_user_payload`, `get_current_user_id`, `get_current_buyer`, `get_auth_identity_optional_service_or_jwt`) dari penggunaan kembali token yang telah di-logout.
+- **Automated Unit Tests (`tests/test_auth_logout.py`)**:
+  - 3 unit tests baru:
+    * `test_access_token_expire_minutes_configuration`: Memvalidasi `ACCESS_TOKEN_EXPIRE_MINUTES == 60` di settings dan modul security.
+    * `test_token_creation_includes_jti_and_60m_expiry`: Memvalidasi kehadiran klaim `jti` dan masa berlaku 60 menit pada payload JWT.
+    * `test_logout_endpoint_and_token_revocation`: Memvalidasi alur lengkap logout: token dicabut, ditolak saat akses ulang (401), penolakan logout berulang (401), dan token aktif lain tetap berfungsi normal.
+  - Seluruh 44 unit tests di test suite berjalan lancar (**100% PASSED**).
+
 ### 001n. Financial Report Cash Flow, Historical Integrity & Refund Recognition
 - **Integritas Historis `cash_received` (Opsi 2) (`app/repositories/report_repo.py`, `app/api/routes/report.py`)**:
   - Memastikan pembayaran yang berhasil diproses pada periode berjalan tetap dihitung ke dalam `cash_received` berdasarkan `Payment.created_at`, meskipun di kemudian hari (periode berikutnya) status pembayaran tersebut berubah menjadi `Refunded`.

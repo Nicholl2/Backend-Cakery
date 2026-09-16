@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, Request, status, HTTPException
+from fastapi.security.http import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.rate_limiter import limiter, RATE_AUTH_LOGIN, RATE_AUTH_VERIFY
-from app.api.dependencies import require_wa_internal_key
+from app.core.security import decode_token, revoke_token
+from app.api.dependencies import require_wa_internal_key, security
 from app.schemas.auth import (
-    UserLogin, Token,
+    UserLogin, Token, LogoutResponse,
     OTPVerifyResponse,
     BuyerRegisterRequest, BuyerAuthResponse,
     BuyerLoginRequest, BuyerLoginPhoneRequest, BuyerLoginOTPRequest,
@@ -61,6 +63,20 @@ async def login(
     - **username**: Authenticated username
     """
     return await auth_service.authenticate_user(db, login_data)
+
+
+@router.post("/logout", response_model=LogoutResponse, status_code=status.HTTP_200_OK)
+async def logout(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> LogoutResponse:
+    """
+    Revoke current user/buyer session and blacklist JWT token until expiration.
+    Requires Bearer token in Authorization header.
+    """
+    token = credentials.credentials
+    payload = decode_token(token)
+    revoke_token(token, payload)
+    return LogoutResponse(status="ok", message="Successfully logged out")
 
 
 # ── WA DEEP LINK OTP ENDPOINTS ──────────────────────────────────────────────

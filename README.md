@@ -106,7 +106,7 @@ Create a `.env` file in the project root directory and add the following configu
 DATABASE_URL=your-database-url
 SECRET_KEY=your-super-secret-key-change-this-in-production
 ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=480
+ACCESS_TOKEN_EXPIRE_MINUTES=60
 SERVICE_API_KEY=your-chatbot-service-key
 CHATBOT_URL=http://localhost:8000
 CHATBOT_INTERNAL_KEY=your-internal-key

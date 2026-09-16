@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     database_url: str
     secret_key: str = "your-secret-key-change-in-production"
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 480
+    access_token_expire_minutes: int = 60
     service_api_key: str = "change-this-service-key"
     chatbot_url: str = "http://localhost:8000"
     chatbot_internal_key: str = ""
@@ -37,6 +37,10 @@ class Settings(BaseSettings):
         if self.environment.lower() == "production":
             return "real"
         return self.wa_verification_mode
+
+    @property
+    def ACCESS_TOKEN_EXPIRE_MINUTES(self) -> int:
+        return self.access_token_expire_minutes
 
     @property
     def midtrans_api_url(self) -> str:

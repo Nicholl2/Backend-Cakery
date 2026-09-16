@@ -316,3 +316,24 @@ Modul ini mengimplementasikan lapisan perlindungan dan efisiensi resource pada B
    - Validasi nilai pesanan maksimal **Rp 50.000.000** per order pada `order_service.create_new_order` dan `order_service.create_custom_order`.
    - Mencegah kesalahan input atau serangan manipulasi nominal sebelum request diteruskan ke payment gateway Midtrans.
    - Mengembalikan `HTTP 400 Bad Request` jika batas terlampaui.
+
+---
+
+## 17. Pengelolaan Masa Berlaku Token & Pencabutan Sesi (Session Revocation / Logout)
+
+Untuk memastikan keamanan autentikasi pengguna (Owner, Admin, Staff, dan Buyer):
+1. **Durasi Masa Berlaku Token (`ACCESS_TOKEN_EXPIRE_MINUTES = 60`)**:
+   - Masa aktif JWT Access Token diset secara default ke **60 menit (1 jam)** pada `app/core/config.py` dan `app/core/security.py`.
+   - Setiap token yang di-generate via `create_access_token` menyertakan klaim unik `jti` (JWT ID berbasis UUID v4) dan timestamp `exp`.
+
+2. **Pencabutan Sesi (`POST /auth/logout`)**:
+   - Endpoint terproteksi yang mewajibkan autentikasi JWT Bearer token (`Authorization: Bearer <token>`).
+   - Saat pengguna melakukan logout dari frontend, backend mengekstrak payload token dan mendaftarkannya ke daftar hitam (*blacklist*) di `app/core/cache.py` (`app_cache`).
+
+3. **Mekanisme Blacklisting Berbasis JTI & Signature**:
+   - Token disimpan ke in-memory cache dengan kunci:
+     - `blacklist:jti:<jti>`
+     - `blacklist:sig:<signature>` (bagian signature JWT)
+     - `blacklist:token:<token>`
+   - Nilai TTL (*Time To Live*) pada cache diset sama persis dengan sisa waktu kedaluwarsa token (`remaining_ttl = exp - now`). Setelah token kedaluwarsa secara alami, entri cache otomatis terhapus tanpa membebani memori server.
+   - Setiap pemanggilan fungsi `decode_token` pada seluruh endpoint terproteksi akan memvalidasi apakah token terdapat pada blacklist. Jika ditemukan, sistem langsung melempar `HTTP 401 Unauthorized` dengan pesan `"Token has been revoked"`.

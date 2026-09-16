@@ -57,6 +57,11 @@ class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class LogoutResponse(BaseModel):
+    status: str = "ok"
+    message: str = "Successfully logged out"
+
+
 # ── BUYER / SELLER AUTH SCHEMAS ─────────────────────────────────────────────
 
 class OTPChannel(str, Enum):
