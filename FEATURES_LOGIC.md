@@ -232,18 +232,27 @@ Sistem backend mengintegrasikan pemisahan status operasional seller dan ketersed
 
 ---
 
-## 14. Akuntansi Laporan Keuangan & Konsistensi Date Basis (Matching Principle)
+## 14. Akuntansi Laporan Keuangan, Cash Basis Flow & Konsistensi Date Basis
 
-Untuk memastikan laporan laba rugi (`GET /reports/financial`) akurat dan mencerminkan prinsip akuntansi (*matching principle*):
+Untuk memastikan laporan laba rugi (`GET /reports/financial`) akurat dan mencerminkan prinsip akuntansi (*matching principle* serta arus kas *cash basis*):
 1. **Konsistensi Basis Tanggal (Settlement-Based Allocation)**:
    - Revenue dan HPP (Harga Pokok Penjualan) dihitung menggunakan basis tanggal penyelesaian pembayaran yang sama (`settled_at` atau `created_at` pembayaran sukses).
-   - Jika pesanan dibuat di akhir suatu bulan (misalnya 30 Januari) dan baru dibayar lunas pada bulan berikutnya (misalnya 2 Februari), maka Revenue dan HPP pesanan tersebut sama-sama dialokasikan ke bulan Februari. Hal ini mencegah bergesernya *Gross Profit* dan *Net Profit* antarpariode.
+   - Jika pesanan dibuat di akhir suatu bulan (misalnya 30 Januari) dan baru dibayar lunas pada bulan berikutnya (misalnya 2 Februari), maka Revenue dan HPP pesanan tersebut sama-sama dialokasikan ke bulan Februari. Hal ini mencegah bergesernya *Gross Profit* dan *Net Profit* antarperiode.
 2. **Eksklusi Total Pesanan Unpaid / Pending**:
    - Query HPP dan Revenue hanya memperhitungkan pesanan yang status invoice-nya sudah lunas (`InvoiceStatusEnum.paid`) dan memiliki pembayaran berstatus `Success`.
    - Pesanan berstatus *unpaid* atau *pending payment* **dikeluarkan total** dari perhitungan Revenue, HPP, Gross Profit, dan Net Profit.
-3. **Metrik Finansial Tambahan**:
-   - `outstanding_payments`: Menghitung total piutang atau tagihan yang belum dibayar (`Invoice.total_tagihan` dikurangi pembayaran parsial sukses) untuk pesanan aktif yang berstatus `unpaid` atau `partial` pada periode tersebut.
-   - `full_product_profitability`: Menghitung rincian performa per item produk dari pesanan yang lunas (kuantitas terjual, total revenue, total HPP snapshot, gross profit, dan margin persentase).
+3. **Arus Kas Masuk Nyata (`cash_received` - Cash Basis Flow)**:
+   - Menghitung seluruh akumulasi dana riil yang masuk dari transaksi pembayaran sukses (`Payment.payment_status == 'Success'`) berdasarkan `Payment.created_at` pada rentang periode filter (`start_date` s.d. `end_date`).
+   - Mencakup seluruh pembayaran DP, pelunasan pesanan lunas, maupun DP dari pesanan yang dibatalkan tanpa refund.
+4. **Perhitungan Piutang Kumulatif (`outstanding_payments`)**:
+   - Menghitung SELURUH sisa tagihan invoice yang belum lunas per titik akhir periode (`end_date`), termasuk akumulasi piutang dari pesanan-pesanan pada periode sebelumnya yang belum selesai pembayarannya (`Order.created_at <= end_date`).
+   - Formula: $\sum (\text{Invoice.total\_tagihan} - \text{pembayaran\_sukses\_hingga\_end\_date})$ untuk semua invoice berstatus `unpaid` atau `partial` pada order non-cancelled/non-refunded.
+5. **Penanganan DP Hangus (`non_refundable_dp_income` / `other_income`)**:
+   - Pesanan berstatus `cancelled` yang memiliki transaksi pembayaran sukses (DP) yang tidak direfund diperlakukan sebagai pendapatan lain-lain (*other income*).
+   - Nominal DP tersebut tetap tercatat di `cash_received` dan dihitung ke dalam laba bersih:
+     $$\text{net\_profit} = \text{gross\_profit} - \text{expenses\_total} + \text{non\_refundable\_dp\_income}$$
+6. **Metrik Finansial Tambahan**:
+   - `full_product_profitability` / `product_profitability`: Menghitung rincian performa per item produk dari pesanan yang lunas (kuantitas terjual, total revenue, total HPP snapshot, gross profit, dan margin persentase).
    - `supplier_spending`: Mengagregasikan total pengeluaran belanja PO dan frekuensi pesanan per supplier pada rentang periode yang dipilih.
 
 ---

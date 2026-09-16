@@ -3,7 +3,7 @@ from fastapi import HTTPException, status
 from datetime import datetime, time, timedelta
 from typing import Optional
 from app.repositories import report_repo
-from app.schemas.report import FinancialReportDetail, AnalyticsReport
+from app.schemas.report import FinancialReportDetail, FinancialReportResponse, AnalyticsReport
 
 def parse_dates(start_date: Optional[str], end_date: Optional[str]):
     try:
@@ -28,13 +28,13 @@ async def get_financial_report(
     db: AsyncSession,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None
-) -> FinancialReportDetail:
+) -> FinancialReportResponse:
     """
     Retrieve financial report statistics.
     """
     start_dt, end_dt = parse_dates(start_date, end_date)
     data = await report_repo.get_financial_report_data(db, start_dt, end_dt)
-    return FinancialReportDetail(**data)
+    return FinancialReportResponse(**data)
 
 async def get_analytics_report(
     db: AsyncSession,

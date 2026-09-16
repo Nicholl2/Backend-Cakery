@@ -44,16 +44,26 @@ class SupplierSpendingItem(BaseModel):
 
 
 class FinancialReportDetail(BaseModel):
+    revenue: Decimal
     total_revenue: Decimal
-    total_expenses: Decimal
+    cash_received: Decimal = Decimal("0.00")
+    hpp_total: Decimal
     total_hpp_cost: Decimal
     gross_profit: Decimal
+    expenses_total: Decimal
+    total_expenses: Decimal
     net_profit: Decimal
     outstanding_payments: Decimal
-    full_product_profitability: List[ProductProfitabilityItem]
-    supplier_spending: List[SupplierSpendingItem]
+    non_refundable_dp_income: Decimal = Decimal("0.00")
+    other_income: Decimal = Decimal("0.00")
+    product_profitability: List[ProductProfitabilityItem] = []
+    full_product_profitability: List[ProductProfitabilityItem] = []
+    supplier_spending: List[SupplierSpendingItem] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+
+FinancialReportResponse = FinancialReportDetail
 
 
 class MostReviewedProduct(BaseModel):

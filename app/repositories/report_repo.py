@@ -51,7 +51,18 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     )
     total_revenue = revenue_query.scalar() or Decimal("0.00")
 
-    # ── 3. Total Expenses: Operating expenses within the date range ────────────
+    # ── 3. Cash Received (Cash Basis Flow): All successful payments in period ───
+    cash_received_query = await db.execute(
+        select(func.sum(Payment.jumlah_bayar))
+        .where(
+            Payment.payment_status == PaymentStatusEnum.success,
+            Payment.created_at >= start_dt,
+            Payment.created_at <= end_dt
+        )
+    )
+    cash_received = cash_received_query.scalar() or Decimal("0.00")
+
+    # ── 4. Total Expenses: Operating expenses within the date range ────────────
     expense_query = await db.execute(
         select(func.sum(Expense.jumlah))
         .where(
@@ -61,7 +72,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     )
     total_expenses = expense_query.scalar() or Decimal("0.00")
 
-    # ── 4. Total HPP Cost: HPP ONLY for orders settled in the period ────────────
+    # ── 5. Total HPP Cost: HPP ONLY for orders settled in the period ────────────
     # Excludes unpaid, pending, cancelled, or refunded orders completely
     hpp_query = await db.execute(
         select(func.sum(OrderItem.jumlah * OrderItem.hpp_snapshot))
@@ -72,15 +83,33 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     total_hpp_cost = hpp_query.scalar() or Decimal("0.00")
 
     gross_profit = total_revenue - total_hpp_cost
-    net_profit = gross_profit - total_expenses
 
-    # ── 5. Outstanding Payments (Piutang / Pembayaran Pending) ──────────────────
+    # ── 6. Non-Refundable DP Income (Other Income): Cancelled orders with DP ───
+    non_refundable_dp_query = await db.execute(
+        select(func.sum(Payment.jumlah_bayar))
+        .join(Invoice, Invoice.id == Payment.invoice_id)
+        .join(Order, Order.id == Invoice.order_id)
+        .where(
+            Payment.payment_status == PaymentStatusEnum.success,
+            Order.status == OrderStatusEnum.cancelled,
+            Payment.created_at >= start_dt,
+            Payment.created_at <= end_dt
+        )
+    )
+    non_refundable_dp_income = non_refundable_dp_query.scalar() or Decimal("0.00")
+
+    net_profit = gross_profit - total_expenses + non_refundable_dp_income
+
+    # ── 7. Outstanding Payments (Cumulative Unpaid Balance up to end_dt) ───────
     paid_amount_subquery = (
         select(
             Payment.invoice_id,
             func.sum(Payment.jumlah_bayar).label("paid_sum")
         )
-        .where(Payment.payment_status == PaymentStatusEnum.success)
+        .where(
+            Payment.payment_status == PaymentStatusEnum.success,
+            Payment.created_at <= end_dt
+        )
         .group_by(Payment.invoice_id)
         .subquery()
     )
@@ -96,13 +125,12 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         .where(
             Invoice.status.in_([InvoiceStatusEnum.unpaid, InvoiceStatusEnum.partial]),
             Order.status.notin_([OrderStatusEnum.cancelled, OrderStatusEnum.refunded]),
-            Order.created_at >= start_dt,
             Order.created_at <= end_dt
         )
     )
     outstanding_payments = outstanding_query.scalar() or Decimal("0.00")
 
-    # ── 6. Full Product Profitability (Breakdown per Produk) ────────────────────
+    # ── 8. Full Product Profitability (Breakdown per Produk) ────────────────────
     product_profit_query = await db.execute(
         select(
             func.coalesce(OrderItem.product_id, 0).label("product_id"),
@@ -141,7 +169,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
             "margin_percentage": margin,
         })
 
-    # ── 7. Supplier Spending (Pengeluaran per Supplier) ─────────────────────────
+    # ── 9. Supplier Spending (Pengeluaran per Supplier) ─────────────────────────
     supplier_spending_query = await db.execute(
         select(
             Supplier.id.label("supplier_id"),
@@ -170,12 +198,19 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     ]
 
     return {
+        "revenue": total_revenue,
         "total_revenue": total_revenue,
-        "total_expenses": total_expenses,
+        "cash_received": cash_received,
+        "hpp_total": total_hpp_cost,
         "total_hpp_cost": total_hpp_cost,
         "gross_profit": gross_profit,
+        "expenses_total": total_expenses,
+        "total_expenses": total_expenses,
         "net_profit": net_profit,
         "outstanding_payments": outstanding_payments,
+        "non_refundable_dp_income": non_refundable_dp_income,
+        "other_income": non_refundable_dp_income,
+        "product_profitability": full_product_profitability,
         "full_product_profitability": full_product_profitability,
         "supplier_spending": supplier_spending,
     }

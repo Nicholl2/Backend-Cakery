@@ -173,9 +173,13 @@ async def test_financial_report_date_consistency_and_unpaid_exclusion(db_session
     # Order #1 was created in Jan, but paid in Feb -> Jan must have 0 revenue and 0 HPP!
     jan_report = await report_service.get_financial_report(db_session, "2026-01-01", "2026-01-31")
     assert jan_report.total_revenue == Decimal("0.00")
+    assert jan_report.revenue == Decimal("0.00")
+    assert jan_report.cash_received == Decimal("0.00")
     assert jan_report.total_hpp_cost == Decimal("0.00")
+    assert jan_report.hpp_total == Decimal("0.00")
     assert jan_report.gross_profit == Decimal("0.00")
     assert jan_report.net_profit == Decimal("0.00")
+    assert jan_report.non_refundable_dp_income == Decimal("0.00")
 
     # ── Test February 2026 Report ────────────────────────────────────
     # Order #1 settlement occurred in Feb -> Revenue = 150,000, HPP = 80,000
@@ -186,16 +190,22 @@ async def test_financial_report_date_consistency_and_unpaid_exclusion(db_session
     feb_report = await report_service.get_financial_report(db_session, "2026-02-01", "2026-02-28")
 
     assert feb_report.total_revenue == Decimal("150000.00")
+    assert feb_report.revenue == Decimal("150000.00")
+    assert feb_report.cash_received == Decimal("150000.00")
     assert feb_report.total_hpp_cost == Decimal("80000.00")
+    assert feb_report.hpp_total == Decimal("80000.00")
     assert feb_report.total_expenses == Decimal("20000.00")
+    assert feb_report.expenses_total == Decimal("20000.00")
     assert feb_report.gross_profit == Decimal("70000.00")
     assert feb_report.net_profit == Decimal("50000.00")
+    assert feb_report.non_refundable_dp_income == Decimal("0.00")
 
     # Outstanding payments must include Order #2 (120,000 unpaid)
     assert feb_report.outstanding_payments == Decimal("120000.00")
 
     # Full product profitability must only include settled products (Kue Tart Cokelat, not Bolu Pandan)
     assert len(feb_report.full_product_profitability) == 1
+    assert len(feb_report.product_profitability) == 1
     prof_item = feb_report.full_product_profitability[0]
     assert prof_item.nama_produk == "Kue Tart Cokelat"
     assert prof_item.qty_sold == 1
@@ -306,10 +316,203 @@ async def test_partial_payment_and_cancelled_orders_handling(db_session: AsyncSe
 
     # Partial order is not fully settled (InvoiceStatusEnum.paid), so Revenue and HPP are 0
     assert report.total_revenue == Decimal("0.00")
+    assert report.revenue == Decimal("0.00")
     assert report.total_hpp_cost == Decimal("0.00")
+    assert report.hpp_total == Decimal("0.00")
     assert report.gross_profit == Decimal("0.00")
+
+    # Cash received must capture the DP paid in March (60,000)
+    assert report.cash_received == Decimal("60000.00")
+    assert report.non_refundable_dp_income == Decimal("0.00")
 
     # Outstanding payments must be 140,000 (200,000 - 60,000 DP).
     # Cancelled order (100,000) must be excluded completely!
     assert report.outstanding_payments == Decimal("140000.00")
+
+
+@pytest.mark.asyncio
+async def test_cumulative_outstanding_and_non_refundable_dp(db_session: AsyncSession):
+    """
+    Test that:
+    1. Cumulative outstanding payments includes unpaid/partial orders from prior periods up to end_date.
+    2. Cancelled orders with successful non-refunded DP are counted in non_refundable_dp_income and cash_received.
+    3. Non-refundable DP is factored into net_profit (net_profit = gross_profit - expenses + non_refundable_dp).
+    4. Refunded orders/payments are excluded from non_refundable_dp_income and outstanding_payments.
+    """
+    customer = Customer(id=3, nama="Dewi Pembeli", nomor_wa="081299990003")
+    db_session.add(customer)
+
+    jan_date = datetime(2026, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+    feb_date_1 = datetime(2026, 2, 10, 9, 0, 0, tzinfo=timezone.utc)
+    feb_date_2 = datetime(2026, 2, 12, 14, 0, 0, tzinfo=timezone.utc)
+    feb_date_3 = datetime(2026, 2, 18, 16, 0, 0, tzinfo=timezone.utc)
+
+    # 1. Order #1 (Created in January, STILL UNPAID): Total 100,000
+    order_jan = Order(
+        id=601,
+        customer_id=customer.id,
+        status=OrderStatusEnum.pending,
+        metode_pengiriman=MetodePengirimanEnum.pickup,
+        total_harga_pesanan=Decimal("100000.00"),
+        created_at=jan_date,
+    )
+    db_session.add(order_jan)
+    await db_session.flush()
+
+    inv_jan = Invoice(
+        id=701,
+        order_id=order_jan.id,
+        nomor_invoice="INV-JAN-OLD",
+        total_tagihan=Decimal("100000.00"),
+        status=InvoiceStatusEnum.unpaid,
+        created_at=jan_date,
+    )
+    db_session.add(inv_jan)
+
+    # 2. Order #2 (Created in February, PARTIAL with DP 30,000 paid): Total 80,000, Remaining 50,000
+    order_feb_partial = Order(
+        id=602,
+        customer_id=customer.id,
+        status=OrderStatusEnum.in_process,
+        metode_pengiriman=MetodePengirimanEnum.delivery,
+        total_harga_pesanan=Decimal("80000.00"),
+        created_at=feb_date_1,
+    )
+    db_session.add(order_feb_partial)
+    await db_session.flush()
+
+    inv_feb_partial = Invoice(
+        id=702,
+        order_id=order_feb_partial.id,
+        nomor_invoice="INV-FEB-PARTIAL",
+        total_tagihan=Decimal("80000.00"),
+        status=InvoiceStatusEnum.partial,
+        created_at=feb_date_1,
+    )
+    db_session.add(inv_feb_partial)
+    await db_session.flush()
+
+    pay_dp = Payment(
+        id=801,
+        invoice_id=inv_feb_partial.id,
+        jumlah_bayar=Decimal("30000.00"),
+        payment_method="qris",
+        payment_status=PaymentStatusEnum.success,
+        payment_type=PaymentTypeEnum.dp,
+        created_at=feb_date_1,
+        settled_at=feb_date_1,
+    )
+    db_session.add(pay_dp)
+
+    # 3. Order #3 (Created in February, CANCELLED with Non-Refundable DP 20,000 paid): Total 50,000
+    order_feb_cancelled = Order(
+        id=603,
+        customer_id=customer.id,
+        status=OrderStatusEnum.cancelled,
+        metode_pengiriman=MetodePengirimanEnum.pickup,
+        total_harga_pesanan=Decimal("50000.00"),
+        created_at=feb_date_2,
+    )
+    db_session.add(order_feb_cancelled)
+    await db_session.flush()
+
+    inv_feb_cancelled = Invoice(
+        id=703,
+        order_id=order_feb_cancelled.id,
+        nomor_invoice="INV-FEB-CANCELLED-DP",
+        total_tagihan=Decimal("50000.00"),
+        status=InvoiceStatusEnum.unpaid,
+        created_at=feb_date_2,
+    )
+    db_session.add(inv_feb_cancelled)
+    await db_session.flush()
+
+    pay_non_refundable_dp = Payment(
+        id=802,
+        invoice_id=inv_feb_cancelled.id,
+        jumlah_bayar=Decimal("20000.00"),
+        payment_method="bca_va",
+        payment_status=PaymentStatusEnum.success,
+        payment_type=PaymentTypeEnum.dp,
+        created_at=feb_date_2,
+        settled_at=feb_date_2,
+    )
+    db_session.add(pay_non_refundable_dp)
+
+    # 4. Order #4 (Created in February, REFUNDED): Total 40,000, Payment status Refunded
+    order_feb_refunded = Order(
+        id=604,
+        customer_id=customer.id,
+        status=OrderStatusEnum.refunded,
+        metode_pengiriman=MetodePengirimanEnum.delivery,
+        total_harga_pesanan=Decimal("40000.00"),
+        created_at=feb_date_3,
+    )
+    db_session.add(order_feb_refunded)
+    await db_session.flush()
+
+    inv_feb_refunded = Invoice(
+        id=704,
+        order_id=order_feb_refunded.id,
+        nomor_invoice="INV-FEB-REFUNDED",
+        total_tagihan=Decimal("40000.00"),
+        status=InvoiceStatusEnum.refunded,
+        created_at=feb_date_3,
+    )
+    db_session.add(inv_feb_refunded)
+    await db_session.flush()
+
+    pay_refunded = Payment(
+        id=803,
+        invoice_id=inv_feb_refunded.id,
+        jumlah_bayar=Decimal("40000.00"),
+        payment_method="qris",
+        payment_status=PaymentStatusEnum.refunded,
+        payment_type=PaymentTypeEnum.final,
+        created_at=feb_date_3,
+        settled_at=feb_date_3,
+    )
+    db_session.add(pay_refunded)
+
+    # 5. Operating Expense in February: 10,000
+    expense_feb = Expense(
+        kategori="Operasional Dapur",
+        jumlah=Decimal("10000.00"),
+        recorded_by=1,
+        tanggal=datetime(2026, 2, 20, 10, 0, 0, tzinfo=timezone.utc),
+    )
+    db_session.add(expense_feb)
+
+    await db_session.commit()
+
+    # ── Generate February Report ─────────────────────────────────────────────
+    feb_report = await report_service.get_financial_report(db_session, "2026-02-01", "2026-02-28")
+
+    # 1. Cash received:
+    # 30,000 (from order_feb_partial DP) + 20,000 (from order_feb_cancelled DP) = 50,000
+    # (Refunded payment is NOT success, order_jan had no payment)
+    assert feb_report.cash_received == Decimal("50000.00")
+
+    # 2. Non-refundable DP income:
+    # 20,000 from order_feb_cancelled (status cancelled, payment success, within Feb)
+    assert feb_report.non_refundable_dp_income == Decimal("20000.00")
+    assert feb_report.other_income == Decimal("20000.00")
+
+    # 3. Revenue & Gross profit:
+    # No fully settled (paid) orders in Feb -> 0.00
+    assert feb_report.revenue == Decimal("0.00")
+    assert feb_report.gross_profit == Decimal("0.00")
+
+    # 4. Expenses: 10,000
+    assert feb_report.expenses_total == Decimal("10000.00")
+
+    # 5. Net profit: gross_profit (0) - expenses (10,000) + non_refundable_dp (20,000) = 10,000!
+    assert feb_report.net_profit == Decimal("10000.00")
+
+    # 6. Cumulative Outstanding payments as of 2026-02-28:
+    # - Order #1 from January: 100,000 (unpaid) -> MUST BE INCLUDED!
+    # - Order #2 from February: 80,000 - 30,000 = 50,000 (partial)
+    # - Order #3 (cancelled) and Order #4 (refunded): EXCLUDED!
+    # Total outstanding = 100,000 + 50,000 = 150,000
+    assert feb_report.outstanding_payments == Decimal("150000.00")
 

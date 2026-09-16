@@ -6,6 +6,29 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001m. Financial Report Cash Received, Cumulative Outstanding & Non-Refundable DP Logic
+- **Penambahan Field `cash_received` (Cash Basis Flow) (`app/repositories/report_repo.py`, `app/schemas/report.py`)**:
+  - Mengakumulasikan total riil nominal pembayaran sukses berdasarkan `Payment.created_at` yang jatuh dalam rentang filter tanggal (`start_date` s.d. `end_date`).
+  - Mencerminkan pergerakan arus kas masuk aktual (*cash basis flow*) yang mencakup pembayaran DP, pelunasan order, maupun DP pesanan yang dibatalkan tanpa refund.
+  - Memasukkan `cash_received` ke dalam response schema `FinancialReportResponse` dan `FinancialReportDetail`.
+- **Perbaikan Logika `outstanding_payments` Kumulatif (`app/repositories/report_repo.py`)**:
+  - Mengubah kalkulasi piutang pelanggan / sisa tagihan invoice menjadi kumulatif per titik akhir periode (`Order.created_at <= end_date`).
+  - Menghitung SELURUH sisa tagihan dari invoice yang belum `paid` (status `unpaid` dan `partial`) pada order non-cancelled/non-refunded, termasuk pesanan dari periode-periode sebelumnya yang belum diselesaikan pembayarannya.
+  - Membatasi pembayaran pengurang hanya pada pembayaran sukses yang terjadi hingga titik akhir periode (`Payment.created_at <= end_date`).
+- **Penanganan DP Hangus (`non_refundable_dp_income`) (`app/repositories/report_repo.py`, `app/schemas/report.py`)**:
+  - Mengidentifikasi pesanan berstatus `cancelled` yang memiliki pembayaran sukses (DP) yang tidak direfund.
+  - Memasukkan nominal DP tersebut ke dalam `cash_received`.
+  - Mencatat nominal ke dalam field `non_refundable_dp_income` (dan alias `other_income`) pada laporan keuangan.
+  - Memperhitungkan DP hangus ke dalam laba bersih: `net_profit = gross_profit - expenses_total + non_refundable_dp_income`.
+- **Pembaruan Pydantic Schema `FinancialReportResponse` (`app/schemas/report.py`)**:
+  - Menyelaraskan nama field respon mencakup: `revenue`, `total_revenue`, `cash_received`, `hpp_total`, `total_hpp_cost`, `gross_profit`, `expenses_total`, `total_expenses`, `net_profit`, `outstanding_payments`, `non_refundable_dp_income`, `other_income`, `product_profitability`, `full_product_profitability`, dan `supplier_spending`.
+  - Mengarahkan `FinancialReportResponse = FinancialReportDetail` untuk backward compatibility penuh.
+  - Memperbarui `app/services/report_service.py` dan `app/api/routes/report.py` untuk menggunakan `FinancialReportResponse`.
+- **Automated Test Suite (`tests/test_financial_report.py`)**:
+  - Memperbarui assertions pada `test_financial_report_date_consistency_and_unpaid_exclusion` dan `test_partial_payment_and_cancelled_orders_handling` untuk memvalidasi `cash_received` dan field skema baru.
+  - Menambahkan test baru `test_cumulative_outstanding_and_non_refundable_dp` untuk memvalidasi akumulasi piutang lintas periode, pengakuan DP hangus pada pesanan dibatalkan, dan rekonsiliasi `net_profit`.
+  - Seluruh 40 tests di test suite berjalan lancar (**100% PASSED**).
+
 ### 001l. Stability, Security, and Performance Enhancements
 - **Upload Size Limit (`app/main.py`)**:
   - Menambahkan middleware ASGI `MaxBodySizeMiddleware` yang membaca header `Content-Length`.

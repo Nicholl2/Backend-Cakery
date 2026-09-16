@@ -7,7 +7,13 @@ from typing import List, Optional
 
 from app.core.database import get_db
 from app.api.dependencies import require_service_key, require_owner
-from app.schemas.report import FinancialReportSummary, TopProductSummary, FinancialReportDetail, AnalyticsReport
+from app.schemas.report import (
+    FinancialReportSummary,
+    TopProductSummary,
+    FinancialReportDetail,
+    FinancialReportResponse,
+    AnalyticsReport,
+)
 from app.services import report_service
 from app.models.payment import Payment, PaymentStatusEnum
 from app.models.expense import Expense
@@ -117,13 +123,13 @@ async def get_report_summary(
     )
 
 
-@router.get("/financial", response_model=FinancialReportDetail)
+@router.get("/financial", response_model=FinancialReportResponse)
 async def get_financial_report(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     db: AsyncSession = Depends(get_db),
     _ = Depends(require_owner)
-) -> FinancialReportDetail:
+) -> FinancialReportResponse:
     """
     Get internal financial report for Owner.
     """
