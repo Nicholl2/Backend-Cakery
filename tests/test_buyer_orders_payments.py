@@ -45,6 +45,9 @@ async def run_tests():
 
     app.dependency_overrides[get_db] = override_get_db
 
+    settings.midtrans_server_key = "test_midtrans_server_key_123"
+    settings.service_api_key = getattr(settings, "service_api_key", "test_service_key_123") or "test_service_key_123"
+
     # 1. Ensure Migrations and Seed
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

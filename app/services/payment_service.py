@@ -376,7 +376,7 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
         pg_txn_id = str(pg_transaction_id or "").strip() if pg_transaction_id else None
 
         # 1. Validasi integritas request menggunakan SHA512 Signature Key jika signature disertakan
-        if signature_str and settings.midtrans_server_key:
+        if signature_str:
             server_key = str(settings.midtrans_server_key or "")
             raw_string = f"{order_id_str}{status_code_str}{gross_amount_str}{server_key}"
             calculated_signature = hashlib.sha512(raw_string.encode('utf-8')).hexdigest()
