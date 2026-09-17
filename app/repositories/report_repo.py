@@ -357,7 +357,12 @@ async def get_dashboard_summary_data(
             "total_price": o.total_harga_pesanan,
             "total_harga": o.total_harga_pesanan,
             "total_harga_pesanan": o.total_harga_pesanan,
+            "total_amount": o.total_harga_pesanan,
+            "amount": o.total_harga_pesanan,
             "status": o.status.value if hasattr(o.status, "value") else str(o.status),
+            "created_at": o.created_at,
+            "order_date": o.created_at,
+            "date": o.created_at,
         }
         for o in recent_orders_rows
     ]
@@ -366,6 +371,8 @@ async def get_dashboard_summary_data(
         "total_products": total_products,
         "active_products": active_products,
         "total_revenue": total_revenue,
+        "total_sales": total_revenue,
+        "total_penjualan": total_revenue,
         "total_orders": total_orders,
         "recent_orders": recent_orders,
     }

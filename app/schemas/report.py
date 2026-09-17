@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, model_validator
 from decimal import Decimal
 from typing import List, Optional
+from datetime import datetime
 
 
 class RecentOrderSummary(BaseModel):
@@ -10,7 +11,12 @@ class RecentOrderSummary(BaseModel):
     total_price: Optional[Decimal] = None
     total_harga: Optional[Decimal] = None
     total_harga_pesanan: Optional[Decimal] = None
+    total_amount: Optional[Decimal] = None
+    amount: Optional[Decimal] = None
     status: str
+    created_at: Optional[datetime] = None
+    order_date: Optional[datetime] = None
+    date: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -20,10 +26,23 @@ class RecentOrderSummary(BaseModel):
         self.customer_name = name
         self.nama_customer = name
 
-        price = self.total_price if self.total_price is not None else (self.total_harga if self.total_harga is not None else self.total_harga_pesanan)
+        price = self.total_price if self.total_price is not None else (
+            self.total_harga if self.total_harga is not None else (
+                self.total_harga_pesanan if self.total_harga_pesanan is not None else (
+                    self.total_amount if self.total_amount is not None else self.amount
+                )
+            )
+        )
         self.total_price = price
         self.total_harga = price
         self.total_harga_pesanan = price
+        self.total_amount = price
+        self.amount = price
+
+        dt = self.created_at or self.order_date or self.date
+        self.created_at = dt
+        self.order_date = dt
+        self.date = dt
         return self
 
 
@@ -31,10 +50,20 @@ class ReportSummary(BaseModel):
     total_products: int
     active_products: int
     total_revenue: Decimal
+    total_sales: Optional[Decimal] = None
+    total_penjualan: Optional[Decimal] = None
     total_orders: int
     recent_orders: List[RecentOrderSummary]
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def sync_sales_aliases(self):
+        rev = self.total_revenue if self.total_revenue is not None else (self.total_sales or self.total_penjualan or Decimal("0.00"))
+        self.total_revenue = rev
+        self.total_sales = rev
+        self.total_penjualan = rev
+        return self
 
 
 class TopProductSummary(BaseModel):
