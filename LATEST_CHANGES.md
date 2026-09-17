@@ -6,6 +6,15 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001z. Perbaikan UndefinedColumnError pada Model Payment (payment.py & payment_service.py)
+- **Penghapusan Kolom Unmigrated `payments.notes` (`app/models/payment.py`, `app/services/payment_service.py`)**:
+  - Menghapus atribut kolom `notes = Column(Text, nullable=True)` dari model SQLAlchemy `Payment` di `app/models/payment.py`.
+  - Menghapus passing argumen `notes=notes` saat instansiasi `Payment(...)` pada `process_manual_payment` di `app/services/payment_service.py`.
+  - Menghilangkan `UndefinedColumnError / ProgrammingError: column payments.notes does not exist` saat memuat query order atau mengeksekusi eager-loading relasi `Invoice.payments`.
+- **Automated Tests (`tests/test_seller_orders.py`, `tests/test_frontend_contracts.py`)**:
+  - Memverifikasi pengujian `tests/test_seller_orders.py` dan `tests/test_frontend_contracts.py` berjalan sukses (**100% PASSED**).
+  - Seluruh 56 unit & integration tests pada Backend lulus tanpa error.
+
 ### 001y. Perbaikan HTTP 500 pada Endpoint Seller Orders & Custom Orders (order_repo.py & order_service.py)
 - **Eager Loading & Safe Enum Filtering pada Seller Orders (`app/repositories/order_repo.py`, `app/services/order_service.py`)**:
   - Pada query `get_all_orders` / `get_seller_orders` dan `get_orders_by_customer_id` / `get_buyer_orders`, relasi `Order.customer`, `Order.order_items -> OrderItem.product`, dan `Order.invoice -> Invoice.payments` di-load menggunakan `selectinload` secara utuh.

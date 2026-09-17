@@ -656,7 +656,6 @@ async def process_manual_payment(
         payment_status=PaymentStatusEnum.success,
         payment_type=PaymentTypeEnum.final,
         settled_at=datetime.now(timezone.utc),
-        notes=notes,
     )
     db.add(payment_obj)
     await db.flush()

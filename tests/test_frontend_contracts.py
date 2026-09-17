@@ -296,7 +296,6 @@ async def test_manual_payment_contract(setup_test_app):
         p = payments[0]
         assert p.payment_status == PaymentStatusEnum.success
         assert p.payment_method == "CASH"
-        assert p.notes == "Pembayaran tunai lunas di meja kasir"
         assert p.verified_by == 3
 
 
