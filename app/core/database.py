@@ -5,21 +5,38 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import select
 from app.core.config import settings
 
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
 logger = logging.getLogger(__name__)
 
+def sanitize_db_url(url: str) -> str:
+    """
+    Standardize postgres scheme for asyncpg and clean ssl/sslmode query params
+    so asyncpg does not throw unexpected keyword argument errors.
+    """
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    if "postgresql+asyncpg" in url or "asyncpg" in url:
+        parsed = urlparse(url)
+        query_params = parse_qs(parsed.query)
+        query_params.pop("sslmode", None)
+        query_params.pop("ssl", None)
+        new_query = urlencode(query_params, doseq=True)
+        url = urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            new_query,
+            parsed.fragment
+        ))
+    return url
+
 # Konfigurasi URL dan Connection Args untuk Neon Postgres & pgBouncer compatibility
-db_url = settings.database_url
-
-# Standardize postgres scheme for asyncpg
-if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
-elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+asyncpg://"):
-    db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-
-# Ensure sslmode=require for Neon / Postgres pooler if not specified
-if ("neon.tech" in db_url or "-pooler" in db_url) and "sslmode=" not in db_url:
-    delimiter = "&" if "?" in db_url else "?"
-    db_url = f"{db_url}{delimiter}sslmode=require"
+db_url = sanitize_db_url(settings.database_url)
 
 engine_kwargs = {
     "pool_pre_ping": True,
@@ -29,6 +46,7 @@ engine_kwargs = {
 # Add asyncpg connect_args for Neon / pgBouncer statement cache
 if "postgresql+asyncpg" in db_url or "postgresql" in db_url or "asyncpg" in db_url:
     engine_kwargs["connect_args"] = {
+        "ssl": True,
         "statement_cache_size": 0,
         "prepared_statement_cache_size": 0,
     }

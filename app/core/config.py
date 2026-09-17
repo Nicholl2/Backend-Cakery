@@ -43,6 +43,10 @@ class Settings(BaseSettings):
         return self.access_token_expire_minutes
 
     @property
+    def DATABASE_URL(self) -> str:
+        return self.database_url
+
+    @property
     def midtrans_api_url(self) -> str:
         return "https://api.midtrans.com/v2" if self.midtrans_is_production else "https://api.sandbox.midtrans.com/v2"
 

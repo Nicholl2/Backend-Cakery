@@ -7,10 +7,11 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 ## 📌 Daftar Perubahan Kode Terbaru
 
 ### 001u. Perbaikan Database Error & Unhandled HTTP 500 pada Endpoint GET /orders & GET /reports/financial (Neon Postgres & pgBouncer)
-- **Konfigurasi Engine SQLAlchemy untuk Neon Postgres & pgBouncer (`app/core/database.py`)**:
-  - Menambahkan auto-append `?sslmode=require` pada koneksi database Neon/pooler.
-  - Menambahkan `connect_args={"statement_cache_size": 0, "prepared_statement_cache_size": 0}` untuk driver `asyncpg` guna mencegah prepared statement collision error di lingkungan Neon / pgBouncer pooling.
-  - Mengonfigurasi `pool_pre_ping=True` dan `pool_recycle=300` untuk mencegah *stale connection* dari Neon serverless sleep.
+- **Konfigurasi Engine SQLAlchemy untuk Neon Postgres & pgBouncer (`app/core/database.py`, `app/core/config.py`)**:
+  - Menambahkan sanitasi string URL otomatis (`sanitize_db_url`) untuk membersihkan query parameter `sslmode=require` / `ssl=require` agar driver `asyncpg` tidak melempar `TypeError: unexpected keyword argument 'sslmode'`.
+  - Menetapkan `connect_args={"ssl": True, "statement_cache_size": 0, "prepared_statement_cache_size": 0}` pada driver `asyncpg` guna mengaktifkan SSL secara aman dan mencegah prepared statement collision error di lingkungan Neon / pgBouncer pooling.
+  - Mengonfigurasi `pool_pre_ping=True` dan `pool_recycle=300` pada pembuatan engine untuk mencegah *stale connection* dari Neon serverless sleep.
+  - Menambahkan property alias `DATABASE_URL` pada class `Settings` di `app/core/config.py`.
 - **Kompatibilitas Dialect Postgres Neon pada Repositori (`app/repositories/order_repo.py`, `app/repositories/report_repo.py`)**:
   - Memperbarui query filter enum (`Order.status`, `Invoice.status`, `Payment.payment_status`) agar mendukung format enum value list (`.value`) yang aman dieksekusi di database PostgreSQL maupun SQLite in-memory.
   - Menggunakan `cast(Order.created_via, String) == "chatbot"` untuk menjamin query analitik kebal terhadap type mismatch di dialect Postgres.
