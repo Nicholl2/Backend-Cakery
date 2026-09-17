@@ -301,11 +301,49 @@ async def run_tests():
         assert res_err.status_code in (400, 422), f"Expected 400 or 422, got {res_err.status_code}: {res_err.text}"
         assert "detail" in res_err.json()
         assert res_err.status_code != 500, "Server must not crash with HTTP 500"
-        print(f"✓ Error handled safely without 500 crash: Status={res_err.status_code}, Detail={res_err.json()['detail']}")
+        # Test 13: GET /orders/buyer with legacy null values in order_items (Resilient Deserialization)
+        print("\n13. Testing GET /orders/buyer with legacy null fields in order_items...")
+        async with TestSessionLocal() as db:
+            from app.models.order import OrderItem, MetodePengirimanEnum, OrderStatusEnum
+            c1 = await customer_repo.get_by_nomor_wa(db, b1_phone)
+            legacy_order = Order(
+                customer_id=c1.id,
+                status=OrderStatusEnum.completed,
+                metode_pengiriman=MetodePengirimanEnum.pickup,
+                total_harga_pesanan=Decimal("75000.00"),
+                created_via="web",
+            )
+            db.add(legacy_order)
+            await db.flush()
+
+            # OrderItem with None in hpp_snapshot and custom_decoration_charge
+            legacy_item = OrderItem(
+                order_id=legacy_order.id,
+                product_id=prod_id,
+                jumlah=1,
+                custom_decoration_charge=None,
+                subtotal=Decimal("75000.00"),
+                hpp_snapshot=None,
+            )
+            db.add(legacy_item)
+            await db.commit()
+
+        res_legacy = await client.get(
+            "/orders/buyer",
+            headers={"Authorization": f"Bearer {token_buyer1}"}
+        )
+        assert res_legacy.status_code == 200, f"Expected 200, got {res_legacy.status_code}: {res_legacy.text}"
+        legacy_list = res_legacy.json()
+        matching = [o for o in legacy_list if o["id"] == legacy_order.id]
+        assert len(matching) == 1
+        assert matching[0]["status"] == "completed"
+        assert matching[0]["items"][0]["custom_decoration_charge"] == "0.00"
+        assert matching[0]["items"][0]["hpp_snapshot"] == "0.00"
+        print("✓ Legacy null fields in order_items successfully deserialized to 0.00 without 500 error")
 
     # Cleanup test data
     async with TestSessionLocal() as db:
-        for b_id in [buyer1_id, buyer2_id, buyer3_id]:
+        for b_id in [buyer1_id, buyer2_id, buyer3_id, buyer4_id]:
             b = await buyer_repo.get_buyer_by_id(db, b_id)
             if b:
                 await db.delete(b)

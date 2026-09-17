@@ -61,20 +61,29 @@ async def lifespan(app: FastAPI):
     main_logger = logging.getLogger(__name__)
 
     try:
+        from app.core.migrations import (
+            ensure_product_columns,
+            ensure_buyer_columns,
+            ensure_stock_item_columns,
+            ensure_recipe_columns,
+            ensure_otp_columns,
+            ensure_user_columns,
+            ensure_order_columns,
+            ensure_order_status_enum,
+            ensure_payment_columns,
+            ensure_review_columns,
+        )
+
+        # 1. Run enum additions in isolated autocommit connection (PostgreSQL requires ALTER TYPE outside transaction blocks)
+        try:
+            async with engine.connect() as auto_conn:
+                await ensure_order_status_enum(auto_conn)
+        except Exception as enum_err:
+            main_logger.warning(f"Enum migration notice: {enum_err}")
+
+        # 2. Run table creations and column migrations in transactional block
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            from app.core.migrations import (
-                ensure_product_columns,
-                ensure_buyer_columns,
-                ensure_stock_item_columns,
-                ensure_recipe_columns,
-                ensure_otp_columns,
-                ensure_user_columns,
-                ensure_order_columns,
-                ensure_order_status_enum,
-                ensure_payment_columns,
-                ensure_review_columns,
-            )
             await ensure_product_columns(conn)
             await ensure_buyer_columns(conn)
             await ensure_stock_item_columns(conn)
@@ -82,7 +91,6 @@ async def lifespan(app: FastAPI):
             await ensure_otp_columns(conn)
             await ensure_user_columns(conn)
             await ensure_order_columns(conn)
-            await ensure_order_status_enum(conn)
             await ensure_payment_columns(conn)
             await ensure_review_columns(conn)
 

@@ -386,3 +386,21 @@ Untuk mengamankan pengalaman berbelanja pelanggan pada web storefront:
    - Seluruh alur `POST /orders/buyer` dibungkus dalam blok `try-except Exception as e`.
    - Kesalahan data, validasi stok, atau kegagalan bisnis dikembalikan sebagai `HTTPException(status_code=400, detail=str(e))` lengkap dengan detail pesan kesalahan yang jelas.
    - Mencegah backend melempar unhandled server crash (HTTP 500) yang berisiko menonaktifkan header CORS dan menyulitkan debugging pada Frontend.
+
+---
+
+## 20. Resiliensi Riwayat Pesanan Buyer (`GET /orders/buyer`) & Isolasi Migrasi Enum PostgreSQL
+
+Untuk menjamin kelancaran pengambilan riwayat pesanan pelanggan dan kompatibilitas runtime PostgreSQL di Vercel:
+
+1. **Isolasi Koneksi Autocommit untuk Migrasi Enum PostgreSQL**:
+   - Di PostgreSQL, penambahan nilai baru pada tipe enum (`ALTER TYPE orderstatusenum ADD VALUE ...`) dilarang keras dijalankan di dalam blok transaksi aktif (`ActiveSQLTransactionError`).
+   - Eksekusi `ensure_order_status_enum` dipisahkan pada koneksi autocommit terpisah (`engine.connect()`) sebelum blok transaksi `engine.begin()` dibuka.
+   - Hal ini mencegah status koneksi masuk ke kondisi *transaction aborted*, sehingga migrasi kolom selanjutnya (`payments.settled_at`, `payments.updated_at`, dan tabel relasi `reviews`) terpasang secara andal di database produksi.
+
+2. **Toleransi & Nilai Default pada Schema Serialisasi Pydantic**:
+   - Schema `OrderItemOut` dirancang tahan banting (*resilient*) terhadap data pesanan kustom maupun historis yang memiliki nilai `NULL` pada kolom snapshot/biaya (`hpp_snapshot`, `custom_decoration_charge`).
+   - Validator `round_money` dan helper `_round2` otomatis memetakan nilai `None` menjadi representasi desimal `Decimal("0.00")` tanpa memicu `ValidationError` (HTTP 500).
+
+3. **Proteksi & Logging Route Level**:
+   - Endpoint `GET /orders/buyer` dan `GET /orders/buyer/{id}` dibekali penanganan error menyeluruh dengan logging terstruktur, menjamin kejelasan informasi dan stabilitas sistem.

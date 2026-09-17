@@ -6,6 +6,23 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001s. Perbaikan Root Cause HTTP 500 pada Endpoint Riwayat Pesanan Buyer (GET /orders/buyer)
+- **Isolasi Migrasi Enum PostgreSQL (`app/main.py`, `app/core/migrations.py`)**:
+  - Memisahkan eksekusi `ensure_order_status_enum` ke koneksi *autocommit* terpisah (`async with engine.connect() as auto_conn:`) sebelum membuka blok transaksi DDL `async with engine.begin() as conn:`.
+  - Mengeliminasi error PostgreSQL `ActiveSQLTransactionError` / `InFailedSQLTransactionError: ALTER TYPE ... ADD cannot run inside a transaction block` yang sebelumnya menyebabkan seluruh migrasi tabel & kolom sesudahnya (`ensure_payment_columns` dan `ensure_review_columns`) di-rollback.
+  - Menjamin kolom `payments.settled_at` dan `payments.updated_at` berhasil terpasang di database PostgreSQL tanpa memicu `UndefinedColumnError` saat pemanggilan eager-loading relasi payments.
+- **Resiliensi Deserialisasi Schema Pydantic (`app/schemas/order.py`)**:
+  - Memperbarui fungsi helper `_round2(v, default=None)` dengan parameter nilai fallback.
+  - Memperbarui schema `OrderItemOut` agar field `custom_decoration_charge`, `subtotal`, dan `hpp_snapshot` bertipe `Optional[Decimal] = Decimal("0.00")` dan validator `round_money` otomatis mengonversi nilai `None` (dari database atau data lama) menjadi `Decimal("0.00")`.
+  - Memperbarui `OrderOut.total_harga_pesanan` dengan validator `round_total` agar kebal terhadap `None`.
+  - Mengeliminasi crash deserialisasi `pydantic_core.ValidationError` pada pesanan kustom atau order dengan data historis.
+- **Exception Shielding & Logging Komprehensif (`app/api/routes/order.py`)**:
+  - Membungkus handler `GET /orders/buyer` dan `GET /orders/buyer/{id}` dengan blok `try-except Exception as e` dan *structured error logging*.
+  - Mengembalikan status HTTP 500 terstruktur yang rapi dengan header CORS utuh jika terjadi kegagalan tak terduga.
+- **Automated Tests (`tests/test_buyer_orders_payments.py`)**:
+  - Menambahkan pengujian `Test 13`: Validasi deserialisasi pesanan buyer dengan kolom `OrderItem` bernilai `None` (`hpp_snapshot`, `custom_decoration_charge`) pada status `completed`, memastikan response berhasil dikembalikan dengan status HTTP 200 OK dan nilai default `0.00`.
+  - Seluruh 53 unit & integration tests di test suite berjalan sukses (**100% PASSED**).
+
 ### 001r. Implementasi Kontrak Endpoint Frontend: Dashboard Summary, Manual Payment & Global Reviews
 - **Dashboard Summary (`app/api/routes/report.py`, `app/schemas/report.py`, `app/services/report_service.py`, `app/repositories/report_repo.py`)**:
   - Memperbarui endpoint `GET /reports/summary`: Menghapus proteksi `require_service_key` (X-Service-Key) dan menggantikannya dengan otorisasi JWT untuk role OWNER, ADMIN, dan STAFF (`require_internal_user` / `require_staff_or_above`).

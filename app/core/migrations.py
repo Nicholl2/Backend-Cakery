@@ -165,12 +165,16 @@ async def ensure_order_status_enum(conn: AsyncConnection):
                 f"ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS '{val}';"
             ))
     except Exception:
-        async with conn.engine.connect() as auto_conn:
-            autocommit_conn = await auto_conn.execution_options(isolation_level="AUTOCOMMIT")
-            for val in ["completed", "refunded"]:
-                await autocommit_conn.execute(text(
-                    f"ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS '{val}';"
-                ))
+        # Fallback to independent connection if the passed connection was inside an existing transaction
+        try:
+            async with conn.engine.connect() as auto_conn:
+                autocommit_conn = await auto_conn.execution_options(isolation_level="AUTOCOMMIT")
+                for val in ["completed", "refunded"]:
+                    await autocommit_conn.execute(text(
+                        f"ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS '{val}';"
+                    ))
+        except Exception:
+            pass
 
 
 async def ensure_payment_columns(conn: AsyncConnection):

@@ -5,9 +5,9 @@ from datetime import datetime
 from app.utils.sanitize import sanitize_text
 
 
-def _round2(v) -> Optional[Decimal]:
+def _round2(v, default: Optional[Decimal] = None) -> Optional[Decimal]:
     if v is None:
-        return None
+        return default
     return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
@@ -144,14 +144,16 @@ class OrderItemOut(BaseModel):
     custom_product_name: Optional[str] = None
     product_name: Optional[str] = None
     jumlah: int
-    custom_decoration_charge: Decimal = Decimal("0.00")
-    subtotal: Decimal
-    hpp_snapshot: Decimal = Decimal("0.00")
+    custom_decoration_charge: Optional[Decimal] = Decimal("0.00")
+    subtotal: Optional[Decimal] = Decimal("0.00")
+    hpp_snapshot: Optional[Decimal] = Decimal("0.00")
 
     @field_validator("custom_decoration_charge", "subtotal", "hpp_snapshot", mode="before")
     @classmethod
     def round_money(cls, v):
-        return _round2(v)
+        if v is None:
+            return Decimal("0.00")
+        return _round2(v, default=Decimal("0.00"))
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -181,9 +183,16 @@ class OrderOut(BaseModel):
     amount_paid: Optional[Decimal] = None
     amount_due: Optional[Decimal] = None
 
-    @field_validator("total_harga_pesanan", "amount_paid", "amount_due", mode="before")
+    @field_validator("total_harga_pesanan", mode="before")
     @classmethod
-    def round_money(cls, v):
+    def round_total(cls, v):
+        if v is None:
+            return Decimal("0.00")
+        return _round2(v, default=Decimal("0.00"))
+
+    @field_validator("amount_paid", "amount_due", mode="before")
+    @classmethod
+    def round_amounts(cls, v):
         return _round2(v)
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)

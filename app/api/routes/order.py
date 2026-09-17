@@ -84,8 +84,17 @@ async def list_buyer_orders(
     """
     Mengambil semua pesanan milik Buyer yang sedang login.
     """
-    orders = await order_service.get_buyer_orders(db, buyer)
-    return [OrderOut.model_validate(o) for o in orders]
+    try:
+        orders = await order_service.get_buyer_orders(db, buyer)
+        return [OrderOut.model_validate(o) for o in orders]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching buyer orders for buyer {buyer.id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Gagal memuat riwayat pesanan.",
+        )
 
 
 @router.get("/buyer/{id}", response_model=OrderOut,
@@ -99,8 +108,17 @@ async def get_buyer_order_detail(
     Mengambil detail spesifik pesanan milik Buyer yang sedang login.
     Mengembalikan 404 jika pesanan tidak ditemukan atau bukan milik Buyer ini.
     """
-    order = await order_service.get_buyer_order_by_id(db, buyer, id)
-    return OrderOut.model_validate(order)
+    try:
+        order = await order_service.get_buyer_order_by_id(db, buyer, id)
+        return OrderOut.model_validate(order)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching buyer order detail {id} for buyer {buyer.id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Gagal memuat detail pesanan.",
+        )
 
 
 # ── CHATBOT & ADMIN/SELLER ORDER ENDPOINTS ──────────────────────────────────
