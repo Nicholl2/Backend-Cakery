@@ -404,3 +404,18 @@ Untuk menjamin kelancaran pengambilan riwayat pesanan pelanggan dan kompatibilit
 
 3. **Proteksi & Logging Route Level**:
    - Endpoint `GET /orders/buyer` dan `GET /orders/buyer/{id}` dibekali penanganan error menyeluruh dengan logging terstruktur, menjamin kejelasan informasi dan stabilitas sistem.
+
+---
+
+## 21. Resiliensi Daftar Pesanan Toko Seller (`GET /orders`)
+
+Untuk mengamankan listing pesanan pada Seller Dashboard:
+
+1. **Proteksi Kalkulasi Piutang / Amount Due**:
+   - Fungsi internal `_attach_payment_amounts` memvalidasi keberadaan `total_tagihan` pada invoice pesanan secara ketat, mencegah error `decimal.InvalidOperation` jika terdapat record pesanan historis dengan data invoice yang tidak lengkap.
+
+2. **Schema Deserialisasi Kebal Data Null**:
+   - Schema `CustomerOrderOut`, `InvoiceOut`, dan `OrderOut` dilengkapi nilai default aman pada field yang berpotensi `NULL` pada basis data toko yang sudah berjalan lama.
+
+3. **Exception Shielding**:
+   - Route `list_seller_orders` (`GET /orders`) dan `get_seller_order_detail` (`GET /orders/{order_id}`) dibungkus dalam blok `try-except` dengan structured logging untuk menjamin tidak ada unhandled 500 error mentah yang keluar ke frontend.

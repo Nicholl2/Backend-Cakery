@@ -116,8 +116,8 @@ class RefundResponse(BaseModel):
 
 class CustomerOrderOut(BaseModel):
     id: int
-    nama: str
-    nomor_wa: str
+    nama: Optional[str] = "Customer"
+    nomor_wa: Optional[str] = ""
     alamat: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -126,14 +126,16 @@ class CustomerOrderOut(BaseModel):
 class InvoiceOut(BaseModel):
     id: int
     nomor_invoice: str
-    total_tagihan: Decimal
+    total_tagihan: Optional[Decimal] = Decimal("0.00")
     status: str
     created_at: Optional[datetime] = None
 
     @field_validator("total_tagihan", mode="before")
     @classmethod
     def round_money(cls, v):
-        return _round2(v)
+        if v is None:
+            return Decimal("0.00")
+        return _round2(v, default=Decimal("0.00"))
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -168,9 +170,9 @@ class OrderOut(BaseModel):
     id: int
     customer_id: int
     status: str
-    metode_pengiriman: str
-    total_harga_pesanan: Decimal
-    created_via: str
+    metode_pengiriman: str = "pickup"
+    total_harga_pesanan: Optional[Decimal] = Decimal("0.00")
+    created_via: str = "web"
     notes: Optional[str] = None
     due_date: Optional[datetime] = None
     payment_method_preference: Optional[str] = None

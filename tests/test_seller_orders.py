@@ -294,7 +294,56 @@ async def run_seller_order_tests():
             assert s_telur.stok_tersedia == Decimal("50.00"), f"Expected 50.00, got {s_telur.stok_tersedia}"
             assert s_tepung.version == 2
             assert s_telur.version == 2
-        print("✓ Stock restoration on order cancellation verified 100%!")
+        # ── Test 6: GET /orders Resilience against Legacy NULL Data ──
+        print("\n6. Testing GET /orders resilience with legacy null fields (total_tagihan, hpp, decoration)...")
+        async with TestSessionLocal() as db:
+            from app.models.order import Order, OrderItem, Invoice, InvoiceStatusEnum, MetodePengirimanEnum, OrderStatusEnum
+            from app.models.customer import Customer
+
+            cust_legacy = Customer(nama="Pelanggan Lama", nomor_wa="081999888777")
+            db.add(cust_legacy)
+            await db.flush()
+
+            order_legacy = Order(
+                customer_id=cust_legacy.id,
+                status=OrderStatusEnum.completed,
+                metode_pengiriman=MetodePengirimanEnum.pickup,
+                total_harga_pesanan=Decimal("120000.00"),
+                created_via="chatbot",
+            )
+            db.add(order_legacy)
+            await db.flush()
+
+            inv_legacy = Invoice(
+                order_id=order_legacy.id,
+                nomor_invoice="INV-LEGACY-001",
+                total_tagihan=Decimal("120000.00"),
+                status=InvoiceStatusEnum.paid,
+            )
+            db.add(inv_legacy)
+
+            item_legacy = OrderItem(
+                order_id=order_legacy.id,
+                product_id=None,
+                custom_product_name="Kue Jadul Resep Kuno",
+                jumlah=1,
+                custom_decoration_charge=None,  # Null charge
+                subtotal=Decimal("120000.00"),
+                hpp_snapshot=None,  # Null hpp
+            )
+            db.add(item_legacy)
+            await db.commit()
+
+        res_seller_legacy = await client.get("/orders", headers={"Authorization": f"Bearer {token_admin}"})
+        assert res_seller_legacy.status_code == 200, f"Expected 200, got {res_seller_legacy.status_code}: {res_seller_legacy.text}"
+        all_orders = res_seller_legacy.json()
+        assert len(all_orders) >= 3
+        legacy_matched = [o for o in all_orders if o["id"] == order_legacy.id]
+        assert len(legacy_matched) == 1
+        assert legacy_matched[0]["invoice"]["total_tagihan"] == "120000.00"
+        assert legacy_matched[0]["order_items"][0]["custom_decoration_charge"] == "0.00"
+        assert legacy_matched[0]["order_items"][0]["hpp_snapshot"] == "0.00"
+        print("✓ GET /orders handled legacy null fields gracefully (200 OK)!")
 
     app.dependency_overrides.clear()
     print("\n🎉 ALL SELLER ORDER & INVENTORY TESTS PASSED FLAWLESSLY!")

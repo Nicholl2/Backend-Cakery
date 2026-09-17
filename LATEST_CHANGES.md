@@ -6,6 +6,19 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001t. Perbaikan Root Cause HTTP 500 pada Endpoint Seller Orders (GET /orders)
+- **Proteksi Perhitungan Piutang / Amount Due (`app/services/order_service.py`)**:
+  - Memperbarui fungsi `_attach_payment_amounts` agar memeriksa keberadaan `order.invoice.total_tagihan is not None` sebelum melakukan konversi desimal `Decimal(str(order.invoice.total_tagihan))`.
+  - Mencegah unhandled exception `decimal.InvalidOperation` jika terdapat invoice pesanan lama yang memiliki `total_tagihan = NULL`.
+- **Penguatan Schema Deserialisasi Pydantic (`app/schemas/order.py`)**:
+  - Menambahkan default fallback aman pada schema `CustomerOrderOut` (`nama: Optional[str] = "Customer"`, `nomor_wa: Optional[str] = ""`), `InvoiceOut` (`total_tagihan: Optional[Decimal] = Decimal("0.00")`), dan `OrderOut` (`metode_pengiriman = "pickup"`, `created_via = "web"`, `total_harga_pesanan = Decimal("0.00")`).
+  - Mengeliminasi `pydantic_core.ValidationError` saat endpoint `GET /orders` memuat seluruh riwayat pesanan toko (all-time) yang memuat data historis.
+- **Exception Shielding & Logging Komprehensif pada Seller Orders Router (`app/api/routes/order.py`)**:
+  - Membungkus endpoint `GET /orders` (`list_seller_orders`) dan `GET /orders/{order_id}` (`get_seller_order_detail`) dalam blok `try-except Exception as e` dengan pencatatan structured error log.
+- **Automated Tests (`tests/test_seller_orders.py`)**:
+  - Menambahkan pengujian `Test 6`: Validasi pengambilan seluruh pesanan toko (`GET /orders`) dengan data item/invoice yang mengandung field `NULL`, memastikan status HTTP 200 OK berhasil dikembalikan dengan struktur nested data yang utuh.
+  - Seluruh 53 unit & integration tests di test suite berjalan sukses (**100% PASSED**).
+
 ### 001s. Perbaikan Root Cause HTTP 500 pada Endpoint Riwayat Pesanan Buyer (GET /orders/buyer)
 - **Isolasi Migrasi Enum PostgreSQL (`app/main.py`, `app/core/migrations.py`)**:
   - Memisahkan eksekusi `ensure_order_status_enum` ke koneksi *autocommit* terpisah (`async with engine.connect() as auto_conn:`) sebelum membuka blok transaksi DDL `async with engine.begin() as conn:`.

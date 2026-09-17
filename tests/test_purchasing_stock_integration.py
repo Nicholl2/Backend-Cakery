@@ -191,7 +191,7 @@ async def test_product_hpp_recalculation_on_purchase_received(db_session: AsyncS
         satuan=SatuanEnum.gram,
         kategori=KategoriEnum.bahan_baku,
         stok_tersedia=Decimal("1000.00"),
-        harga_per_satuan=Decimal("100.0000"),  # Rp 100 / gram
+        harga_per_satuan=Decimal("100.0000"),  
         supplier_id=supplier.id,
         version=1,
     )
@@ -201,7 +201,7 @@ async def test_product_hpp_recalculation_on_purchase_received(db_session: AsyncS
         id=5,
         nama_produk="Brownies Panggang",
         harga_jual=Decimal("60000.00"),
-        hpp_total=Decimal("20000.00"),  # 200g * 100 = 20,000
+        hpp_total=Decimal("20000.00"),  
     )
     db_session.add(product)
     await db_session.flush()

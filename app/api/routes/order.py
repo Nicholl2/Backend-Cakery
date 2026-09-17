@@ -135,13 +135,22 @@ async def list_seller_orders(
     """
     Mengambil daftar seluruh pesanan untuk Seller (Staff/Admin/Owner) dengan relasi lengkap (Customer, OrderItems, Invoice, Payments).
     """
-    orders = await order_service.get_seller_orders(
-        db,
-        limit=limit,
-        offset=offset,
-        status=status.value if status else None,
-    )
-    return [OrderOut.model_validate(o) for o in orders]
+    try:
+        orders = await order_service.get_seller_orders(
+            db,
+            limit=limit,
+            offset=offset,
+            status=status.value if status else None,
+        )
+        return [OrderOut.model_validate(o) for o in orders]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching seller orders: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal memuat daftar pesanan: {str(e)}",
+        )
 
 
 @router.post("", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
@@ -216,8 +225,17 @@ async def get_seller_order_detail(
     """
     Mengambil detail pesanan spesifik untuk Seller (Staff/Admin/Owner) dengan relasi lengkap.
     """
-    order = await order_service.get_seller_order_by_id(db, order_id)
-    return OrderOut.model_validate(order)
+    try:
+        order = await order_service.get_seller_order_by_id(db, order_id)
+        return OrderOut.model_validate(order)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching seller order detail {order_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal memuat detail pesanan: {str(e)}",
+        )
 
 
 @router.patch("/{order_id}/status", response_model=OrderOut,

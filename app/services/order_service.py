@@ -375,8 +375,11 @@ async def _attach_payment_amounts(db: AsyncSession, order: Order) -> Order:
         if sum_result is not None:
             amount_paid = Decimal(str(sum_result))
             
-    if order.invoice:
-        amount_due = Decimal(str(order.invoice.total_tagihan)) - amount_paid
+    if order.invoice and order.invoice.total_tagihan is not None:
+        try:
+            amount_due = Decimal(str(order.invoice.total_tagihan)) - amount_paid
+        except Exception:
+            amount_due = Decimal("0.00")
     else:
         amount_due = Decimal("0.00")
         
