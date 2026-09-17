@@ -6,6 +6,19 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001v. Perbaikan HTTP 500 & Defensive Webhook Handler pada Endpoint POST /payments/notify & /payments/notification
+- **Route Mapping & Endpoint Alias (`app/api/routes/payment.py`)**:
+  - Mendaftarkan endpoint `@router.post("/notify")` dan `@router.post("/notification")` ke handler fungsi yang sama (`handle_midtrans_notification`).
+  - Mengembalikan langsung hasil eksekusi dari service `payment_service.process_midtrans_webhook`.
+- **Defensive Check Payload & Signature Verification (`app/services/payment_service.py`)**:
+  - Membungkus pembacaan payload JSON Midtrans dengan validasi tipe data aman (`isinstance(payload, dict)`).
+  - Mengekstrak field `order_id`, `status_code`, `gross_amount`, `signature_key`, `transaction_status`, dan `transaction_id` secara aman untuk mencegah `KeyError` atau `TypeError`.
+  - Memverifikasi `signature_key` buatan Midtrans dengan SHA-512 secara defensif (menangani string/int/float conversion dan encoding error tanpa crash).
+  - Jika `order_id` / pembayaran tidak ditemukan di database backend, mengembalikan response `200 OK` dengan JSON `{"message": "Order not found, notification acknowledged"}` agar Midtrans tidak menganggap server crash atau melakukan retry looping HTTP 500.
+- **Automated Tests (`tests/test_buyer_orders_payments.py`)**:
+  - Menambahkan pengujian `Test 14`: Validasi `POST /payments/notify` dan `POST /payments/notification` dengan payload order yang tidak ada di DB mengembalikan status 200 OK dan body acknowledgement yang sesuai, serta validasi penolakan signature yang tidak valid (400 Bad Request).
+  - Seluruh test suite (55 tests) berjalan sukses (**100% PASSED**).
+
 ### 001u. Perbaikan Database Error & Unhandled HTTP 500 pada Endpoint GET /orders & GET /reports/financial (Neon Postgres & pgBouncer)
 - **Konfigurasi Engine SQLAlchemy untuk Neon Postgres & pgBouncer (`app/core/database.py`, `app/core/config.py`)**:
   - Menambahkan sanitasi string URL otomatis (`sanitize_db_url`) untuk membersihkan query parameter `sslmode=require` / `ssl=require` agar driver `asyncpg` tidak melempar `TypeError: unexpected keyword argument 'sslmode'`.

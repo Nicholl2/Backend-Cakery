@@ -355,16 +355,43 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
     4. State Machine — validasi transisi status satu arah
     5. Structured Audit Logging
     """
-    order_id = payload.get("order_id")
-    status_code = payload.get("status_code")
-    gross_amount = payload.get("gross_amount")
-    signature_from_payload = payload.get("signature_key")
-    
+    if not isinstance(payload, dict):
+        logger.warning("[PAYMENT_AUDIT] invalid_payload | payload is not a dict")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid payload format"
+        )
+
+    try:
+        order_id = str(payload.get("order_id") or "").strip()
+        status_code = str(payload.get("status_code") or "").strip()
+        gross_amount = str(payload.get("gross_amount") or "").strip()
+        signature_from_payload = str(payload.get("signature_key") or "").strip()
+        txn_status = str(payload.get("transaction_status") or "").strip()
+        pg_transaction_id = str(payload.get("transaction_id") or "").strip() if payload.get("transaction_id") else None
+    except Exception as e:
+        logger.warning(f"[PAYMENT_AUDIT] payload_extraction_error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid payload structure"
+        )
+
     # 1. Validasi integritas request menggunakan SHA512 Signature Key
-    raw_string = f"{order_id}{status_code}{gross_amount}{settings.midtrans_server_key}"
-    calculated_signature = hashlib.sha512(raw_string.encode('utf-8')).hexdigest()
-    
-    if calculated_signature != signature_from_payload:
+    try:
+        server_key = str(settings.midtrans_server_key or "")
+        raw_string = f"{order_id}{status_code}{gross_amount}{server_key}"
+        calculated_signature = hashlib.sha512(raw_string.encode('utf-8')).hexdigest()
+    except (TypeError, KeyError, UnicodeEncodeError) as sig_err:
+        logger.warning(
+            f"[PAYMENT_AUDIT] signature_generation_exception: {sig_err} | "
+            f"midtrans_order_id={order_id} | status_code={status_code} | gross_amount={gross_amount}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid signature parameters"
+        )
+
+    if not signature_from_payload or calculated_signature.lower() != signature_from_payload.lower():
         logger.warning(
             "[PAYMENT_AUDIT] invalid_signature | midtrans_order_id=%s | "
             "status_code=%s | gross_amount=%s",
@@ -375,20 +402,20 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
             detail="Invalid Signature"
         )
         
-    pg_transaction_id = payload.get("transaction_id")
-    
     # 2. Cari data payment dengan ROW-LEVEL LOCK (FOR UPDATE)
     #    mencegah dua webhook simultan memproses Payment row yang sama
-    result = await db.execute(
-        select(Payment)
-        .where(Payment.pg_transaction_id == pg_transaction_id)
-        .with_for_update()
-    )
-    payment = result.scalars().first()
+    payment = None
+    if pg_transaction_id:
+        result = await db.execute(
+            select(Payment)
+            .where(Payment.pg_transaction_id == pg_transaction_id)
+            .with_for_update()
+        )
+        payment = result.scalars().first()
     
-    if not payment:
+    if not payment and order_id:
         # Fallback: parsing order_id untuk mendapatkan nomor invoice
-        if order_id and "-PAY-" in order_id:
+        if "-PAY-" in order_id:
             inv_num = order_id.split("-PAY-")[0]
             result = await db.execute(
                 select(Payment)
@@ -405,14 +432,10 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
             "midtrans_order_id=%s",
             pg_transaction_id, order_id,
         )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Data pembayaran tidak ditemukan"
-        )
+        return {"message": "Order not found, notification acknowledged"}
 
     # 3. IDEMPOTENCY GUARD — skip jika payment sudah di terminal state
     # Pengecualian: webhook 'refund' atau 'partial_refund' boleh diproses dari state 'success'
-    txn_status = payload.get("transaction_status")
     is_refund_webhook = txn_status in ["refund", "partial_refund"]
     allow_terminal_transition = is_refund_webhook and payment.payment_status == PaymentStatusEnum.success
     
@@ -422,7 +445,7 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
             "current_status=%s | webhook_status=%s | "
             "transaction_id=%s",
             payment.id, payment.payment_status.value,
-            payload.get("transaction_status"), pg_transaction_id,
+            txn_status, pg_transaction_id,
         )
         await db.commit()  # Release row lock
         return {"status": "skipped", "payment_status": payment.payment_status}

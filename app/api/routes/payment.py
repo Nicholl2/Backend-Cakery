@@ -213,11 +213,13 @@ async def get_order_payment_status(
             detail=f"Gagal memeriksa status pembayaran: {str(e)}"
         )
 
-# 3. Endpoint POST /payments/notify (PUBLIC - webhook)
+# 3. Endpoint POST /payments/notify & /payments/notification (PUBLIC - webhook)
 @router.post("/notify", status_code=status.HTTP_200_OK,
              summary="Midtrans Webhook Notification Listener")
+@router.post("/notification", status_code=status.HTTP_200_OK,
+             summary="Midtrans Webhook Notification Listener (Alias)")
 @limiter.limit(RATE_WEBHOOK)
-async def midtrans_notification(
+async def handle_midtrans_notification(
     request: Request,
     payload: dict,
     db: AsyncSession = Depends(get_db)
@@ -226,5 +228,4 @@ async def midtrans_notification(
     Webhook notification endpoint yang ditembak oleh server Midtrans secara otomatis.
     Memproses update status transaksi berdasarkan signature Midtrans.
     """
-    await payment_service.process_midtrans_webhook(db, payload)
-    return {"status": "ok"}
+    return await payment_service.process_midtrans_webhook(db, payload)

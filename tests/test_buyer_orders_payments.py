@@ -364,7 +364,40 @@ async def run_tests():
         assert raw_order.order_items[0].hpp_snapshot == Decimal("0.00")
         print("✓ Legacy null fields in order and order_items successfully deserialized without 500 error")
 
-    # Cleanup test data
+        # Test 14: POST /payments/notify & /payments/notification unknown order returns 200 OK
+        print("\n14. Testing POST /payments/notify & /payments/notification defensive parsing & unknown order...")
+        import hashlib
+        unknown_order_id = "UNKNOWN-ORDER-PAY-999"
+        gross_amount = "150000.00"
+        status_code = "200"
+        raw_sig = f"{unknown_order_id}{status_code}{gross_amount}{settings.midtrans_server_key}"
+        calc_sig = hashlib.sha512(raw_sig.encode('utf-8')).hexdigest()
+
+        notify_payload = {
+            "order_id": unknown_order_id,
+            "status_code": status_code,
+            "gross_amount": gross_amount,
+            "signature_key": calc_sig,
+            "transaction_status": "settlement",
+            "transaction_id": "non-existent-trans-id"
+        }
+
+        # Test /payments/notify
+        res_notify = await client.post("/payments/notify", json=notify_payload)
+        assert res_notify.status_code == 200, f"Expected 200, got {res_notify.status_code}: {res_notify.text}"
+        assert res_notify.json() == {"message": "Order not found, notification acknowledged"}
+
+        # Test /payments/notification (Alias)
+        res_alias = await client.post("/payments/notification", json=notify_payload)
+        assert res_alias.status_code == 200, f"Expected 200, got {res_alias.status_code}: {res_alias.text}"
+        assert res_alias.json() == {"message": "Order not found, notification acknowledged"}
+
+        # Test invalid signature on webhook
+        bad_payload = notify_payload.copy()
+        bad_payload["signature_key"] = "invalidsignature123"
+        res_bad_sig = await client.post("/payments/notify", json=bad_payload)
+        assert res_bad_sig.status_code == 400
+        print("✓ Webhook endpoints /notify & /notification and defensive unknown order response verified (200 OK)")
     async with TestSessionLocal() as db:
         for b_id in [buyer1_id, buyer2_id, buyer3_id, buyer4_id]:
             b = await buyer_repo.get_buyer_by_id(db, b_id)
