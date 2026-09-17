@@ -184,7 +184,7 @@ class OrderItemOut(BaseModel):
     @classmethod
     def fallback_zero_money(cls, v):
         if v is None:
-            return Decimal("0.00")
+            return 0.0
         return _round2(v, default=Decimal("0.00"))
 
     @field_validator("subtotal", mode="before")
@@ -225,7 +225,7 @@ class OrderOut(BaseModel):
     @field_validator("created_via", mode="before")
     @classmethod
     def fallback_created_via(cls, v):
-        if not v:
+        if v is None or not v:
             return "BUYER_SITE"
         return str(v)
 
