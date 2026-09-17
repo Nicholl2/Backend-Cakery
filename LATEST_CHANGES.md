@@ -932,5 +932,60 @@ Seluruh 4 test cases memvalidasi:
 - Perilaku default katalog `GET /products/` menampilkan produk habis, dan pemfilteran saat `only_available=true`.
 - Penolakan pesanan saat produk habis atau melebihi stok dengan HTTP 400 dan pesan error yang tepat.
 
+---
 
+### Skenario 8: Perbaikan Akses Financial Report (`GET /reports/financial`), Null-Safety Query & Pydantic Schema Hardening
+
+#### A. Ringkasan Perubahan
+1. **Authorization & Error Shielding Route Layer (`app/api/routes/report.py`)**:
+   - Menyelaraskan izin dependensi `get_financial_report` dan `get_analytics_report` dari `require_owner` menjadi `require_internal_user` (mengizinkan peran Owner, Admin, dan Staff pada Seller Dashboard untuk mengakses laporan keuangan).
+   - Menambahkan blok penanganan eksepsi `try-except` dan logging terstruktur pada endpoint `GET /reports/financial`, `GET /reports/analytics`, dan `GET /reports/summary` untuk mencegah HTTP 500 unhandled exceptions.
+
+2. **Query & Repository Hardening (`app/repositories/report_repo.py`)**:
+   - Memasang `func.coalesce` pada kalkulasi `Invoice.total_tagihan`, `OrderItem.hpp_snapshot`, dan `OrderItem.subtotal` untuk memastikan tidak terjadi operasi aritmatika bernilai `NULL` pada baris legacy order di PostgreSQL.
+
+3. **Schema Layer Null-Safety (`app/schemas/product.py`, `app/schemas/stock.py`)**:
+   - Memperbarui fungsi pembantu `_round2(v, default=None)` untuk menerima nilai default saat `v` bernilai `None`.
+   - Mengamankan validator `StockOut` (`round_money`, `round_stock`, `round_alert`) terhadap `None` input.
+   - Menjadikan `ProductOut.hpp_total` opsional dengan default `Decimal("0.00")` dan validator `round_hpp`.
+
+#### B. Pengujian Terotomasi
+- Menambahkan test case `test_financial_report_endpoint_authorization_and_query` pada `tests/test_financial_report.py`.
+- Seluruh 54 test cases lulus 100%:
+```bash
+venv/bin/pytest tests/ -v
+# 54 passed, 1 warning in 10.66s
+```
+
+---
+
+### Skenario 9: Implementasi Opsi B — Serialization Layer Hardening untuk Legacy Orders Null Safety (`GET /orders/buyer` & `GET /orders`)
+
+#### A. Ringkasan Perubahan
+1. **Pydantic Before-Validators pada Schema Pesanan (`app/schemas/order.py`)**:
+   - `OrderOut`:
+     - Menambahkan `@field_validator("created_via", mode="before")` yang meng-intercept nilai `None`/kosong pada legacy order di database dan memberikan fallback historis `"chatbot"`.
+     - Menambahkan `@field_validator("metode_pengiriman", mode="before")` dengan fallback `"pickup"`.
+     - Menambahkan `@field_validator("status", mode="before")` dengan fallback `"pending"`.
+     - Mempertahankan validator `total_harga_pesanan` dengan fallback `Decimal("0.00")`.
+   - `OrderItemOut`:
+     - Menambahkan `@field_validator("jumlah", mode="before")` dengan fallback `1`.
+     - Memperkuat `@field_validator("custom_decoration_charge", "subtotal", "hpp_snapshot", mode="before")` agar mengonversi `None` menjadi `Decimal("0.00")` sebelum validasi tipe Pydantic.
+   - `CustomerOrderOut`:
+     - Menambahkan before-validators untuk `nama` (fallback `"Customer"`) dan `nomor_wa` (fallback `""`).
+   - `InvoiceOut`:
+     - Menambahkan before-validators untuk `status` (fallback `"unpaid"`) dan `total_tagihan` (fallback `Decimal("0.00")`).
+
+2. **Keunggulan Opsi B**:
+   - **Zero Risk di Database Production**: Tidak memerlukan migrasi `SET NOT NULL` yang berpotensi mengunci tabel live atau memicu kegagalan saat ada payload insert legacy.
+   - **Integritas Data Historis Terjaga**: Data historis di database tetap apa adanya, sedangkan layer respons API selalu menjamin payload JSON yang rapi, lengkap, dan tanpa field `null` yang merusak Frontend.
+   - **Frontend Tetap Tanpa Perubahan**: Frontend (Buyer Web & Seller Dashboard) menerima data dalam format schema yang 100% konsisten.
+
+#### B. Pengujian Terotomasi
+- Menambahkan verifikasi `created_via=None`, `custom_decoration_charge=None`, dan `hpp_snapshot=None` pada suite test `tests/test_buyer_orders_payments.py`.
+- Seluruh 54 test cases lulus 100%:
+```bash
+venv/bin/pytest tests/ -v
+# 54 passed, 1 warning in 10.69s (100% PASSED)
+```
 

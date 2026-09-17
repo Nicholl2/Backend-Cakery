@@ -120,6 +120,20 @@ class CustomerOrderOut(BaseModel):
     nomor_wa: Optional[str] = ""
     alamat: Optional[str] = None
 
+    @field_validator("nama", mode="before")
+    @classmethod
+    def fallback_nama(cls, v):
+        if not v:
+            return "Customer"
+        return str(v)
+
+    @field_validator("nomor_wa", mode="before")
+    @classmethod
+    def fallback_nomor_wa(cls, v):
+        if not v:
+            return ""
+        return str(v)
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -137,6 +151,15 @@ class InvoiceOut(BaseModel):
             return Decimal("0.00")
         return _round2(v, default=Decimal("0.00"))
 
+    @field_validator("status", mode="before")
+    @classmethod
+    def fallback_status(cls, v):
+        if not v:
+            return "unpaid"
+        if hasattr(v, "value"):
+            return v.value
+        return str(v)
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -145,10 +168,17 @@ class OrderItemOut(BaseModel):
     product_id: Optional[int] = None
     custom_product_name: Optional[str] = None
     product_name: Optional[str] = None
-    jumlah: int
+    jumlah: int = 1
     custom_decoration_charge: Optional[Decimal] = Decimal("0.00")
     subtotal: Optional[Decimal] = Decimal("0.00")
     hpp_snapshot: Optional[Decimal] = Decimal("0.00")
+
+    @field_validator("jumlah", mode="before")
+    @classmethod
+    def fallback_jumlah(cls, v):
+        if v is None:
+            return 1
+        return int(v)
 
     @field_validator("custom_decoration_charge", "subtotal", "hpp_snapshot", mode="before")
     @classmethod
@@ -172,7 +202,7 @@ class OrderOut(BaseModel):
     status: str
     metode_pengiriman: str = "pickup"
     total_harga_pesanan: Optional[Decimal] = Decimal("0.00")
-    created_via: str = "web"
+    created_via: str = "chatbot"
     notes: Optional[str] = None
     due_date: Optional[datetime] = None
     payment_method_preference: Optional[str] = None
@@ -184,6 +214,31 @@ class OrderOut(BaseModel):
     invoice: Optional[InvoiceOut] = None
     amount_paid: Optional[Decimal] = None
     amount_due: Optional[Decimal] = None
+
+    @field_validator("created_via", mode="before")
+    @classmethod
+    def fallback_created_via(cls, v):
+        if not v:
+            return "chatbot"
+        return str(v)
+
+    @field_validator("metode_pengiriman", mode="before")
+    @classmethod
+    def fallback_metode(cls, v):
+        if not v:
+            return "pickup"
+        if hasattr(v, "value"):
+            return v.value
+        return str(v)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def fallback_status(cls, v):
+        if not v:
+            return "pending"
+        if hasattr(v, "value"):
+            return v.value
+        return str(v)
 
     @field_validator("total_harga_pesanan", mode="before")
     @classmethod

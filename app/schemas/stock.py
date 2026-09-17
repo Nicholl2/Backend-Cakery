@@ -56,11 +56,15 @@ class StockOut(BaseModel):
     @field_validator('harga_per_satuan', mode='before')
     @classmethod
     def round_money(cls, v):
+        if v is None:
+            return Decimal("0.00")
         return Decimal(str(v)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
     @field_validator('stok_tersedia', mode='before')
     @classmethod
     def round_stock(cls, v):
+        if v is None:
+            return Decimal("0")
         return Decimal(str(v)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
 
     @field_validator('alert_min_stok', mode='before')

@@ -311,7 +311,7 @@ async def run_tests():
                 status=OrderStatusEnum.completed,
                 metode_pengiriman=MetodePengirimanEnum.pickup,
                 total_harga_pesanan=Decimal("75000.00"),
-                created_via="web",
+                created_via=None,
             )
             db.add(legacy_order)
             await db.flush()
@@ -337,9 +337,10 @@ async def run_tests():
         matching = [o for o in legacy_list if o["id"] == legacy_order.id]
         assert len(matching) == 1
         assert matching[0]["status"] == "completed"
+        assert matching[0]["created_via"] == "chatbot"
         assert matching[0]["items"][0]["custom_decoration_charge"] == "0.00"
         assert matching[0]["items"][0]["hpp_snapshot"] == "0.00"
-        print("✓ Legacy null fields in order_items successfully deserialized to 0.00 without 500 error")
+        print("✓ Legacy null fields in order and order_items successfully deserialized without 500 error")
 
     # Cleanup test data
     async with TestSessionLocal() as db:

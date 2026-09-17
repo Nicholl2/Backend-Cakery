@@ -4,9 +4,9 @@ from typing import Optional
 from datetime import datetime
 from app.schemas.recipe import RecipeOut
 
-def _round2(v) -> Optional[Decimal]:
+def _round2(v, default=None) -> Optional[Decimal]:
     if v is None:
-        return None
+        return default
     return Decimal(str(v)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 # ── CREATE ──────────────────────────────────────────────────────────────────
@@ -57,10 +57,10 @@ class ProductOut(BaseModel):
     nama_produk: str
     deskripsi: Optional[str] = None
     kategori: Optional[str] = None
-    hpp_total: Decimal
+    hpp_total: Optional[Decimal] = Decimal("0.00")
     harga_jual: Optional[Decimal] = None
     markup_percentage: Optional[Decimal] = None
-    is_active: bool
+    is_active: bool = True
     is_available: bool = True
     stock_quantity: int = 0
     is_in_stock: bool = False
@@ -92,9 +92,18 @@ class ProductOut(BaseModel):
         self.is_in_stock = bool(self.is_available and (self.stock_quantity or 0) > 0)
         return self
 
-    @field_validator('hpp_total', 'harga_jual', mode='before')
+    @field_validator('hpp_total', mode='before')
     @classmethod
-    def round_money(cls, v):
+    def round_hpp(cls, v):
+        if v is None:
+            return Decimal("0.00")
+        return _round2(v, Decimal("0.00"))
+
+    @field_validator('harga_jual', mode='before')
+    @classmethod
+    def round_harga(cls, v):
+        if v is None:
+            return None
         return _round2(v)
 
     @field_validator('markup_percentage', mode='before')

@@ -605,3 +605,48 @@ async def test_cross_period_refund_and_historical_integrity(db_session: AsyncSes
     assert combined_report.cash_refunded == Decimal("150000.00")
     assert combined_report.net_cash_flow == Decimal("0.00")
 
+
+@pytest.mark.asyncio
+async def test_financial_report_endpoint_authorization_and_query():
+    """
+    Test GET /reports/financial endpoint with date range and internal user role.
+    """
+    import httpx
+    from app.main import app
+    from app.core.database import get_db
+    from app.api.dependencies import require_internal_user
+
+    test_engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestSessionLocal = async_sessionmaker(bind=test_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async def override_get_db():
+        async with TestSessionLocal() as session:
+            yield session
+
+    async def override_auth():
+        return 2  # Admin role
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_internal_user] = override_auth
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        res = await client.get("/reports/financial?start_date=2026-08-31&end_date=2026-09-29")
+        assert res.status_code == 200
+        data = res.json()
+        assert "revenue" in data
+        assert "total_revenue" in data
+        assert "net_profit" in data
+        assert "gross_profit" in data
+        assert "product_profitability" in data
+
+    app.dependency_overrides.clear()
+    await test_engine.dispose()
+
+

@@ -91,7 +91,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     # ── 5. Total HPP Cost: HPP ONLY for orders settled in the period ────────────
     # Excludes unpaid, pending, cancelled, or refunded orders completely
     hpp_query = await db.execute(
-        select(func.sum(OrderItem.jumlah * OrderItem.hpp_snapshot))
+        select(func.sum(OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00"))))
         .where(
             OrderItem.order_id.in_(paid_order_ids_in_period)
         )
@@ -133,7 +133,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     outstanding_query = await db.execute(
         select(
             func.sum(
-                Invoice.total_tagihan - func.coalesce(paid_amount_subquery.c.paid_sum, Decimal("0.00"))
+                func.coalesce(Invoice.total_tagihan, Decimal("0.00")) - func.coalesce(paid_amount_subquery.c.paid_sum, Decimal("0.00"))
             )
         )
         .join(Order, Order.id == Invoice.order_id)
@@ -152,8 +152,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
             func.coalesce(OrderItem.product_id, 0).label("product_id"),
             func.coalesce(Product.nama_produk, OrderItem.custom_product_name, "Custom Item").label("nama_produk"),
             func.sum(OrderItem.jumlah).label("qty_sold"),
-            func.sum(OrderItem.subtotal).label("total_revenue"),
-            func.sum(OrderItem.jumlah * OrderItem.hpp_snapshot).label("total_hpp"),
+            func.sum(func.coalesce(OrderItem.subtotal, Decimal("0.00"))).label("total_revenue"),
+            func.sum(OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00"))).label("total_hpp"),
         )
         .outerjoin(Product, Product.id == OrderItem.product_id)
         .where(
@@ -164,7 +164,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
             func.coalesce(Product.nama_produk, OrderItem.custom_product_name, "Custom Item")
         )
         .order_by(
-            func.sum(OrderItem.subtotal - (OrderItem.jumlah * OrderItem.hpp_snapshot)).desc()
+            func.sum(func.coalesce(OrderItem.subtotal, Decimal("0.00")) - (OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00")))).desc()
         )
     )
     product_rows = product_profit_query.all()
