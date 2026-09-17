@@ -180,9 +180,16 @@ class OrderItemOut(BaseModel):
             return 1
         return int(v)
 
-    @field_validator("custom_decoration_charge", "subtotal", "hpp_snapshot", mode="before")
+    @field_validator("custom_decoration_charge", "hpp_snapshot", mode="before")
     @classmethod
-    def round_money(cls, v):
+    def fallback_zero_money(cls, v):
+        if v is None:
+            return Decimal("0.00")
+        return _round2(v, default=Decimal("0.00"))
+
+    @field_validator("subtotal", mode="before")
+    @classmethod
+    def round_subtotal(cls, v):
         if v is None:
             return Decimal("0.00")
         return _round2(v, default=Decimal("0.00"))
@@ -202,7 +209,7 @@ class OrderOut(BaseModel):
     status: str
     metode_pengiriman: str = "pickup"
     total_harga_pesanan: Optional[Decimal] = Decimal("0.00")
-    created_via: str = "chatbot"
+    created_via: str = "BUYER_SITE"
     notes: Optional[str] = None
     due_date: Optional[datetime] = None
     payment_method_preference: Optional[str] = None
@@ -219,7 +226,7 @@ class OrderOut(BaseModel):
     @classmethod
     def fallback_created_via(cls, v):
         if not v:
-            return "chatbot"
+            return "BUYER_SITE"
         return str(v)
 
     @field_validator("metode_pengiriman", mode="before")
@@ -253,6 +260,11 @@ class OrderOut(BaseModel):
         return _round2(v)
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+# Aliases for compatibility
+OrderRead = OrderOut
+OrderResponse = OrderOut
 
 
 from app.models.order import OrderStatusEnum

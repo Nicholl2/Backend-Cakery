@@ -989,3 +989,33 @@ venv/bin/pytest tests/ -v
 # 54 passed, 1 warning in 10.69s (100% PASSED)
 ```
 
+---
+
+### Skenario 10: Perbaikan Crash HTTP 500 pada `GET /orders` & `GET /reports/financial`
+
+#### A. Ringkasan Perubahan
+1. **Fix Serialization Error pada Order Schemas (`app/schemas/order.py`)**:
+   - `OrderItemRead` / `OrderItemOut`:
+     - Menambahkan `@field_validator("custom_decoration_charge", "hpp_snapshot", mode="before")` yang mengembalikan `Decimal("0.00")` (atau `0.0`) jika nilainya `None`.
+     - Menambahkan `@field_validator("subtotal", mode="before")` dengan fallback aman `Decimal("0.00")`.
+     - Menambahkan `@field_validator("jumlah", mode="before")` dengan fallback `1`.
+   - `OrderRead` / `OrderOut`:
+     - Menambahkan `@field_validator("created_via", mode="before")` yang mengembalikan `"BUYER_SITE"` jika nilainya `None` atau tidak ada.
+     - Menyediakan alias DTO eksplisit: `OrderRead = OrderOut`, `OrderResponse = OrderOut`, `OrderItemRead = OrderItemOut`, `OrderItemResponse = OrderItemOut`.
+
+2. **Fix Null Safety pada Financial Report Calculation (`app/repositories/report_repo.py`)**:
+   - Memastikan seluruh kalkulasi SQL menggunakan `func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00"))` dan `func.coalesce(OrderItem.subtotal, Decimal("0.00"))` agar baris legacy yang bernilai `NULL` tidak memicu `TypeError` di database maupun di Python backend.
+
+#### B. Pengujian Terotomasi
+- Menjalankan unit test khusus:
+```bash
+venv/bin/pytest tests/test_seller_orders.py tests/test_financial_report.py -v
+# 6 passed in 1.12s
+```
+- Menjalankan seluruh test suite backend:
+```bash
+venv/bin/pytest tests/ -v
+# 54 passed, 1 warning in 10.54s (100% PASSED)
+```
+
+

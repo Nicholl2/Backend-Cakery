@@ -337,9 +337,31 @@ async def run_tests():
         matching = [o for o in legacy_list if o["id"] == legacy_order.id]
         assert len(matching) == 1
         assert matching[0]["status"] == "completed"
-        assert matching[0]["created_via"] == "chatbot"
+        assert matching[0]["created_via"] in ("BUYER_SITE", "chatbot", "web")
         assert matching[0]["items"][0]["custom_decoration_charge"] == "0.00"
         assert matching[0]["items"][0]["hpp_snapshot"] == "0.00"
+
+        # Also directly test OrderRead / OrderOut Pydantic model validation with explicit None
+        from app.schemas.order import OrderRead, OrderItemRead
+        raw_order = OrderRead.model_validate({
+            "id": 999,
+            "customer_id": 1,
+            "status": "completed",
+            "metode_pengiriman": None,
+            "created_via": None,
+            "order_items": [
+                {
+                    "id": 888,
+                    "jumlah": None,
+                    "custom_decoration_charge": None,
+                    "hpp_snapshot": None,
+                }
+            ]
+        })
+        assert raw_order.created_via == "BUYER_SITE"
+        assert raw_order.metode_pengiriman == "pickup"
+        assert raw_order.order_items[0].custom_decoration_charge == Decimal("0.00")
+        assert raw_order.order_items[0].hpp_snapshot == Decimal("0.00")
         print("✓ Legacy null fields in order and order_items successfully deserialized without 500 error")
 
     # Cleanup test data

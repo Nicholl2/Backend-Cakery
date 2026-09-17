@@ -419,3 +419,15 @@ Untuk mengamankan listing pesanan pada Seller Dashboard:
 
 3. **Exception Shielding**:
    - Route `list_seller_orders` (`GET /orders`) dan `get_seller_order_detail` (`GET /orders/{order_id}`) dibungkus dalam blok `try-except` dengan structured logging untuk menjamin tidak ada unhandled 500 error mentah yang keluar ke frontend.
+
+---
+
+## 22. Serialization Hardening & Null-Safety Laporan Keuangan
+
+1. **Pydantic Before-Validators pada Order Schemas (`app/schemas/order.py`)**:
+   - `OrderItemRead` / `OrderItemOut`: `@field_validator("custom_decoration_charge", "hpp_snapshot", mode="before")` mengembalikan `Decimal("0.00")` (atau `0.0`) jika bernilai `None`.
+   - `OrderRead` / `OrderOut`: `@field_validator("created_via", mode="before")` mengembalikan `"BUYER_SITE"` jika bernilai `None` atau kosong.
+   - Menyediakan alias DTO lengkap: `OrderRead = OrderOut`, `OrderResponse = OrderOut`, `OrderItemRead = OrderItemOut`, `OrderItemResponse = OrderItemOut`.
+
+2. **Null Safety pada Kalkulasi SQL Laporan Keuangan (`app/repositories/report_repo.py`)**:
+   - Query agregasi finansial `get_financial_report_data` menggunakan `func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00"))`, `func.coalesce(OrderItem.custom_decoration_charge, Decimal("0.00"))`, dan `func.coalesce(Invoice.total_tagihan, Decimal("0.00"))` untuk mencegah `TypeError` / `NoneType` arithmetic saat mengolah data legacy di PostgreSQL.
