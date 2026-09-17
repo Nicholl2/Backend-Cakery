@@ -37,8 +37,8 @@ async def check_active_unpaid_order(db: AsyncSession, customer_id: int) -> bool:
         .where(
             and_(
                 Order.customer_id == customer_id,
-                Order.status.not_in([OrderStatusEnum.cancelled, OrderStatusEnum.picked_up]),
-                Invoice.status != InvoiceStatusEnum.paid,
+                Order.status.not_in([OrderStatusEnum.cancelled, OrderStatusEnum.picked_up, OrderStatusEnum.cancelled.value, OrderStatusEnum.picked_up.value]),
+                Invoice.status.not_in([InvoiceStatusEnum.paid, InvoiceStatusEnum.paid.value]),
             )
         )
         .limit(1)
@@ -148,7 +148,8 @@ async def get_all_orders(
         )
     )
     if status:
-        query = query.where(Order.status == status)
+        status_val = status.value if hasattr(status, "value") else str(status)
+        query = query.where(Order.status == status_val)
     
     query = query.limit(limit).offset(offset)
     result = await db.execute(query)

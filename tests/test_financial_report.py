@@ -650,3 +650,71 @@ async def test_financial_report_endpoint_authorization_and_query():
     await test_engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_financial_report_null_hpp_snapshot_resilience(db_session: AsyncSession):
+    """
+    Test that financial report handles historical items with NULL hpp_snapshot and NULL custom_decoration_charge
+    without raising TypeError or 500.
+    """
+    cust = Customer(id=99, nama="Pelanggan Historis", nomor_wa="081999000999")
+    db_session.add(cust)
+    await db_session.flush()
+
+    legacy_date = datetime(2026, 4, 10, 10, 0, 0, tzinfo=timezone.utc)
+
+    order = Order(
+        id=9901,
+        customer_id=cust.id,
+        status=OrderStatusEnum.completed,
+        metode_pengiriman=MetodePengirimanEnum.pickup,
+        total_harga_pesanan=Decimal("150000.00"),
+        created_at=legacy_date,
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    inv = Invoice(
+        id=9902,
+        order_id=order.id,
+        nomor_invoice="INV-LEGACY-HPP-NULL",
+        total_tagihan=Decimal("150000.00"),
+        status=InvoiceStatusEnum.paid,
+        created_at=legacy_date,
+    )
+    db_session.add(inv)
+    await db_session.flush()
+
+    item = OrderItem(
+        order_id=order.id,
+        product_id=None,
+        custom_product_name="Kue Historis Tanpa HPP",
+        jumlah=1,
+        custom_decoration_charge=None,
+        subtotal=Decimal("150000.00"),
+        hpp_snapshot=None,
+    )
+    db_session.add(item)
+
+    payment = Payment(
+        id=9903,
+        invoice_id=inv.id,
+        jumlah_bayar=Decimal("150000.00"),
+        payment_method="cash",
+        payment_status=PaymentStatusEnum.success,
+        payment_type=PaymentTypeEnum.final,
+        created_at=legacy_date,
+        settled_at=legacy_date,
+    )
+    db_session.add(payment)
+    await db_session.commit()
+
+    report = await report_service.get_financial_report(db_session, "2026-04-01", "2026-04-30")
+    assert report.total_revenue == Decimal("150000.00")
+    assert report.total_hpp_cost == Decimal("0.00")
+    assert report.gross_profit == Decimal("150000.00")
+    assert len(report.product_profitability) == 1
+    assert report.product_profitability[0].total_hpp == Decimal("0.00")
+    assert report.product_profitability[0].gross_profit == Decimal("150000.00")
+
+
+

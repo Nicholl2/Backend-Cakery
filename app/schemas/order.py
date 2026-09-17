@@ -182,10 +182,8 @@ class OrderItemOut(BaseModel):
 
     @field_validator("custom_decoration_charge", "hpp_snapshot", mode="before")
     @classmethod
-    def fallback_zero_money(cls, v):
-        if v is None:
-            return 0.0
-        return _round2(v, default=Decimal("0.00"))
+    def sanitize_null_floats(cls, v):
+        return 0.0 if v is None else v
 
     @field_validator("subtotal", mode="before")
     @classmethod
@@ -224,10 +222,8 @@ class OrderOut(BaseModel):
 
     @field_validator("created_via", mode="before")
     @classmethod
-    def fallback_created_via(cls, v):
-        if v is None or not v:
-            return "BUYER_SITE"
-        return str(v)
+    def sanitize_created_via(cls, v):
+        return "BUYER_SITE" if not v else v
 
     @field_validator("metode_pengiriman", mode="before")
     @classmethod

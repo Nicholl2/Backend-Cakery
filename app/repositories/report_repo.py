@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, cast, String
 from sqlalchemy.orm import selectinload
 from decimal import Decimal
 from datetime import datetime
@@ -26,9 +26,12 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         .join(Payment, Payment.invoice_id == Invoice.id)
         .join(Order, Order.id == Invoice.order_id)
         .where(
-            Payment.payment_status == PaymentStatusEnum.success,
-            Invoice.status == InvoiceStatusEnum.paid,
-            Order.status.notin_([OrderStatusEnum.cancelled, OrderStatusEnum.refunded])
+            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.success.value]),
+            Invoice.status.in_([InvoiceStatusEnum.paid, InvoiceStatusEnum.paid.value]),
+            Order.status.notin_([
+                OrderStatusEnum.cancelled, OrderStatusEnum.refunded,
+                OrderStatusEnum.cancelled.value, OrderStatusEnum.refunded.value
+            ])
         )
         .group_by(Invoice.order_id)
         .subquery()
@@ -47,7 +50,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         select(func.sum(Payment.jumlah_bayar))
         .join(Invoice, Invoice.id == Payment.invoice_id)
         .where(
-            Payment.payment_status == PaymentStatusEnum.success,
+            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.success.value]),
             Invoice.order_id.in_(paid_order_ids_in_period)
         )
     )
@@ -58,7 +61,10 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     cash_received_query = await db.execute(
         select(func.sum(Payment.jumlah_bayar))
         .where(
-            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.refunded]),
+            Payment.payment_status.in_([
+                PaymentStatusEnum.success, PaymentStatusEnum.refunded,
+                PaymentStatusEnum.success.value, PaymentStatusEnum.refunded.value
+            ]),
             Payment.created_at >= start_dt,
             Payment.created_at <= end_dt
         )
@@ -69,7 +75,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     cash_refunded_query = await db.execute(
         select(func.sum(Payment.jumlah_bayar))
         .where(
-            Payment.payment_status == PaymentStatusEnum.refunded,
+            Payment.payment_status.in_([PaymentStatusEnum.refunded, PaymentStatusEnum.refunded.value]),
             func.coalesce(Payment.updated_at, Payment.created_at) >= start_dt,
             func.coalesce(Payment.updated_at, Payment.created_at) <= end_dt
         )
@@ -106,8 +112,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         .join(Invoice, Invoice.id == Payment.invoice_id)
         .join(Order, Order.id == Invoice.order_id)
         .where(
-            Payment.payment_status == PaymentStatusEnum.success,
-            Order.status == OrderStatusEnum.cancelled,
+            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.success.value]),
+            Order.status.in_([OrderStatusEnum.cancelled, OrderStatusEnum.cancelled.value]),
             Payment.created_at >= start_dt,
             Payment.created_at <= end_dt
         )
@@ -123,7 +129,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
             func.sum(Payment.jumlah_bayar).label("paid_sum")
         )
         .where(
-            Payment.payment_status == PaymentStatusEnum.success,
+            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.success.value]),
             Payment.created_at <= end_dt
         )
         .group_by(Payment.invoice_id)
@@ -139,8 +145,14 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         .join(Order, Order.id == Invoice.order_id)
         .outerjoin(paid_amount_subquery, paid_amount_subquery.c.invoice_id == Invoice.id)
         .where(
-            Invoice.status.in_([InvoiceStatusEnum.unpaid, InvoiceStatusEnum.partial]),
-            Order.status.notin_([OrderStatusEnum.cancelled, OrderStatusEnum.refunded]),
+            Invoice.status.in_([
+                InvoiceStatusEnum.unpaid, InvoiceStatusEnum.partial,
+                InvoiceStatusEnum.unpaid.value, InvoiceStatusEnum.partial.value
+            ]),
+            Order.status.notin_([
+                OrderStatusEnum.cancelled, OrderStatusEnum.refunded,
+                OrderStatusEnum.cancelled.value, OrderStatusEnum.refunded.value
+            ]),
             Order.created_at <= end_dt
         )
     )
@@ -241,7 +253,7 @@ async def get_analytics_report_data(db: AsyncSession, start_dt: datetime, end_dt
     cust_query = await db.execute(
         select(func.count(func.distinct(Order.customer_id)))
         .where(
-            Order.status != OrderStatusEnum.cancelled,
+            Order.status.notin_([OrderStatusEnum.cancelled, OrderStatusEnum.cancelled.value]),
             Order.created_at >= start_dt,
             Order.created_at <= end_dt
         )
@@ -254,7 +266,7 @@ async def get_analytics_report_data(db: AsyncSession, start_dt: datetime, end_dt
         .where(
             Order.created_at >= start_dt,
             Order.created_at <= end_dt,
-            Order.created_via == "chatbot"
+            cast(Order.created_via, String) == "chatbot"
         )
     )
     chatbot_orders_count = chatbot_orders_query.scalar() or 0
@@ -324,7 +336,9 @@ async def get_dashboard_summary_data(
     active_products = active_prod_q.scalar() or 0
 
     # 3. Total revenue (successful payments)
-    rev_stmt = select(func.sum(Payment.jumlah_bayar)).where(Payment.payment_status == PaymentStatusEnum.success)
+    rev_stmt = select(func.sum(Payment.jumlah_bayar)).where(
+        Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.success.value])
+    )
     if start_dt:
         rev_stmt = rev_stmt.where(func.coalesce(Payment.settled_at, Payment.created_at) >= start_dt)
     if end_dt:

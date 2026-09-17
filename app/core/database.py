@@ -7,8 +7,34 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Konfigurasi URL dan Connection Args untuk Neon Postgres & pgBouncer compatibility
+db_url = settings.database_url
+
+# Standardize postgres scheme for asyncpg
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+asyncpg://"):
+    db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+# Ensure sslmode=require for Neon / Postgres pooler if not specified
+if ("neon.tech" in db_url or "-pooler" in db_url) and "sslmode=" not in db_url:
+    delimiter = "&" if "?" in db_url else "?"
+    db_url = f"{db_url}{delimiter}sslmode=require"
+
+engine_kwargs = {
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+}
+
+# Add asyncpg connect_args for Neon / pgBouncer statement cache
+if "postgresql+asyncpg" in db_url or "postgresql" in db_url or "asyncpg" in db_url:
+    engine_kwargs["connect_args"] = {
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+    }
+
 # Menggunakan create_async_engine untuk mendukung asyncpg & lifespan main.py
-engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+engine = create_async_engine(db_url, **engine_kwargs)
 
 AsyncSessionLocal = sessionmaker(
     bind=engine,

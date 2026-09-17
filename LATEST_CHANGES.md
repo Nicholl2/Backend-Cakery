@@ -6,6 +6,24 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001u. Perbaikan Database Error & Unhandled HTTP 500 pada Endpoint GET /orders & GET /reports/financial (Neon Postgres & pgBouncer)
+- **Konfigurasi Engine SQLAlchemy untuk Neon Postgres & pgBouncer (`app/core/database.py`)**:
+  - Menambahkan auto-append `?sslmode=require` pada koneksi database Neon/pooler.
+  - Menambahkan `connect_args={"statement_cache_size": 0, "prepared_statement_cache_size": 0}` untuk driver `asyncpg` guna mencegah prepared statement collision error di lingkungan Neon / pgBouncer pooling.
+  - Mengonfigurasi `pool_pre_ping=True` dan `pool_recycle=300` untuk mencegah *stale connection* dari Neon serverless sleep.
+- **Kompatibilitas Dialect Postgres Neon pada Repositori (`app/repositories/order_repo.py`, `app/repositories/report_repo.py`)**:
+  - Memperbarui query filter enum (`Order.status`, `Invoice.status`, `Payment.payment_status`) agar mendukung format enum value list (`.value`) yang aman dieksekusi di database PostgreSQL maupun SQLite in-memory.
+  - Menggunakan `cast(Order.created_via, String) == "chatbot"` untuk menjamin query analitik kebal terhadap type mismatch di dialect Postgres.
+- **Resiliensi Schema Deserialisasi Pydantic (`app/schemas/order.py`)**:
+  - Pada `OrderItemRead` (`OrderItemOut`), menambahkan validator `@field_validator('custom_decoration_charge', 'hpp_snapshot', mode='before')` dengan method `@classmethod def sanitize_null_floats(cls, v): return 0.0 if v is None else v` untuk menjamin nilai `None` / `NULL` dari database historis otomatis di-fallback ke `0.0`.
+  - Pada `OrderRead` (`OrderOut`), menambahkan validator `@field_validator('created_via', mode='before')` dengan method `@classmethod def sanitize_created_via(cls, v): return "BUYER_SITE" if not v else v` untuk menangani field `created_via` bernilai `None` / `NULL` / string kosong.
+- **Resiliensi Agregasi Finansial SQL & Python (`app/repositories/report_repo.py`, `app/services/report_service.py`)**:
+  - Membungkus field `OrderItem.hpp_snapshot` dan perhitungan subtotal dengan `func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00"))` pada query total HPP serta query profitabilitas produk per item.
+  - Menjamin iterasi Python pada breakdown profitabilitas kebal terhadap nilai `None` (`row.total_revenue or 0`, `row.total_hpp or 0`), mencegah unhandled `TypeError` pada kalkulasi margin laba.
+- **Automated Tests (`tests/test_financial_report.py`, `tests/test_seller_orders.py`)**:
+  - Menambahkan pengujian `test_financial_report_null_hpp_snapshot_resilience` pada `tests/test_financial_report.py` untuk memverifikasi kalkulasi laporan keuangan pada pesanan historis dengan `hpp_snapshot = NULL` dan `custom_decoration_charge = NULL`.
+  - Seluruh 55 test suite pada Backend berjalan lancar dan lulus (**100% PASSED**).
+
 ### 001t. Perbaikan Root Cause HTTP 500 pada Endpoint Seller Orders (GET /orders)
 - **Proteksi Perhitungan Piutang / Amount Due (`app/services/order_service.py`)**:
   - Memperbarui fungsi `_attach_payment_amounts` agar memeriksa keberadaan `order.invoice.total_tagihan is not None` sebelum melakukan konversi desimal `Decimal(str(order.invoice.total_tagihan))`.
