@@ -6,6 +6,18 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001w. Perbaikan DeadlockDetectedError & Optimasi Read-Only Query Laporan Keuangan (report_repo.py & report_service.py)
+- **Eksekusi Query Read-Only Terisolasi (`app/repositories/report_repo.py`)**:
+  - Menambahkan fungsi helper `_execute_readonly(db, statement)` dengan execution options khusus query analitik/laporan (`execution_options={"compiled_cache": None}`) yang dijalankan di luar transaksi write aktif agar tidak memicu atau terjebak lock contention / table lock di database PostgreSQL.
+  - Menerapkan `_execute_readonly` pada seluruh query agregasi laporan keuangan (`get_financial_report_data`), analitik penjualan (`get_analytics_report_data`), dan ringkasan dashboard (`get_dashboard_summary_data`).
+- **Retry Decorator Deadlock & OperationalError (`app/services/report_service.py`)**:
+  - Menambahkan decorator `@retry_on_deadlock(max_retries=3, delay=0.5)` yang menangkap exception `asyncpg.exceptions.DeadlockDetectedError`, `OperationalError`, `DBAPIError`, maupun pesan lock contention database PostgreSQL.
+  - Melakukan retry otomatis maksimal 3 kali dengan jeda waktu 0.5 detik sebelum melempar exception ke caller.
+  - Diterapkan pada fungsi `get_financial_report`, `get_analytics_report`, dan `get_dashboard_summary`.
+- **Automated Tests (`tests/test_financial_report.py`)**:
+  - Menambahkan unit test `test_financial_report_deadlock_retry`: Mensimulasikan `OperationalError` (deadlock detected) pada 2 percobaan pertama dan memverifikasi bahwa retry decorator berhasil pulih pada percobaan ke-3 dan mengembalikan data laporan yang valid.
+  - Seluruh 56 unit & integration tests pada Backend berjalan sukses (**100% PASSED**).
+
 ### 001v. Perbaikan HTTP 500 & Defensive Webhook Handler pada Endpoint POST /payments/notify & /payments/notification
 - **Route Mapping & Endpoint Alias (`app/api/routes/payment.py`)**:
   - Mendaftarkan endpoint `@router.post("/notify")` dan `@router.post("/notification")` ke handler fungsi yang sama (`handle_midtrans_notification`).

@@ -717,4 +717,29 @@ async def test_financial_report_null_hpp_snapshot_resilience(db_session: AsyncSe
     assert report.product_profitability[0].gross_profit == Decimal("150000.00")
 
 
+@pytest.mark.asyncio
+async def test_financial_report_deadlock_retry(db_session: AsyncSession):
+    """
+    Test that retry_on_deadlock catches DeadlockDetectedError / OperationalError,
+    retries, and succeeds once lock contention clears.
+    """
+    from unittest.mock import patch
+    from sqlalchemy.exc import OperationalError
+
+    call_count = 0
+    real_fn = report_service.report_repo.get_financial_report_data
+
+    async def mock_flaky_report_data(db, start_dt, end_dt):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise OperationalError("deadlock detected: Process 12345 waits for ShareLock", params={}, orig=Exception("deadlock detected"))
+        return await real_fn(db, start_dt, end_dt)
+
+    with patch("app.services.report_service.report_repo.get_financial_report_data", side_effect=mock_flaky_report_data):
+        report = await report_service.get_financial_report(db_session, "2026-05-01", "2026-05-31")
+        assert report is not None
+        assert call_count == 3
+
+
 

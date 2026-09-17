@@ -11,6 +11,13 @@ from app.models.product import Product
 from app.models.review import Review
 from app.models.purchasing import Supplier, Purchase
 
+async def _execute_readonly(db: AsyncSession, statement):
+    """
+    Eksekusi query read-only laporan di luar transaksi write aktif
+    dengan execution_options agar tidak memicu atau terjebak lock contention / DeadlockDetectedError di PostgreSQL.
+    """
+    return await db.execute(statement, execution_options={"compiled_cache": None})
+
 async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt: datetime) -> dict:
     """
     Get financial data: total revenue, total expenses, total HPP cost,
@@ -46,7 +53,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     )
 
     # ── 2. Total Revenue: Successful payments for orders settled in period ──────
-    revenue_query = await db.execute(
+    revenue_query = await _execute_readonly(
+        db,
         select(func.sum(Payment.jumlah_bayar))
         .join(Invoice, Invoice.id == Payment.invoice_id)
         .where(
@@ -58,7 +66,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
 
     # ── 3. Cash Received (Cash Basis Flow): All payments processed in period ───
     # Maintain historical integrity: payments received in period count even if later refunded
-    cash_received_query = await db.execute(
+    cash_received_query = await _execute_readonly(
+        db,
         select(func.sum(Payment.jumlah_bayar))
         .where(
             Payment.payment_status.in_([
@@ -72,7 +81,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     cash_received = cash_received_query.scalar() or Decimal("0.00")
 
     # ── 3b. Cash Refunded: Total refunds executed in period ─────────────────────
-    cash_refunded_query = await db.execute(
+    cash_refunded_query = await _execute_readonly(
+        db,
         select(func.sum(Payment.jumlah_bayar))
         .where(
             Payment.payment_status.in_([PaymentStatusEnum.refunded, PaymentStatusEnum.refunded.value]),
@@ -85,7 +95,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     net_cash_flow = cash_received - cash_refunded
 
     # ── 4. Total Expenses: Operating expenses within the date range ────────────
-    expense_query = await db.execute(
+    expense_query = await _execute_readonly(
+        db,
         select(func.sum(Expense.jumlah))
         .where(
             Expense.tanggal >= start_dt,
@@ -96,7 +107,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
 
     # ── 5. Total HPP Cost: HPP ONLY for orders settled in the period ────────────
     # Excludes unpaid, pending, cancelled, or refunded orders completely
-    hpp_query = await db.execute(
+    hpp_query = await _execute_readonly(
+        db,
         select(func.sum(OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, 0.0)))
         .where(
             OrderItem.order_id.in_(paid_order_ids_in_period)
@@ -107,7 +119,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     gross_profit = total_revenue - total_hpp_cost
 
     # ── 6. Non-Refundable DP Income (Other Income): Cancelled orders with DP ───
-    non_refundable_dp_query = await db.execute(
+    non_refundable_dp_query = await _execute_readonly(
+        db,
         select(func.sum(Payment.jumlah_bayar))
         .join(Invoice, Invoice.id == Payment.invoice_id)
         .join(Order, Order.id == Invoice.order_id)
@@ -136,7 +149,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         .subquery()
     )
 
-    outstanding_query = await db.execute(
+    outstanding_query = await _execute_readonly(
+        db,
         select(
             func.sum(
                 func.coalesce(Invoice.total_tagihan, Decimal("0.00")) - func.coalesce(paid_amount_subquery.c.paid_sum, Decimal("0.00"))
@@ -159,7 +173,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     outstanding_payments = outstanding_query.scalar() or Decimal("0.00")
 
     # ── 8. Full Product Profitability (Breakdown per Produk) ────────────────────
-    product_profit_query = await db.execute(
+    product_profit_query = await _execute_readonly(
+        db,
         select(
             func.coalesce(OrderItem.product_id, 0).label("product_id"),
             func.coalesce(Product.nama_produk, OrderItem.custom_product_name, "Custom Item").label("nama_produk"),
@@ -198,7 +213,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         })
 
     # ── 9. Supplier Spending (Pengeluaran per Supplier) ─────────────────────────
-    supplier_spending_query = await db.execute(
+    supplier_spending_query = await _execute_readonly(
+        db,
         select(
             Supplier.id.label("supplier_id"),
             Supplier.nama_supplier,
@@ -250,7 +266,8 @@ async def get_analytics_report_data(db: AsyncSession, start_dt: datetime, end_dt
     Get analytics data: total distinct customers, chatbot conversion rate, and top reviewed product.
     """
     # 1. total_customers: COUNT(DISTINCT orders.customer_id) WHERE status != 'cancelled'
-    cust_query = await db.execute(
+    cust_query = await _execute_readonly(
+        db,
         select(func.count(func.distinct(Order.customer_id)))
         .where(
             Order.status.notin_([OrderStatusEnum.cancelled, OrderStatusEnum.cancelled.value]),
@@ -261,7 +278,8 @@ async def get_analytics_report_data(db: AsyncSession, start_dt: datetime, end_dt
     total_customers = cust_query.scalar() or 0
 
     # 2. conversion_rate_via_chatbot: (COUNT(orders) WHERE created_via='chatbot' / TOTAL orders) * 100
-    chatbot_orders_query = await db.execute(
+    chatbot_orders_query = await _execute_readonly(
+        db,
         select(func.count(Order.id))
         .where(
             Order.created_at >= start_dt,
@@ -271,7 +289,8 @@ async def get_analytics_report_data(db: AsyncSession, start_dt: datetime, end_dt
     )
     chatbot_orders_count = chatbot_orders_query.scalar() or 0
 
-    total_orders_query = await db.execute(
+    total_orders_query = await _execute_readonly(
+        db,
         select(func.count(Order.id))
         .where(
             Order.created_at >= start_dt,
@@ -286,7 +305,8 @@ async def get_analytics_report_data(db: AsyncSession, start_dt: datetime, end_dt
         conversion_rate_via_chatbot = 0.0
 
     # 3. most_reviewed_product: JOIN reviews -> products, GROUP BY product_id, COUNT(reviews.id) AS review_count, AVG(reviews.rating) AS avg_rating. ORDER BY review_count DESC LIMIT 1
-    most_reviewed_query = await db.execute(
+    most_reviewed_query = await _execute_readonly(
+        db,
         select(
             Product.nama_produk,
             func.avg(Review.rating).label("avg_rating"),
@@ -328,11 +348,11 @@ async def get_dashboard_summary_data(
     total revenue, total orders, and 5 most recent orders with eager-loaded customer.
     """
     # 1. Total products
-    total_prod_q = await db.execute(select(func.count(Product.id)))
+    total_prod_q = await _execute_readonly(db, select(func.count(Product.id)))
     total_products = total_prod_q.scalar() or 0
 
     # 2. Active products
-    active_prod_q = await db.execute(select(func.count(Product.id)).where(Product.is_active == True))
+    active_prod_q = await _execute_readonly(db, select(func.count(Product.id)).where(Product.is_active == True))
     active_products = active_prod_q.scalar() or 0
 
     # 3. Total revenue (successful payments)
@@ -343,7 +363,7 @@ async def get_dashboard_summary_data(
         rev_stmt = rev_stmt.where(func.coalesce(Payment.settled_at, Payment.created_at) >= start_dt)
     if end_dt:
         rev_stmt = rev_stmt.where(func.coalesce(Payment.settled_at, Payment.created_at) <= end_dt)
-    rev_q = await db.execute(rev_stmt)
+    rev_q = await _execute_readonly(db, rev_stmt)
     total_revenue = rev_q.scalar() or Decimal("0.00")
 
     # 4. Total orders
@@ -352,11 +372,12 @@ async def get_dashboard_summary_data(
         orders_stmt = orders_stmt.where(Order.created_at >= start_dt)
     if end_dt:
         orders_stmt = orders_stmt.where(Order.created_at <= end_dt)
-    orders_q = await db.execute(orders_stmt)
+    orders_q = await _execute_readonly(db, orders_stmt)
     total_orders = orders_q.scalar() or 0
 
     # 5. Recent 5 orders with customer eager-loaded
-    recent_orders_q = await db.execute(
+    recent_orders_q = await _execute_readonly(
+        db,
         select(Order)
         .options(selectinload(Order.customer))
         .order_by(Order.created_at.desc(), Order.id.desc())
