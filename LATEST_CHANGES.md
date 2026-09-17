@@ -6,16 +6,19 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
-### 001w. Perbaikan DeadlockDetectedError & Optimasi Read-Only Query Laporan Keuangan (report_repo.py & report_service.py)
-- **Eksekusi Query Read-Only Terisolasi (`app/repositories/report_repo.py`)**:
-  - Menambahkan fungsi helper `_execute_readonly(db, statement)` dengan execution options khusus query analitik/laporan (`execution_options={"compiled_cache": None}`) yang dijalankan di luar transaksi write aktif agar tidak memicu atau terjebak lock contention / table lock di database PostgreSQL.
-  - Menerapkan `_execute_readonly` pada seluruh query agregasi laporan keuangan (`get_financial_report_data`), analitik penjualan (`get_analytics_report_data`), dan ringkasan dashboard (`get_dashboard_summary_data`).
+### 001w. Perbaikan InFailedSQLTransactionError & Deadlock Resilience pada Endpoint Laporan Keuangan (report_repo.py & report_service.py)
+- **Subtransaksi & Savepoint Terisolasi (`app/repositories/report_repo.py`)**:
+  - Mengisolasi eksekusi query baca laporan keuangan, analitik, dan dashboard ke dalam helper `_execute_readonly(db, statement)` yang membungkus pemanggilan dengan subtransaksi `async with db.begin_nested():`.
+  - Mencegah error fatal `InFailedSQLTransactionError: current transaction is aborted, commands ignored until end of transaction block` di PostgreSQL apabila terjadi error kalkulasi agregasi pada sub-query awal.
+- **Normalisasi dan Casting Enum Parameter (`app/repositories/report_repo.py`)**:
+  - Menyamakan seluruh filter perbandingan status Enum (`payments.payment_status`, `invoices.status`, `orders.status`, `orders.created_via`) menggunakan `func.lower(cast(Column, String))` (seperti `"success"`, `"paid"`, `"chatbot"`, `notin_(["cancelled", "refunded"])`).
+  - Mencegah inkonsistensi perbandingan case-sensitivity Enum (`PaymentStatusEnum.success = "Success"` vs lowercase strings) dan mencegah kegagalan casting parameter di PostgreSQL.
 - **Retry Decorator Deadlock & OperationalError (`app/services/report_service.py`)**:
   - Menambahkan decorator `@retry_on_deadlock(max_retries=3, delay=0.5)` yang menangkap exception `asyncpg.exceptions.DeadlockDetectedError`, `OperationalError`, `DBAPIError`, maupun pesan lock contention database PostgreSQL.
-  - Melakukan retry otomatis maksimal 3 kali dengan jeda waktu 0.5 detik sebelum melempar exception ke caller.
+  - Melakukan `await db.rollback()` otomatis saat mendeteksi kegagalan sebelum jeda waktu (delay 0.5s) dan melakukan retry maksimal 3 kali untuk membersihkan status sesi transaksi aborted.
   - Diterapkan pada fungsi `get_financial_report`, `get_analytics_report`, dan `get_dashboard_summary`.
 - **Automated Tests (`tests/test_financial_report.py`)**:
-  - Menambahkan unit test `test_financial_report_deadlock_retry`: Mensimulasikan `OperationalError` (deadlock detected) pada 2 percobaan pertama dan memverifikasi bahwa retry decorator berhasil pulih pada percobaan ke-3 dan mengembalikan data laporan yang valid.
+  - Menambahkan unit test `test_financial_report_deadlock_retry`: Mensimulasikan `OperationalError` (deadlock detected) pada 2 percobaan pertama dan memverifikasi bahwa retry decorator berhasil me-rollback session, pulih pada percobaan ke-3, dan mengembalikan data laporan yang valid.
   - Seluruh 56 unit & integration tests pada Backend berjalan sukses (**100% PASSED**).
 
 ### 001v. Perbaikan HTTP 500 & Defensive Webhook Handler pada Endpoint POST /payments/notify & /payments/notification

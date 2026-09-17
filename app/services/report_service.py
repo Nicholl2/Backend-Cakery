@@ -54,6 +54,12 @@ def retry_on_deadlock(max_retries: int = 3, delay: float = 0.5):
                             f"[REPORT_DEADLOCK_RETRY] Deadlock / OperationalError terdeteksi pada {func.__name__} "
                             f"(percobaan {attempt}/{max_retries}). Mengulang kembali dalam {delay} detik... Error: {repr(e)}"
                         )
+                        db = kwargs.get("db") or (args[0] if args else None)
+                        if db and hasattr(db, "rollback"):
+                            try:
+                                await db.rollback()
+                            except Exception:
+                                pass
                         await asyncio.sleep(delay)
                         continue
                     logger.error(f"DETAIL ERROR in {func.__name__}: {repr(e)}", exc_info=True)

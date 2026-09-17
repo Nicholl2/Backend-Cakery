@@ -13,10 +13,15 @@ from app.models.purchasing import Supplier, Purchase
 
 async def _execute_readonly(db: AsyncSession, statement):
     """
-    Eksekusi query read-only laporan di luar transaksi write aktif
-    dengan execution_options agar tidak memicu atau terjebak lock contention / DeadlockDetectedError di PostgreSQL.
+    Eksekusi query read-only laporan di dalam savepoint / subtransaction (begin_nested)
+    agar jika terjadi error, savepoint di-rollback dan tidak membatalkan (abort)
+    seluruh session transaction (mencegah InFailedSQLTransactionError di PostgreSQL).
     """
-    return await db.execute(statement, execution_options={"compiled_cache": None})
+    try:
+        async with db.begin_nested():
+            return await db.execute(statement, execution_options={"compiled_cache": None})
+    except Exception:
+        return await db.execute(statement, execution_options={"compiled_cache": None})
 
 async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt: datetime) -> dict:
     """
@@ -33,12 +38,9 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         .join(Payment, Payment.invoice_id == Invoice.id)
         .join(Order, Order.id == Invoice.order_id)
         .where(
-            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.success.value]),
-            Invoice.status.in_([InvoiceStatusEnum.paid, InvoiceStatusEnum.paid.value]),
-            Order.status.notin_([
-                OrderStatusEnum.cancelled, OrderStatusEnum.refunded,
-                OrderStatusEnum.cancelled.value, OrderStatusEnum.refunded.value
-            ])
+            func.lower(cast(Payment.payment_status, String)) == "success",
+            func.lower(cast(Invoice.status, String)) == "paid",
+            func.lower(cast(Order.status, String)).notin_(["cancelled", "refunded"])
         )
         .group_by(Invoice.order_id)
         .subquery()
@@ -58,7 +60,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         select(func.sum(Payment.jumlah_bayar))
         .join(Invoice, Invoice.id == Payment.invoice_id)
         .where(
-            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.success.value]),
+            func.lower(cast(Payment.payment_status, String)) == "success",
             Invoice.order_id.in_(paid_order_ids_in_period)
         )
     )
@@ -70,10 +72,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         db,
         select(func.sum(Payment.jumlah_bayar))
         .where(
-            Payment.payment_status.in_([
-                PaymentStatusEnum.success, PaymentStatusEnum.refunded,
-                PaymentStatusEnum.success.value, PaymentStatusEnum.refunded.value
-            ]),
+            func.lower(cast(Payment.payment_status, String)).in_(["success", "refunded"]),
             Payment.created_at >= start_dt,
             Payment.created_at <= end_dt
         )
@@ -85,7 +84,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         db,
         select(func.sum(Payment.jumlah_bayar))
         .where(
-            Payment.payment_status.in_([PaymentStatusEnum.refunded, PaymentStatusEnum.refunded.value]),
+            func.lower(cast(Payment.payment_status, String)) == "refunded",
             func.coalesce(Payment.updated_at, Payment.created_at) >= start_dt,
             func.coalesce(Payment.updated_at, Payment.created_at) <= end_dt
         )
@@ -125,8 +124,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         .join(Invoice, Invoice.id == Payment.invoice_id)
         .join(Order, Order.id == Invoice.order_id)
         .where(
-            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.success.value]),
-            Order.status.in_([OrderStatusEnum.cancelled, OrderStatusEnum.cancelled.value]),
+            func.lower(cast(Payment.payment_status, String)) == "success",
+            func.lower(cast(Order.status, String)) == "cancelled",
             Payment.created_at >= start_dt,
             Payment.created_at <= end_dt
         )
@@ -142,7 +141,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
             func.sum(Payment.jumlah_bayar).label("paid_sum")
         )
         .where(
-            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.success.value]),
+            func.lower(cast(Payment.payment_status, String)) == "success",
             Payment.created_at <= end_dt
         )
         .group_by(Payment.invoice_id)
@@ -159,14 +158,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         .join(Order, Order.id == Invoice.order_id)
         .outerjoin(paid_amount_subquery, paid_amount_subquery.c.invoice_id == Invoice.id)
         .where(
-            Invoice.status.in_([
-                InvoiceStatusEnum.unpaid, InvoiceStatusEnum.partial,
-                InvoiceStatusEnum.unpaid.value, InvoiceStatusEnum.partial.value
-            ]),
-            Order.status.notin_([
-                OrderStatusEnum.cancelled, OrderStatusEnum.refunded,
-                OrderStatusEnum.cancelled.value, OrderStatusEnum.refunded.value
-            ]),
+            func.lower(cast(Invoice.status, String)).in_(["unpaid", "partial"]),
+            func.lower(cast(Order.status, String)).notin_(["cancelled", "refunded"]),
             Order.created_at <= end_dt
         )
     )
@@ -270,7 +263,7 @@ async def get_analytics_report_data(db: AsyncSession, start_dt: datetime, end_dt
         db,
         select(func.count(func.distinct(Order.customer_id)))
         .where(
-            Order.status.notin_([OrderStatusEnum.cancelled, OrderStatusEnum.cancelled.value]),
+            func.lower(cast(Order.status, String)) != "cancelled",
             Order.created_at >= start_dt,
             Order.created_at <= end_dt
         )
@@ -357,7 +350,7 @@ async def get_dashboard_summary_data(
 
     # 3. Total revenue (successful payments)
     rev_stmt = select(func.sum(Payment.jumlah_bayar)).where(
-        Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.success.value])
+        func.lower(cast(Payment.payment_status, String)) == "success"
     )
     if start_dt:
         rev_stmt = rev_stmt.where(func.coalesce(Payment.settled_at, Payment.created_at) >= start_dt)
