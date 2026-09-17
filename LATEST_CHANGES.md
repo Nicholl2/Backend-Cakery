@@ -6,6 +6,13 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001x. Perbaikan GroupingError PostgreSQL pada Query Agregasi Profitabilitas Produk (report_repo.py)
+- **Klausa GROUP BY Lengkap pada Agregasi Produk (`app/repositories/report_repo.py`)**:
+  - Pada query `product_profit_query` di `get_financial_report_data`, menambahkan seluruh kolom fisik tabel yang menjadi bagian dari ekspresi non-aggregate SELECT (`OrderItem.product_id`, `OrderItem.custom_product_name`, `Product.nama_produk`) ke dalam klausa `.group_by(...)`.
+  - Mengeliminasi error PostgreSQL `GroupingError / ProgrammingError: column "..." must appear in the GROUP BY clause or be used in an aggregate function` saat mengeksekusi perhitungan laporan profitabilitas per produk.
+- **Automated Tests (`tests/test_financial_report.py`)**:
+  - Memverifikasi pengujian `tests/test_financial_report.py` dan seluruh test suite (56 tests) berjalan sukses (**100% PASSED**).
+
 ### 001w. Perbaikan InFailedSQLTransactionError & Deadlock Resilience pada Endpoint Laporan Keuangan (report_repo.py & report_service.py)
 - **Subtransaksi & Savepoint Terisolasi (`app/repositories/report_repo.py`)**:
   - Mengisolasi eksekusi query baca laporan keuangan, analitik, dan dashboard ke dalam helper `_execute_readonly(db, statement)` yang membungkus pemanggilan dengan subtransaksi `async with db.begin_nested():`.

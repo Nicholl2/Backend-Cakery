@@ -180,6 +180,9 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
             OrderItem.order_id.in_(paid_order_ids_in_period)
         )
         .group_by(
+            OrderItem.product_id,
+            OrderItem.custom_product_name,
+            Product.nama_produk,
             func.coalesce(OrderItem.product_id, 0),
             func.coalesce(Product.nama_produk, OrderItem.custom_product_name, "Custom Item")
         )
