@@ -97,7 +97,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     # ── 5. Total HPP Cost: HPP ONLY for orders settled in the period ────────────
     # Excludes unpaid, pending, cancelled, or refunded orders completely
     hpp_query = await db.execute(
-        select(func.sum(OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00"))))
+        select(func.sum(OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, 0.0)))
         .where(
             OrderItem.order_id.in_(paid_order_ids_in_period)
         )
@@ -165,7 +165,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
             func.coalesce(Product.nama_produk, OrderItem.custom_product_name, "Custom Item").label("nama_produk"),
             func.sum(OrderItem.jumlah).label("qty_sold"),
             func.sum(func.coalesce(OrderItem.subtotal, Decimal("0.00"))).label("total_revenue"),
-            func.sum(OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00"))).label("total_hpp"),
+            func.sum(OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, 0.0)).label("total_hpp"),
         )
         .outerjoin(Product, Product.id == OrderItem.product_id)
         .where(
@@ -176,7 +176,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
             func.coalesce(Product.nama_produk, OrderItem.custom_product_name, "Custom Item")
         )
         .order_by(
-            func.sum(func.coalesce(OrderItem.subtotal, Decimal("0.00")) - (OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00")))).desc()
+            func.sum(func.coalesce(OrderItem.subtotal, Decimal("0.00")) - (OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, 0.0))).desc()
         )
     )
     product_rows = product_profit_query.all()

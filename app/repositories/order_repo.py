@@ -105,8 +105,13 @@ async def update_order_status(db: AsyncSession, order_id: int, status: str) -> O
     return order
 
 
-async def get_orders_by_customer_id(db: AsyncSession, customer_id: int) -> list[Order]:
-    result = await db.execute(
+async def get_orders_by_customer_id(
+    db: AsyncSession,
+    customer_id: int,
+    status: Optional[str] = None,
+    created_via: Optional[str] = None,
+) -> list[Order]:
+    query = (
         select(Order)
         .where(Order.customer_id == customer_id)
         .order_by(Order.created_at.desc())
@@ -116,7 +121,18 @@ async def get_orders_by_customer_id(db: AsyncSession, customer_id: int) -> list[
             selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
+    if status:
+        status_val = status.value if hasattr(status, "value") else status
+        query = query.where(Order.status == status_val)
+    if created_via:
+        created_via_val = created_via.value if hasattr(created_via, "value") else created_via
+        query = query.where(Order.created_via == created_via_val)
+    result = await db.execute(query)
     return list(result.scalars().all())
+
+
+# Alias for backward compatibility
+get_buyer_orders = get_orders_by_customer_id
 
 
 async def get_order_by_id_and_customer(db: AsyncSession, order_id: int, customer_id: int) -> Optional[Order]:
@@ -137,6 +153,7 @@ async def get_all_orders(
     limit: int = 100,
     offset: int = 0,
     status: Optional[str] = None,
+    created_via: Optional[str] = None,
 ) -> list[Order]:
     query = (
         select(Order)
@@ -148,9 +165,16 @@ async def get_all_orders(
         )
     )
     if status:
-        status_val = status.value if hasattr(status, "value") else str(status)
+        status_val = status.value if hasattr(status, "value") else status
         query = query.where(Order.status == status_val)
+    if created_via:
+        created_via_val = created_via.value if hasattr(created_via, "value") else created_via
+        query = query.where(Order.created_via == created_via_val)
     
     query = query.limit(limit).offset(offset)
     result = await db.execute(query)
     return list(result.scalars().all())
+
+
+# Alias for backward compatibility
+get_seller_orders = get_all_orders

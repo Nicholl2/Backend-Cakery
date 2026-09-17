@@ -12,16 +12,18 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Menetapkan `connect_args={"ssl": True, "statement_cache_size": 0, "prepared_statement_cache_size": 0}` pada driver `asyncpg` guna mengaktifkan SSL secara aman dan mencegah prepared statement collision error di lingkungan Neon / pgBouncer pooling.
   - Mengonfigurasi `pool_pre_ping=True` dan `pool_recycle=300` pada pembuatan engine untuk mencegah *stale connection* dari Neon serverless sleep.
   - Menambahkan property alias `DATABASE_URL` pada class `Settings` di `app/core/config.py`.
-- **Kompatibilitas Dialect Postgres Neon pada Repositori (`app/repositories/order_repo.py`, `app/repositories/report_repo.py`)**:
-  - Memperbarui query filter enum (`Order.status`, `Invoice.status`, `Payment.payment_status`) agar mendukung format enum value list (`.value`) yang aman dieksekusi di database PostgreSQL maupun SQLite in-memory.
+- **Kompatibilitas Query Dialect Postgres Neon pada Repositori (`app/repositories/order_repo.py`, `app/repositories/report_repo.py`)**:
+  - Memperbarui query filter enum (`Order.status`, `Order.created_via`, `Invoice.status`, `Payment.payment_status`) pada method `get_all_orders` / `get_seller_orders` dan `get_orders_by_customer_id` / `get_buyer_orders` agar selalu mengevaluasi `.value` atau string value, mencegah mismatch tipe data di PostgreSQL.
   - Menggunakan `cast(Order.created_via, String) == "chatbot"` untuk menjamin query analitik kebal terhadap type mismatch di dialect Postgres.
 - **Resiliensi Schema Deserialisasi Pydantic (`app/schemas/order.py`)**:
   - Pada `OrderItemRead` (`OrderItemOut`), menambahkan validator `@field_validator('custom_decoration_charge', 'hpp_snapshot', mode='before')` dengan method `@classmethod def sanitize_null_floats(cls, v): return 0.0 if v is None else v` untuk menjamin nilai `None` / `NULL` dari database historis otomatis di-fallback ke `0.0`.
   - Pada `OrderRead` (`OrderOut`), menambahkan validator `@field_validator('created_via', mode='before')` dengan method `@classmethod def sanitize_created_via(cls, v): return "BUYER_SITE" if not v else v` untuk menangani field `created_via` bernilai `None` / `NULL` / string kosong.
 - **Resiliensi Agregasi Finansial SQL & Python (`app/repositories/report_repo.py`, `app/services/report_service.py`)**:
-  - Membungkus field `OrderItem.hpp_snapshot` dan perhitungan subtotal dengan `func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00"))` pada query total HPP serta query profitabilitas produk per item.
+  - Membungkus field `OrderItem.hpp_snapshot` dan `OrderItem.custom_decoration_charge` dengan `func.coalesce(OrderItem.hpp_snapshot, 0.0)` pada query total HPP serta query profitabilitas produk per item.
   - Menjamin iterasi Python pada breakdown profitabilitas kebal terhadap nilai `None` (`row.total_revenue or 0`, `row.total_hpp or 0`), mencegah unhandled `TypeError` pada kalkulasi margin laba.
-- **Automated Tests (`tests/test_financial_report.py`, `tests/test_seller_orders.py`)**:
+- **Pencatatan Structured Error Log (`app/services/order_service.py`, `app/services/report_service.py`)**:
+  - Menambahkan `logger.error(f"DETAIL ERROR: {repr(e)}", exc_info=True)` pada seluruh blok `except Exception as e:` di layer service untuk menjamin pesan error utuh dari database PostgreSQL tercatat lengkap saat terjadi kendala.
+- **Automated Tests (`tests/test_financial_report.py`, `tests/test_seller_orders.py`, `tests/test_buyer_orders_payments.py`)**:
   - Menambahkan pengujian `test_financial_report_null_hpp_snapshot_resilience` pada `tests/test_financial_report.py` untuk memverifikasi kalkulasi laporan keuangan pada pesanan historis dengan `hpp_snapshot = NULL` dan `custom_decoration_charge = NULL`.
   - Seluruh 55 test suite pada Backend berjalan lancar dan lulus (**100% PASSED**).
 

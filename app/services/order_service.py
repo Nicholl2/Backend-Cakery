@@ -240,7 +240,7 @@ async def create_new_order(
         raise
     except Exception as e:
         await db.rollback()
-        logger.error(f"Gagal membuat order: {e}", exc_info=True)
+        logger.error(f"DETAIL ERROR: {repr(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Gagal membuat order: {str(e)}",
@@ -353,6 +353,7 @@ async def create_custom_order(
         raise
     except Exception as e:
         await db.rollback()
+        logger.error(f"DETAIL ERROR: {repr(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Gagal membuat custom order: {str(e)}",
@@ -496,7 +497,7 @@ async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCre
         raise
     except Exception as e:
         await db.rollback()
-        logger.error(f"Error creating buyer order: {e}", exc_info=True)
+        logger.error(f"DETAIL ERROR: {repr(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Gagal memproses pesanan: {str(e)}",
@@ -577,6 +578,7 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
         raise
     except Exception as e:
         await db.rollback()
+        logger.error(f"DETAIL ERROR: {repr(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Gagal membatalkan order: {str(e)}",
