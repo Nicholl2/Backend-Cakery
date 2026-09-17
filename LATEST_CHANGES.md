@@ -6,6 +6,19 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001y. Perbaikan HTTP 500 pada Endpoint Seller Orders & Custom Orders (order_repo.py & order_service.py)
+- **Eager Loading & Safe Enum Filtering pada Seller Orders (`app/repositories/order_repo.py`, `app/services/order_service.py`)**:
+  - Pada query `get_all_orders` / `get_seller_orders` dan `get_orders_by_customer_id` / `get_buyer_orders`, relasi `Order.customer`, `Order.order_items -> OrderItem.product`, dan `Order.invoice -> Invoice.payments` di-load menggunakan `selectinload` secara utuh.
+  - Memfilter parameter `status` dan `created_via` dengan `func.lower(cast(Column, String)) == status_val.lower()` agar kebal terhadap variasi Enum/String di PostgreSQL.
+  - Mengisolasi pemanggilan list seller orders dengan `try...except Exception as e` dan detail logging.
+- **Transaksi Atomic & Resiliensi Custom Order (`app/services/order_service.py`)**:
+  - Membungkus pembuatan pesanan custom (`create_custom_order`) di dalam subtransaksi atomic `async with db.begin_nested():` guna mencegah kegagalan pembuatan transaksi parsial atau rollback error.
+  - Menetapkan `product_id = None` dan menjamin `custom_product_name` terisi nama custom item pada `OrderItem` pesanan kustom buatan seller (tanpa dependensi ke master produk).
+  - Menetapkan default `hpp_snapshot = Decimal("0.00")` dan `custom_decoration_charge = Decimal("0.00")`.
+- **Automated Tests (`tests/test_seller_orders.py`, `tests/test_buyer_orders_payments.py`)**:
+  - Memverifikasi pengujian `tests/test_seller_orders.py` dan `tests/test_buyer_orders_payments.py` berjalan sukses (**100% PASSED**).
+  - Seluruh 56 unit & integration tests pada Backend lulus tanpa error.
+
 ### 001x. Perbaikan GroupingError PostgreSQL pada Query Agregasi Profitabilitas Produk (report_repo.py)
 - **Klausa GROUP BY Lengkap pada Agregasi Produk (`app/repositories/report_repo.py`)**:
   - Pada query `product_profit_query` di `get_financial_report_data`, menambahkan seluruh kolom fisik tabel yang menjadi bagian dari ekspresi non-aggregate SELECT (`OrderItem.product_id`, `OrderItem.custom_product_name`, `Product.nama_produk`) ke dalam klausa `.group_by(...)`.

@@ -12,7 +12,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, cast, String
 from sqlalchemy.orm import selectinload
 
 from app.models.order import Order, OrderItem, Invoice, MetodePengirimanEnum, OrderStatusEnum, InvoiceStatusEnum
@@ -260,89 +260,93 @@ async def create_custom_order(
     5. Buat Invoice otomatis dengan status 'unpaid'.
     """
     try:
-        phone_norm = normalize_phone(data.customer_phone)
-        customer, _ = await customer_repo.upsert(
-            db,
-            nomor_wa=phone_norm,
-            nama=data.customer_name,
-            alamat=data.customer_address,
-        )
-        await db.flush()
-
-        # Cek tagihan aktif untuk customer ini
-        has_active = await order_repo.check_active_unpaid_order(db, customer.id)
-        if has_active:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Customer masih memiliki tagihan aktif yang belum lunas.",
-            )
-
-        # Kalkulasi item & total
-        total_harga_pesanan = Decimal("0.00")
-        item_objects = []
-
-        for item in data.items:
-            qty = item.qty
-            price = Decimal(str(item.price))
-            dec_charge = Decimal(str(item.custom_decoration_charge))
-            subtotal = (price * qty) + dec_charge
-            total_harga_pesanan += subtotal
-
-            item_objects.append({
-                "custom_product_name": item.custom_product_name,
-                "jumlah": qty,
-                "custom_decoration_charge": dec_charge,
-                "subtotal": subtotal,
-                "hpp_snapshot": Decimal("0.00"),
-            })
-
-        # Spending Cap — proteksi transaksi anomali
-        if total_harga_pesanan > MAX_ORDER_AMOUNT:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Total pesanan Rp {total_harga_pesanan:,.0f} melebihi batas maksimal Rp {MAX_ORDER_AMOUNT:,.0f} per order.",
-            )
-
-        # Buat Order (created_via = "seller")
-        order_obj = Order(
-            customer_id=customer.id,
-            status=OrderStatusEnum.pending,
-            metode_pengiriman=MetodePengirimanEnum(data.metode_pengiriman),
-            total_harga_pesanan=total_harga_pesanan,
-            created_via="seller",
-            notes=data.notes,
-            due_date=data.due_date,
-            payment_method_preference=data.payment_method_preference,
-        )
-        await order_repo.create_order(db, order_obj)
-
-        # Buat OrderItems kustom tanpa product_id
-        for item_data in item_objects:
-            await order_repo.create_order_item(
+        async with db.begin_nested():
+            phone_norm = normalize_phone(data.customer_phone)
+            customer, _ = await customer_repo.upsert(
                 db,
-                OrderItem(
+                nomor_wa=phone_norm,
+                nama=data.customer_name,
+                alamat=data.customer_address,
+            )
+            await db.flush()
+
+            # Cek tagihan aktif untuk customer ini
+            has_active = await order_repo.check_active_unpaid_order(db, customer.id)
+            if has_active:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Customer masih memiliki tagihan aktif yang belum lunas.",
+                )
+
+            # Kalkulasi item & total
+            total_harga_pesanan = Decimal("0.00")
+            item_objects = []
+
+            for item in data.items:
+                qty = item.qty
+                price = Decimal(str(item.price)) if item.price is not None else Decimal("0.00")
+                dec_charge = Decimal(str(item.custom_decoration_charge or "0.00"))
+                subtotal = (price * qty) + dec_charge
+                total_harga_pesanan += subtotal
+
+                custom_pname = str(item.custom_product_name).strip() if item.custom_product_name else "Custom Item"
+
+                item_objects.append({
+                    "product_id": None,
+                    "custom_product_name": custom_pname,
+                    "jumlah": qty,
+                    "custom_decoration_charge": dec_charge,
+                    "subtotal": subtotal,
+                    "hpp_snapshot": Decimal("0.00"),
+                })
+
+            # Spending Cap — proteksi transaksi anomali
+            if total_harga_pesanan > MAX_ORDER_AMOUNT:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Total pesanan Rp {total_harga_pesanan:,.0f} melebihi batas maksimal Rp {MAX_ORDER_AMOUNT:,.0f} per order.",
+                )
+
+            # Buat Order (created_via = "seller")
+            order_obj = Order(
+                customer_id=customer.id,
+                status=OrderStatusEnum.pending,
+                metode_pengiriman=MetodePengirimanEnum(data.metode_pengiriman),
+                total_harga_pesanan=total_harga_pesanan,
+                created_via="seller",
+                notes=data.notes,
+                due_date=data.due_date,
+                payment_method_preference=data.payment_method_preference,
+            )
+            await order_repo.create_order(db, order_obj)
+
+            # Buat OrderItems kustom tanpa product_id (product_id = None)
+            for item_data in item_objects:
+                await order_repo.create_order_item(
+                    db,
+                    OrderItem(
+                        order_id=order_obj.id,
+                        product_id=None,
+                        custom_product_name=item_data["custom_product_name"],
+                        jumlah=item_data["jumlah"],
+                        custom_decoration_charge=item_data["custom_decoration_charge"],
+                        subtotal=item_data["subtotal"],
+                        hpp_snapshot=item_data.get("hpp_snapshot", Decimal("0.00")),
+                    ),
+                )
+
+            # Buat Invoice otomatis
+            unique_suffix = secrets.token_hex(3).upper()
+            nomor_invoice = f"INV-{datetime.now().strftime('%Y%m%d')}-{order_obj.id}-{unique_suffix}"
+            await order_repo.create_invoice(
+                db,
+                Invoice(
                     order_id=order_obj.id,
-                    product_id=None,
-                    custom_product_name=item_data["custom_product_name"],
-                    jumlah=item_data["jumlah"],
-                    custom_decoration_charge=item_data["custom_decoration_charge"],
-                    subtotal=item_data["subtotal"],
-                    hpp_snapshot=item_data["hpp_snapshot"],
+                    nomor_invoice=nomor_invoice,
+                    total_tagihan=total_harga_pesanan,
+                    status=InvoiceStatusEnum.unpaid,
                 ),
             )
-
-        # Buat Invoice otomatis
-        unique_suffix = secrets.token_hex(3).upper()
-        nomor_invoice = f"INV-{datetime.now().strftime('%Y%m%d')}-{order_obj.id}-{unique_suffix}"
-        await order_repo.create_invoice(
-            db,
-            Invoice(
-                order_id=order_obj.id,
-                nomor_invoice=nomor_invoice,
-                total_tagihan=total_harga_pesanan,
-                status=InvoiceStatusEnum.unpaid,
-            ),
-        )
 
         await db.commit()
         order = await order_repo.get_order_with_details(db, order_obj.id)
@@ -353,7 +357,7 @@ async def create_custom_order(
         raise
     except Exception as e:
         await db.rollback()
-        logger.error(f"DETAIL ERROR: {repr(e)}", exc_info=True)
+        logger.error(f"DETAIL ERROR in create_custom_order: {repr(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Gagal membuat custom order: {str(e)}",
@@ -369,7 +373,7 @@ async def _attach_payment_amounts(db: AsyncSession, order: Order) -> Order:
             select(func.sum(Payment.jumlah_bayar))
             .where(
                 Payment.invoice_id == order.invoice.id,
-                Payment.payment_status == PaymentStatusEnum.success,
+                func.lower(cast(Payment.payment_status, String)) == "success",
             )
         )
         sum_result = payment_query.scalar()
@@ -406,10 +410,14 @@ async def get_seller_orders(
     offset: int = 0,
     status: Optional[str] = None,
 ) -> list[Order]:
-    orders = await order_repo.get_all_orders(db, limit=limit, offset=offset, status=status)
-    for o in orders:
-        await _attach_payment_amounts(db, o)
-    return orders
+    try:
+        orders = await order_repo.get_all_orders(db, limit=limit, offset=offset, status=status)
+        for o in orders:
+            await _attach_payment_amounts(db, o)
+        return orders
+    except Exception as e:
+        logger.error(f"Error fetching seller orders: {repr(e)}", exc_info=True)
+        raise
 
 
 async def get_seller_order_by_id(db: AsyncSession, order_id: int) -> Order:

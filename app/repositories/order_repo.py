@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func, cast, String
 from sqlalchemy.orm import selectinload
 
 from app.models.order import Order, OrderItem, Invoice, OrderStatusEnum, InvoiceStatusEnum
@@ -37,8 +37,8 @@ async def check_active_unpaid_order(db: AsyncSession, customer_id: int) -> bool:
         .where(
             and_(
                 Order.customer_id == customer_id,
-                Order.status.not_in([OrderStatusEnum.cancelled, OrderStatusEnum.picked_up, OrderStatusEnum.cancelled.value, OrderStatusEnum.picked_up.value]),
-                Invoice.status.not_in([InvoiceStatusEnum.paid, InvoiceStatusEnum.paid.value]),
+                func.lower(cast(Order.status, String)).notin_(["cancelled", "picked_up"]),
+                func.lower(cast(Invoice.status, String)) != "paid",
             )
         )
         .limit(1)
@@ -122,11 +122,11 @@ async def get_orders_by_customer_id(
         )
     )
     if status:
-        status_val = status.value if hasattr(status, "value") else status
-        query = query.where(Order.status == status_val)
+        status_val = status.value if hasattr(status, "value") else str(status)
+        query = query.where(func.lower(cast(Order.status, String)) == status_val.lower())
     if created_via:
-        created_via_val = created_via.value if hasattr(created_via, "value") else created_via
-        query = query.where(Order.created_via == created_via_val)
+        created_via_val = created_via.value if hasattr(created_via, "value") else str(created_via)
+        query = query.where(func.lower(cast(Order.created_via, String)) == created_via_val.lower())
     result = await db.execute(query)
     return list(result.scalars().all())
 
@@ -165,11 +165,11 @@ async def get_all_orders(
         )
     )
     if status:
-        status_val = status.value if hasattr(status, "value") else status
-        query = query.where(Order.status == status_val)
+        status_val = status.value if hasattr(status, "value") else str(status)
+        query = query.where(func.lower(cast(Order.status, String)) == status_val.lower())
     if created_via:
-        created_via_val = created_via.value if hasattr(created_via, "value") else created_via
-        query = query.where(Order.created_via == created_via_val)
+        created_via_val = created_via.value if hasattr(created_via, "value") else str(created_via)
+        query = query.where(func.lower(cast(Order.created_via, String)) == created_via_val.lower())
     
     query = query.limit(limit).offset(offset)
     result = await db.execute(query)
