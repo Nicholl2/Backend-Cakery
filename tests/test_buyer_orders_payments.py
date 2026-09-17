@@ -385,19 +385,20 @@ async def run_tests():
         # Test /payments/notify
         res_notify = await client.post("/payments/notify", json=notify_payload)
         assert res_notify.status_code == 200, f"Expected 200, got {res_notify.status_code}: {res_notify.text}"
-        assert res_notify.json() == {"message": "Order not found, notification acknowledged"}
+        assert res_notify.json() == {"status": "ok", "message": "Test notification received, dummy order ignored"}
 
         # Test /payments/notification (Alias)
         res_alias = await client.post("/payments/notification", json=notify_payload)
         assert res_alias.status_code == 200, f"Expected 200, got {res_alias.status_code}: {res_alias.text}"
-        assert res_alias.json() == {"message": "Order not found, notification acknowledged"}
+        assert res_alias.json() == {"status": "ok", "message": "Test notification received, dummy order ignored"}
 
-        # Test invalid signature on webhook
+        # Test invalid signature on webhook returns 200 OK (error_handled)
         bad_payload = notify_payload.copy()
         bad_payload["signature_key"] = "invalidsignature123"
         res_bad_sig = await client.post("/payments/notify", json=bad_payload)
-        assert res_bad_sig.status_code == 400
-        print("✓ Webhook endpoints /notify & /notification and defensive unknown order response verified (200 OK)")
+        assert res_bad_sig.status_code == 200
+        assert res_bad_sig.json()["status"] == "error_handled"
+        print("✓ Webhook endpoints /notify & /notification and defensive dummy order response verified (200 OK)")
     async with TestSessionLocal() as db:
         for b_id in [buyer1_id, buyer2_id, buyer3_id, buyer4_id]:
             b = await buyer_repo.get_buyer_by_id(db, b_id)
