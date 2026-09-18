@@ -50,7 +50,10 @@ if "postgresql+asyncpg" in db_url or "postgresql" in db_url or "asyncpg" in db_u
         "prepared_statement_cache_size": 0,
     }
     if "neon.tech" in db_url or "-pooler" in db_url:
-        connect_args["ssl"] = True
+        import ssl
+        import certifi
+        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        connect_args["ssl"] = ssl_ctx
     engine_kwargs["connect_args"] = connect_args
 
 # Menggunakan create_async_engine untuk mendukung asyncpg & lifespan main.py
