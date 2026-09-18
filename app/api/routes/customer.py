@@ -3,10 +3,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.api.dependencies import require_service_key, get_current_buyer
-from app.models.buyer import Buyer
+from app.models.buyer import Buyer, Wishlist
 from app.schemas.customer import CustomerUpsert, CustomerOut, TakeoverSet, TakeoverStatus, BuyerChangePasswordRequest, BuyerChangePhoneRequest
 from app.schemas.auth import BuyerProfileResponse
 from app.services import customer_service, buyer_auth_service
+from app.repositories import wishlist_repo
+from app.schemas.product import ProductOut
+from fastapi import HTTPException
 
 router = APIRouter(
     tags=["Customers (Chatbot)"],
@@ -181,3 +184,34 @@ async def change_buyer_phone(
         db, buyer, data.current_password, data.phone
     )
     return BuyerProfileResponse.model_validate(updated)
+# ── WISHLIST ENDPOINTS ───────────────────────────────────────────────────────
+
+@buyer_router.get("/me/wishlist", response_model=list[ProductOut], summary="Lihat daftar wishlist Buyer")
+async def get_wishlist(
+    buyer: Buyer = Depends(get_current_buyer),
+    db: AsyncSession = Depends(get_db),
+):
+    products = await wishlist_repo.get_buyer_wishlist_products(db, buyer.id)
+    return [ProductOut.model_validate(p) for p in products]
+
+@buyer_router.post("/me/wishlist/{product_id}", summary="Tambah produk ke wishlist")
+async def add_to_wishlist(
+    product_id: int,
+    buyer: Buyer = Depends(get_current_buyer),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.product_service import get_product_or_404
+    await get_product_or_404(db, product_id)
+    
+    await wishlist_repo.add_wishlist(db, buyer.id, product_id)
+    return {"message": "Produk ditambahkan ke wishlist."}
+
+@buyer_router.delete("/me/wishlist/{product_id}", summary="Hapus produk dari wishlist")
+async def remove_from_wishlist(
+    product_id: int,
+    buyer: Buyer = Depends(get_current_buyer),
+    db: AsyncSession = Depends(get_db),
+):
+    await wishlist_repo.remove_wishlist(db, buyer.id, product_id)
+    return {"message": "Produk dihapus dari wishlist."}
+

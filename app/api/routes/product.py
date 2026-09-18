@@ -9,10 +9,34 @@ from app.schemas.product import (
     ProductCreate, ProductUpdate, ProductOut,
     SetPriceRequest, SetPriceResponse,
     PricingResponse, PriceHistoryOut,
+    CategoryCreate, CategoryUpdate, CategoryResponse,
 )
 from app.services import product_service
 
 router = APIRouter(tags=["Products"])
+
+
+
+# ── CATEGORIES ───────────────────────────────────────────────────────────────
+
+@router.get("/categories", response_model=list[CategoryResponse], summary="List semua kategori (Public)")
+async def get_categories(db: AsyncSession = Depends(get_db)):
+    return await product_service.get_all_categories(db)
+
+@router.post("/categories", response_model=CategoryResponse, status_code=201,
+             dependencies=[Depends(require_admin_or_owner)], summary="Tambah kategori")
+async def create_category(data: CategoryCreate, db: AsyncSession = Depends(get_db)):
+    return await product_service.create_category(db, data)
+
+@router.patch("/categories/{category_id}", response_model=CategoryResponse,
+              dependencies=[Depends(require_admin_or_owner)], summary="Edit kategori")
+async def update_category(category_id: int, data: CategoryUpdate, db: AsyncSession = Depends(get_db)):
+    return await product_service.update_category(db, category_id, data)
+
+@router.delete("/categories/{category_id}",
+               dependencies=[Depends(require_admin_or_owner)], summary="Hapus kategori")
+async def delete_category(category_id: int, db: AsyncSession = Depends(get_db)):
+    return await product_service.delete_category(db, category_id)
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────

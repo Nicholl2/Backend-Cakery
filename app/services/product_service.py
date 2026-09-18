@@ -7,13 +7,14 @@ from fastapi import HTTPException, status, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
-from app.repositories import product_repo, recipe_repo
+from app.repositories import product_repo, recipe_repo, category_repo
 from app.schemas.product import (
     ProductCreate, ProductUpdate, ProductOut,
     SetPriceRequest, SetPriceResponse,
     PricingResponse, CostDetail, PriceHistoryOut,
 )
-from app.models.product import Product
+from app.models.product import Product, Category
+from app.schemas.product import CategoryCreate, CategoryUpdate, CategoryResponse
 from typing import Optional
 
 
@@ -148,4 +149,43 @@ async def upload_product_image(
     updated_product = await product_repo.update_image_url(db, product, secure_url)
     return ProductOut.model_validate(updated_product)
 
+
+
+# ── CATEGORY ─────────────────────────────────────────────────────────────────
+async def create_category(db: AsyncSession, data: CategoryCreate) -> CategoryResponse:
+    existing = await category_repo.get_by_name(db, data.name)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Kategori '{data.name}' sudah ada.",
+        )
+    cat = await category_repo.create(db, data)
+    return CategoryResponse.model_validate(cat)
+
+async def get_all_categories(db: AsyncSession) -> list[CategoryResponse]:
+    categories = await category_repo.get_all(db)
+    return [CategoryResponse.model_validate(c) for c in categories]
+
+async def update_category(db: AsyncSession, category_id: int, data: CategoryUpdate) -> CategoryResponse:
+    cat = await category_repo.get_by_id(db, category_id)
+    if not cat:
+        raise HTTPException(404, "Kategori tidak ditemukan.")
+    
+    if data.name:
+        existing = await category_repo.get_by_name(db, data.name)
+        if existing and existing.id != category_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Kategori '{data.name}' sudah ada.",
+            )
+    
+    updated = await category_repo.update(db, cat, data)
+    return CategoryResponse.model_validate(updated)
+
+async def delete_category(db: AsyncSession, category_id: int) -> dict:
+    cat = await category_repo.get_by_id(db, category_id)
+    if not cat:
+        raise HTTPException(404, "Kategori tidak ditemukan.")
+    await category_repo.delete(db, cat)
+    return {"deleted": True, "category_id": category_id}
 

@@ -282,3 +282,10 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
     "database": "disconnected"
   }
   ```
+### I. Wishlist (`/buyers/me/wishlist`)
+
+| Method | Endpoint | Auth / Permission | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/buyers/me/wishlist` | Buyer Authenticated | List semua wishlist produk buyer login |
+| `POST` | `/buyers/me/wishlist/{id}` | Buyer Authenticated | Tambah produk ke wishlist |
+| `DELETE` | `/buyers/me/wishlist/{id}`| Buyer Authenticated | Hapus produk dari wishlist |

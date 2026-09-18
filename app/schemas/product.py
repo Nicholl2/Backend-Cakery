@@ -9,11 +9,31 @@ def _round2(v, default=None) -> Optional[Decimal]:
         return default
     return Decimal(str(v)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
+# ── CATEGORY ────────────────────────────────────────────────────────────────
+class CategoryBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = None
+
+class CategoryCreate(CategoryBase):
+    pass
+
+class CategoryUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = None
+
+class CategoryResponse(CategoryBase):
+    id: int
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ── CREATE ──────────────────────────────────────────────────────────────────
 class ProductCreate(BaseModel):
     nama_produk: str = Field(..., min_length=1, max_length=100)
     deskripsi: Optional[str] = None
     kategori: Optional[str] = Field(None, max_length=50)
+    category_id: Optional[int] = None
     harga_jual: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     is_active: bool = True
     is_available: bool = True
@@ -23,6 +43,7 @@ class ProductCreate(BaseModel):
 # ── UPDATE (Hanya edit deskripsi, harga_jual, is_active, is_available, image_url, minimum_order) ──
 class ProductUpdate(BaseModel):
     deskripsi: Optional[str] = None
+    category_id: Optional[int] = None
     harga_jual: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     is_active: Optional[bool] = None
     is_available: Optional[bool] = None
@@ -57,6 +78,8 @@ class ProductOut(BaseModel):
     nama_produk: str
     deskripsi: Optional[str] = None
     kategori: Optional[str] = None
+    category_id: Optional[int] = None
+    category: Optional[CategoryResponse] = Field(None, alias='category_rel')
     hpp_total: Optional[Decimal] = Decimal("0.00")
     harga_jual: Optional[Decimal] = None
     markup_percentage: Optional[Decimal] = None

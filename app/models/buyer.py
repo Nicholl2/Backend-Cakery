@@ -21,3 +21,22 @@ class Buyer(Base):
 
     def __repr__(self):
         return f"<Buyer(id={self.id}, name={self.name}, email={self.email})>"
+
+from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy.orm import relationship
+
+class Wishlist(Base):
+    __tablename__ = "wishlists"
+
+    id = Column(Integer, primary_key=True, index=True)
+    buyer_id = Column(Integer, ForeignKey("buyers.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('buyer_id', 'product_id', name='uq_buyer_product'),
+    )
+
+    buyer = relationship("Buyer", backref="wishlists")
+    product = relationship("Product")
+

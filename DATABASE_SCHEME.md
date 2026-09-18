@@ -272,3 +272,24 @@ Table faq_items {
    - Menghapus `stock_items` diblokir jika ID bahan masih tercatat dalam tabel `recipes`.
    - Menghapus `suppliers` diblokir jika masih memiliki relasi transaksi pada tabel `purchases`.
    - Menghapus `purchases` diblokir jika status PO sudah ditandai diterima (`is_received = true`).
+### 12. Tabel `categories`
+Menyimpan data kategori untuk produk.
+
+| Nama Kolom | Tipe Data | Constraint / Keterangan |
+| :--- | :--- | :--- |
+| `id` | Integer | Primary Key |
+| `name` | String(100) | Unique, Not Null, Indexed |
+| `description` | String(500) | |
+| `created_at` | DateTime | Default `NOW()` |
+
+### 13. Tabel `wishlists`
+Menyimpan relasi produk yang disukai (wishlist) oleh buyer.
+
+| Nama Kolom | Tipe Data | Constraint / Keterangan |
+| :--- | :--- | :--- |
+| `id` | Integer | Primary Key |
+| `buyer_id` | Integer | Foreign Key (`buyers.id`), Not Null |
+| `product_id` | Integer | Foreign Key (`products.id`), Not Null |
+| `created_at` | DateTime | Default `NOW()` |
+
+*Note: Tabel `wishlists` memiliki unique constraint pada (`buyer_id`, `product_id`).*

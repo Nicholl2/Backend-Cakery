@@ -1,14 +1,27 @@
 from typing import Optional
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, Float
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, Float, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
+
+
+class Category(Base):
+    __tablename__ = "categories"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), unique=True, index=True, nullable=False)
+    description = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    products = relationship("Product", back_populates="category_rel")
 
 
 class Product(Base):
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     nama_produk = Column(String(100), nullable=False)
     deskripsi = Column(String(500), nullable=True)
     kategori = Column(String(50), nullable=True)
@@ -39,6 +52,7 @@ class Product(Base):
         return self.nama_produk
     
     # Relationships
+    category_rel = relationship("Category", back_populates="products")
     recipes = relationship("Recipe", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
     price_histories = relationship("PriceHistory", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
 
