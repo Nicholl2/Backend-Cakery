@@ -6,6 +6,24 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001ab. Fitur Mutasi Profil Buyer (Ganti Password & Ubah Nomor WhatsApp)
+- **Schema Baru (`app/schemas/customer.py`)**:
+  - `BuyerChangePasswordRequest`: Schema untuk ganti password buyer dengan validasi `new_password` minimal 6 karakter (Pydantic `Field(min_length=6)`).
+  - `BuyerChangePhoneRequest`: Schema untuk ubah nomor WhatsApp buyer dengan validasi format E.164 via `validate_phone_e164()`.
+- **Repository (`app/repositories/buyer_repo.py`)**:
+  - Menambahkan fungsi `update_buyer_phone(db, buyer, new_phone)` untuk update nomor telepon buyer di database.
+- **Service Layer (`app/services/buyer_auth_service.py`)**:
+  - `change_buyer_password()`: Verifikasi `current_password` menggunakan `verify_password()`, validasi panjang password baru, hash menggunakan `hash_password()` (bcrypt). Return `HTTP 400` jika password lama salah.
+  - `change_buyer_phone()`: Verifikasi `current_password`, normalisasi nomor via `normalize_phone()`, cek keunikan via `buyer_repo.get_buyer_by_phone()`. Return `HTTP 400` jika password salah atau nomor sudah dipakai buyer lain.
+- **Endpoint Baru (`app/api/routes/customer.py`)**:
+  - `POST /buyers/me/change-password` — Ganti password buyer yang sedang login. Auth: Buyer JWT (`get_current_buyer`).
+  - `PATCH /buyers/me/phone` — Ubah nomor WhatsApp buyer. Auth: Buyer JWT (`get_current_buyer`). Return `BuyerProfileResponse`.
+  - Kedua endpoint tanpa OTP/verifikasi WA — cukup verifikasi `current_password` dari sesi terautentikasi.
+- **Test Suite (`tests/test_buyer_profile_mutation.py`)**:
+  - 8 test case: valid password change, wrong password, short password (422), valid phone change, wrong password for phone, duplicate phone, unauthenticated (403), non-buyer role (401).
+- **Dokumentasi**: Update `API_ENDPOINT.md` (tabel Section F) dan `FEATURES_LOGIC.md` (Section 24).
+- **Tidak ada perubahan** pada `main.py`, `auth.py`, `dependencies.py`, `security.py`, atau endpoint existing.
+
 ### 001aa. Refactoring SSL Configuration, Payment Notes Migration & Cash Payment Pending Flow
 - **Konfigurasi SSL Fleksibel (`app/core/database.py`)**:
   - Mengembalikan pemeriksaan SSL bersyarat pada `engine_kwargs["connect_args"]`.

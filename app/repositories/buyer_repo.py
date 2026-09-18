@@ -70,3 +70,10 @@ async def update_avatar_url(db: AsyncSession, buyer: Buyer, avatar_url: str) -> 
     await db.refresh(buyer)
     return buyer
 
+
+async def update_buyer_phone(db: AsyncSession, buyer: Buyer, new_phone: str) -> Buyer:
+    """Update buyer phone number"""
+    buyer.phone = new_phone
+    await db.commit()
+    await db.refresh(buyer)
+    return buyer

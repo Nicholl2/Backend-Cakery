@@ -444,3 +444,30 @@ Untuk mengamankan listing pesanan pada Seller Dashboard:
 2. **Deteksi Otomatis SSL PostgreSQL (`app/core/database.py`)**:
    - Pengaturan koneksi `asyncpg` hanya menyertakan parameter `ssl: True` jika `db_url` host mengandung string `"neon.tech"` atau `"-pooler"`.
    - Untuk koneksi PostgreSQL lokal atau kontainer Docker (`postgres:16-alpine`), `ssl` tidak ditambahkan ke `connect_args`, mencegah kegagalan *handshake* SSL pada container database lokal.
+
+---
+
+## 24. Mutasi Profil Buyer (Ganti Password & Ubah Nomor WhatsApp)
+
+Fitur self-service bagi Buyer yang sudah terautentikasi untuk mengelola kredensial akun mereka melalui dua endpoint pada `buyer_router`:
+
+1. **Ganti Password (`POST /buyers/me/change-password`)**:
+   - Buyer wajib menyertakan `current_password` (password lama) untuk verifikasi identitas sebelum mengganti password.
+   - Password baru (`new_password`) divalidasi minimal 6 karakter oleh Pydantic schema (`BuyerChangePasswordRequest`).
+   - Password baru di-hash menggunakan `hash_password()` (bcrypt) sebelum disimpan ke database. Plaintext **tidak pernah** disimpan.
+   - **Tidak memerlukan OTP atau verifikasi WA/Email** — cukup verifikasi password saat ini dari sesi yang terautentikasi.
+   - Sesi JWT yang sedang aktif **tidak dibatalkan** setelah ganti password.
+   - Response: `HTTP 200 { "message": "Password berhasil diperbarui." }`.
+
+2. **Ubah Nomor WhatsApp (`PATCH /buyers/me/phone`)**:
+   - Buyer wajib menyertakan `current_password` untuk konfirmasi kepemilikan akun.
+   - Nomor baru dinormalisasi ke format E.164 menggunakan `normalize_phone()` (contoh: `0819...` → `6281900000000`).
+   - Validasi keunikan nomor dilakukan via `buyer_repo.get_buyer_by_phone()` — jika sudah digunakan buyer lain, request ditolak `HTTP 400`.
+   - **Tidak memerlukan OTP atau verifikasi WA** — cukup verifikasi password untuk konfirmasi pemilik asli.
+   - Response: `BuyerProfileResponse` dengan nomor HP terbaru.
+
+3. **Keamanan & Aturan Akses**:
+   - Kedua endpoint memerlukan JWT Bearer token dengan role `buyer` (`get_current_buyer` dependency).
+   - Token dengan role selain `buyer` ditolak dengan `HTTP 401 (User is not a buyer)`.
+   - Request tanpa token ditolak dengan `HTTP 403`.
+   - **Tidak mengubah** endpoint existing (Login, Register, Forgot Password, Reset Password, Verifikasi WA).

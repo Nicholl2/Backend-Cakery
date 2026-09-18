@@ -492,6 +492,49 @@ async def upload_buyer_avatar(db: AsyncSession, buyer: Buyer, file: UploadFile) 
     return updated_buyer
 
 
+async def change_buyer_password(
+    db: AsyncSession, buyer: Buyer, current_password: str, new_password: str
+) -> dict:
+    """Change password for authenticated buyer — requires current password verification."""
+    if not verify_password(current_password, buyer.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password saat ini tidak sesuai."
+        )
+
+    if len(new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password baru harus minimal 6 karakter."
+        )
+
+    new_hash = hash_password(new_password)
+    await buyer_repo.update_buyer_password(db, buyer, new_hash)
+    return {"message": "Password berhasil diperbarui."}
+
+
+async def change_buyer_phone(
+    db: AsyncSession, buyer: Buyer, current_password: str, new_phone: str
+) -> Buyer:
+    """Change phone number for authenticated buyer — requires current password verification."""
+    if not verify_password(current_password, buyer.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password saat ini tidak sesuai."
+        )
+
+    normalized = normalize_phone(new_phone)
+
+    existing = await buyer_repo.get_buyer_by_phone(db, normalized)
+    if existing and existing.id != buyer.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nomor WhatsApp sudah terdaftar."
+        )
+
+    updated_buyer = await buyer_repo.update_buyer_phone(db, buyer, normalized)
+    return updated_buyer
+
 
 async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password: str) -> dict:
     """Reset buyer password via verification token"""

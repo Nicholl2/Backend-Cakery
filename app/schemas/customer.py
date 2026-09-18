@@ -57,3 +57,22 @@ class TakeoverStatus(BaseModel):
     is_expired: bool = Field(
         description="True jika takeover aktif tapi expires_at sudah lewat"
     )
+
+
+# ── BUYER PROFILE MUTATION SCHEMAS ───────────────────────────────────────────
+
+class BuyerChangePasswordRequest(BaseModel):
+    """Schema for changing buyer password — requires current password verification."""
+    current_password: str
+    new_password: str = Field(..., min_length=6)
+
+
+class BuyerChangePhoneRequest(BaseModel):
+    """Schema for changing buyer WhatsApp phone number — requires current password verification."""
+    phone: str
+    current_password: str
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def validate_phone(cls, v):
+        return validate_phone_e164(v)

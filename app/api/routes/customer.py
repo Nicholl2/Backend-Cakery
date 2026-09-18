@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.dependencies import require_service_key, get_current_buyer
 from app.models.buyer import Buyer
-from app.schemas.customer import CustomerUpsert, CustomerOut, TakeoverSet, TakeoverStatus
+from app.schemas.customer import CustomerUpsert, CustomerOut, TakeoverSet, TakeoverStatus, BuyerChangePasswordRequest, BuyerChangePhoneRequest
 from app.schemas.auth import BuyerProfileResponse
 from app.services import customer_service, buyer_auth_service
 
@@ -141,3 +141,43 @@ async def upload_buyer_avatar(
     """
     updated_buyer = await buyer_auth_service.upload_buyer_avatar(db, buyer, file)
     return BuyerProfileResponse.model_validate(updated_buyer)
+
+
+@buyer_router.post(
+    "/me/change-password",
+    status_code=status.HTTP_200_OK,
+    summary="Ganti password Buyer yang sedang login",
+)
+async def change_buyer_password(
+    data: BuyerChangePasswordRequest,
+    buyer: Buyer = Depends(get_current_buyer),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ganti password Buyer. Wajib menyertakan password lama (`current_password`) untuk verifikasi.
+    Password baru harus minimal 6 karakter.
+    """
+    return await buyer_auth_service.change_buyer_password(
+        db, buyer, data.current_password, data.new_password
+    )
+
+
+@buyer_router.patch(
+    "/me/phone",
+    response_model=BuyerProfileResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Ubah nomor WhatsApp Buyer yang sedang login",
+)
+async def change_buyer_phone(
+    data: BuyerChangePhoneRequest,
+    buyer: Buyer = Depends(get_current_buyer),
+    db: AsyncSession = Depends(get_db),
+) -> BuyerProfileResponse:
+    """
+    Ubah nomor WhatsApp Buyer. Wajib menyertakan password saat ini (`current_password`)
+    untuk konfirmasi pemilik asli. Nomor baru wajib unik — tidak boleh terdaftar pada akun lain.
+    """
+    updated = await buyer_auth_service.change_buyer_phone(
+        db, buyer, data.current_password, data.phone
+    )
+    return BuyerProfileResponse.model_validate(updated)
