@@ -43,6 +43,8 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `GET` | `/auth/verify/wa/status` | Public (Polling) | Cek status verifikasi WA berdasarkan `nonce`. Di mode mock/verified: return status `"verified"` & `verify_token` |
 | `POST` | `/auth/buyer/register` | Public (`verify_token`) | Registrasi akun pembeli baru menggunakan token verifikasi WA dan nomor telepon valid |
 | `POST` | `/auth/buyer/login` | Public | Login pembeli via email/password atau phone/`verify_token` |
+| `POST` | `/auth/buyer/forgot-password` | Public | Request OTP reset password ke email buyer |
+| `POST` | `/auth/buyer/reset-password/email` | Public | Reset password buyer via email, kode OTP, dan password baru |
 | `POST` | `/auth/buyer/login-phone` | Public | Login pembeli via nomor telepon (E.164 internasional) dan password |
 | `POST` | `/auth/buyer/login/otp` | Public (`verify_token`) | Login pembeli via nomor telepon dan token verifikasi WA |
 | `POST` | `/auth/buyer/reset-password` | Public (`verify_token`) | Reset password pembeli menggunakan token verifikasi |

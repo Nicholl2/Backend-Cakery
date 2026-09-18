@@ -12,6 +12,7 @@ from app.schemas.auth import (
     BuyerLoginRequest, BuyerLoginPhoneRequest, BuyerLoginOTPRequest,
     BuyerResetPasswordRequest, SellerForgotPasswordRequest,
     SellerForgotPasswordVerifyRequest, SellerResetPasswordRequest,
+    BuyerForgotPasswordRequest, BuyerResetPasswordEmailRequest,
     WAVerifyStartRequest, WAVerifyStartResponse,
     WAVerifyConfirmRequest, WAVerifyStatusResponse,
     OTPSendResponse, OTPSendRequest, OTPVerifyRequest,
@@ -193,6 +194,35 @@ async def buyer_reset_password(
 ):
     """Reset buyer password using verified token"""
     return await buyer_auth_service.reset_buyer_password(db, data.verify_token, data.new_password)
+
+
+@router.post("/buyer/forgot-password", status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_AUTH_VERIFY)
+async def buyer_forgot_password(
+    request: Request,
+    data: BuyerForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Request OTP reset password ke email buyer.
+    Selalu return 200 untuk mencegah email enumeration.
+    Kode OTP berlaku 10 menit.
+    """
+    return await buyer_auth_service.request_buyer_forgot_password(db, data.email)
+
+
+@router.post("/buyer/reset-password/email", status_code=status.HTTP_200_OK)
+async def buyer_reset_password_email(
+    data: BuyerResetPasswordEmailRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Reset password buyer menggunakan email + kode OTP + password baru.
+    OTP harus valid (belum expired, belum digunakan, dan kode cocok).
+    """
+    return await buyer_auth_service.reset_buyer_password_email(
+        db, data.email, data.otp, data.new_password
+    )
 
 
 # ── SELLER AUTHENTICATION ENDPOINTS ──────────────────────────────────────────

@@ -6,23 +6,25 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
-### 001ab. Fitur Mutasi Profil Buyer (Ganti Password & Ubah Nomor WhatsApp)
-- **Schema Baru (`app/schemas/customer.py`)**:
-  - `BuyerChangePasswordRequest`: Schema untuk ganti password buyer dengan validasi `new_password` minimal 6 karakter (Pydantic `Field(min_length=6)`).
-  - `BuyerChangePhoneRequest`: Schema untuk ubah nomor WhatsApp buyer dengan validasi format E.164 via `validate_phone_e164()`.
-- **Repository (`app/repositories/buyer_repo.py`)**:
-  - Menambahkan fungsi `update_buyer_phone(db, buyer, new_phone)` untuk update nomor telepon buyer di database.
+### 001ab. Fitur Mutasi Profil Buyer & Forgot/Reset Password via Email
+- **Konfigurasi & Dependencies**:
+  - Menambahkan package `aiosmtplib` ke `requirements.txt`.
+  - Menambahkan variabel konfigurasi SMTP (`smtp_host`, `smtp_port`, dll.) pada `app/core/config.py` dan `.env.example`.
+- **Utility Baru (`app/utils/email_helper.py`)**:
+  - `send_otp_email()`: Fungsi async untuk mengirim kode OTP ke email menggunakan SMTP. Memiliki mock mode (fallback ke log) jika SMTP belum dikonfigurasi.
+- **Schema Baru (`app/schemas/customer.py` & `app/schemas/auth.py`)**:
+  - `BuyerChangePasswordRequest`, `BuyerChangePhoneRequest` (Mutasi Profil).
+  - `BuyerForgotPasswordRequest`, `BuyerResetPasswordEmailRequest` (Forgot/Reset via Email).
 - **Service Layer (`app/services/buyer_auth_service.py`)**:
-  - `change_buyer_password()`: Verifikasi `current_password` menggunakan `verify_password()`, validasi panjang password baru, hash menggunakan `hash_password()` (bcrypt). Return `HTTP 400` jika password lama salah.
-  - `change_buyer_phone()`: Verifikasi `current_password`, normalisasi nomor via `normalize_phone()`, cek keunikan via `buyer_repo.get_buyer_by_phone()`. Return `HTTP 400` jika password salah atau nomor sudah dipakai buyer lain.
-- **Endpoint Baru (`app/api/routes/customer.py`)**:
-  - `POST /buyers/me/change-password` — Ganti password buyer yang sedang login. Auth: Buyer JWT (`get_current_buyer`).
-  - `PATCH /buyers/me/phone` — Ubah nomor WhatsApp buyer. Auth: Buyer JWT (`get_current_buyer`). Return `BuyerProfileResponse`.
-  - Kedua endpoint tanpa OTP/verifikasi WA — cukup verifikasi `current_password` dari sesi terautentikasi.
+  - `change_buyer_password()`, `change_buyer_phone()`: Mutasi data dengan verifikasi `current_password`.
+  - `request_buyer_forgot_password()`: Lookup buyer by email, generate 6-digit OTP, simpan ke `otp_codes` (channel=`email`, purpose=`buyer_reset_password`, TTL 10 menit), kirim via email. Selalu mereturn 200 OK (anti-enumeration).
+  - `reset_buyer_password_email()`: Verifikasi keberadaan dan masa aktif OTP, lalu perbarui password pada record Buyer.
+- **Endpoint Baru (`app/api/routes/customer.py` & `app/api/routes/auth.py`)**:
+  - `POST /buyers/me/change-password` & `PATCH /buyers/me/phone` pada router customer (auth: JWT `get_current_buyer`).
+  - `POST /auth/buyer/forgot-password` & `POST /auth/buyer/reset-password/email` pada router auth (Public).
 - **Test Suite (`tests/test_buyer_profile_mutation.py`)**:
-  - 8 test case: valid password change, wrong password, short password (422), valid phone change, wrong password for phone, duplicate phone, unauthenticated (403), non-buyer role (401).
-- **Dokumentasi**: Update `API_ENDPOINT.md` (tabel Section F) dan `FEATURES_LOGIC.md` (Section 24).
-- **Tidak ada perubahan** pada `main.py`, `auth.py`, `dependencies.py`, `security.py`, atau endpoint existing.
+  - Ditambahkan test coverage untuk alur Forgot & Reset Password (intercept SMTP menggunakan `unittest.mock.patch`).
+- **Dokumentasi**: Update `API_ENDPOINT.md` (tabel Section A & F) dan `FEATURES_LOGIC.md` (Section 24).
 
 ### 001aa. Refactoring SSL Configuration, Payment Notes Migration & Cash Payment Pending Flow
 - **Konfigurasi SSL Fleksibel (`app/core/database.py`)**:

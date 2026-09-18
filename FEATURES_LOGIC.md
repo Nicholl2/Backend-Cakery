@@ -466,8 +466,16 @@ Fitur self-service bagi Buyer yang sudah terautentikasi untuk mengelola kredensi
    - **Tidak memerlukan OTP atau verifikasi WA** — cukup verifikasi password untuk konfirmasi pemilik asli.
    - Response: `BuyerProfileResponse` dengan nomor HP terbaru.
 
-3. **Keamanan & Aturan Akses**:
-   - Kedua endpoint memerlukan JWT Bearer token dengan role `buyer` (`get_current_buyer` dependency).
+3. **Forgot/Reset Password via Email (`POST /auth/buyer/forgot-password` & `POST /auth/buyer/reset-password/email`)**:
+   - Jika buyer lupa password dan belum login, mereka dapat request OTP reset password ke email.
+   - Sistem akan men-generate 6-digit kode OTP (TTL 10 menit) dan menyimpannya di tabel `otp_codes` dengan hash aman (`code_hash`).
+   - OTP dikirim ke email menggunakan utility `app/utils/email_helper.py` (via `aiosmtplib`). Jika SMTP belum diatur, OTP hanya di-log ke console (mock mode).
+   - Pada endpoint request, API *selalu* mereturn `200 OK` (meskipun email tidak terdaftar) untuk **mencegah email enumeration**.
+   - Untuk reset, buyer harus memasukkan `email`, `otp`, dan `new_password`. API memverifikasi kode OTP tersebut dan masa aktifnya, sebelum meng-update password.
+   - Token OTP yang sudah dipakai di-mark sebagai `is_used = True` untuk menghindari pemakaian ulang.
+
+4. **Keamanan & Aturan Akses**:
+   - Endpoint mutasi (change-password, change-phone) memerlukan JWT Bearer token dengan role `buyer` (`get_current_buyer` dependency).
    - Token dengan role selain `buyer` ditolak dengan `HTTP 401 (User is not a buyer)`.
-   - Request tanpa token ditolak dengan `HTTP 403`.
-   - **Tidak mengubah** endpoint existing (Login, Register, Forgot Password, Reset Password, Verifikasi WA).
+   - Request mutasi tanpa token ditolak dengan `HTTP 401`.
+   - Endpoint forgot/reset password via email bersifat **Public** tanpa autentikasi.

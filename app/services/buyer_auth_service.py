@@ -585,6 +585,103 @@ async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password
     return {"message": "Password reset successful"}
 
 
+# ── BUYER FORGOT/RESET PASSWORD VIA EMAIL ────────────────────────────────────
+
+async def request_buyer_forgot_password(db: AsyncSession, email: str) -> dict:
+    """
+    Request password reset OTP via email for buyer.
+    Always returns success to prevent email enumeration attacks.
+    """
+    from app.utils.email_helper import send_otp_email
+
+    buyer = await buyer_repo.get_buyer_by_email(db, email)
+
+    if buyer:
+        # Generate 6-digit OTP
+        code = "".join(secrets.choice(string.digits) for _ in range(6))
+        otp_id = str(uuid.uuid4())
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        code_hash = hash_password(code)
+
+        otp = OTPCode(
+            id=otp_id,
+            target=email,
+            channel="email",
+            purpose="buyer_reset_password",
+            code_hash=code_hash,
+            expires_at=expires_at,
+            is_used=False,
+            attempt_count=0,
+        )
+        db.add(otp)
+        await db.commit()
+
+        # Send OTP via email (mock mode if SMTP not configured)
+        await send_otp_email(email, code)
+
+    # Always return success — prevent email enumeration
+    return {"message": "Kode OTP reset password telah dikirim ke email Anda."}
+
+
+async def reset_buyer_password_email(
+    db: AsyncSession, email: str, otp_code: str, new_password: str
+) -> dict:
+    """Reset buyer password via email + OTP verification."""
+
+    # Find the latest unused OTP for this email & purpose
+    stmt = (
+        select(OTPCode)
+        .where(
+            OTPCode.target == email,
+            OTPCode.purpose == "buyer_reset_password",
+            OTPCode.is_used == False,  # noqa: E712
+        )
+        .order_by(OTPCode.created_at.desc())
+    )
+    res = await db.execute(stmt)
+    otp = res.scalars().first()
+
+    if not otp:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kode OTP tidak valid atau tidak ditemukan."
+        )
+
+    # Check expiry
+    otp_expires = otp.expires_at
+    if otp_expires.tzinfo is None:
+        otp_expires = otp_expires.replace(tzinfo=timezone.utc)
+    if otp_expires < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kode OTP telah kedaluwarsa."
+        )
+
+    # Verify OTP code against hash
+    if not verify_password(otp_code, otp.code_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kode OTP salah."
+        )
+
+    # Mark OTP as used
+    otp.is_used = True
+    await db.commit()
+
+    # Find buyer and update password
+    buyer = await buyer_repo.get_buyer_by_email(db, email)
+    if not buyer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Akun Buyer tidak ditemukan."
+        )
+
+    pwd_hash = hash_password(new_password)
+    await buyer_repo.update_buyer_password(db, buyer, pwd_hash)
+
+    return {"message": "Password berhasil di-reset. Silakan login kembali."}
+
+
 # ── SELLER AUTH ──────────────────────────────────────────────────────────────
 
 async def request_seller_forgot_password(db: AsyncSession, email: str) -> dict:

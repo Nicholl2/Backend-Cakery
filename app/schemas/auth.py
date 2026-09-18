@@ -197,6 +197,20 @@ class SellerResetPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=6)
 
 
+# ── BUYER FORGOT/RESET PASSWORD VIA EMAIL ────────────────────────────────────
+
+class BuyerForgotPasswordRequest(BaseModel):
+    """Request reset password — kirim OTP ke email buyer."""
+    email: str = Field(..., max_length=100)
+
+
+class BuyerResetPasswordEmailRequest(BaseModel):
+    """Reset password via email OTP verification."""
+    email: str = Field(..., max_length=100)
+    otp: str = Field(..., max_length=10)
+    new_password: str = Field(..., min_length=6)
+
+
 # ── WA DEEP LINK OTP SCHEMAS ────────────────────────────────────────────────
 
 class WAVerifyStartRequest(BaseModel):
