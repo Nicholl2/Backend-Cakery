@@ -237,6 +237,11 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         for row in supplier_rows
     ]
 
+    # ── 10. Order Count and Average Order Value ─────────────────────────────────
+    order_count_query = await _execute_readonly(db, select(func.count()).select_from(paid_order_ids_in_period.subquery()))
+    order_count = order_count_query.scalar() or 0
+    avg_order_value = (total_revenue / order_count) if order_count > 0 else Decimal("0.00")
+
     return {
         "revenue": total_revenue,
         "total_revenue": total_revenue,
@@ -248,6 +253,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         "gross_profit": gross_profit,
         "expenses_total": total_expenses,
         "total_expenses": total_expenses,
+        "expenses": total_expenses,
         "net_profit": net_profit,
         "outstanding_payments": outstanding_payments,
         "non_refundable_dp_income": non_refundable_dp_income,
@@ -255,6 +261,8 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         "product_profitability": full_product_profitability,
         "full_product_profitability": full_product_profitability,
         "supplier_spending": supplier_spending,
+        "order_count": order_count,
+        "avg_order_value": avg_order_value,
     }
 
 async def get_analytics_report_data(db: AsyncSession, start_dt: datetime, end_dt: datetime) -> dict:

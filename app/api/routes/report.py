@@ -6,7 +6,7 @@ from datetime import datetime, time
 from typing import List, Optional
 
 from app.core.database import get_db
-from app.api.dependencies import require_internal_user, require_owner
+from app.api.dependencies import require_internal_user, require_owner, require_service_key
 from app.schemas.report import (
     FinancialReportSummary,
     ReportSummary,
@@ -75,6 +75,29 @@ async def get_financial_report(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Gagal memuat laporan keuangan: {str(exc)}"
+        )
+
+
+@router.get("/financial-summary", response_model=FinancialReportSummary)
+async def get_financial_summary(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: AsyncSession = Depends(get_db),
+    _ = Depends(require_service_key)
+) -> FinancialReportSummary:
+    """
+    Get financial report summary for chatbot.
+    """
+    try:
+        data = await report_service.get_financial_summary_report(db, start_date, end_date)
+        return FinancialReportSummary(**data)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error getting financial summary report: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal memuat ringkasan laporan keuangan: {str(exc)}"
         )
 
 

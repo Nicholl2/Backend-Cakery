@@ -11,7 +11,12 @@ logger = logging.getLogger(__name__)
 from app.core.database import get_db
 from app.core.security import decode_token
 from app.core.rate_limiter import limiter, RATE_PAYMENT_CREATE, RATE_WEBHOOK
-from app.api.dependencies import get_auth_identity_optional_service_or_jwt, AuthIdentity
+from app.api.dependencies import (
+    get_auth_identity_optional_service_or_jwt,
+    AuthIdentity,
+    get_current_user_id,
+    require_internal_user,
+)
 from app.services import payment_service
 from app.repositories import order_repo, customer_repo
 from app.models.payment import PaymentStatusEnum
@@ -70,7 +75,8 @@ async def create_midtrans_payment(
              summary="Catat pembayaran manual (CASH, TRANSFER, dll.)")
 async def create_manual_payment(
     data: ManualPaymentRequest,
-    authorization: Optional[str] = Header(None, alias="Authorization"),
+    user_id: int = Depends(get_current_user_id),
+    _: int = Depends(require_internal_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -79,27 +85,7 @@ async def create_manual_payment(
     - Mempertahankan status order tetap pending agar konsisten dengan alur pembayaran
     - Membuat record transaksi pembayaran baru di database
     """
-    verified_by = None
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization[7:].strip()
-        try:
-            payload = decode_token(token)
-            role = payload.get("role")
-            role_level = payload.get("role_level")
-            if role == "buyer" or (role_level is not None and int(role_level) > 3):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Insufficient permissions. Staff, Admin, or Owner required."
-                )
-            verified_by = int(payload.get("sub"))
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid authorization token: {str(e)}"
-            )
-
+    verified_by = user_id
     try:
         order_id_int = int(data.order_id)
     except ValueError:

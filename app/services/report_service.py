@@ -102,6 +102,32 @@ async def get_financial_report(
     return FinancialReportResponse(**data)
 
 @retry_on_deadlock(max_retries=3, delay=0.5)
+async def get_financial_summary_report(
+    db: AsyncSession,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> dict:
+    """
+    Retrieve financial summary report for chatbot.
+    """
+    from app.schemas.report import FinancialReportSummary
+    start_dt, end_dt = parse_dates(start_date, end_date)
+    data = await report_repo.get_financial_report_data(db, start_dt, end_dt)
+    
+    top_products = [
+        {
+            "product_id": p["product_id"],
+            "nama_produk": p["nama_produk"],
+            "qty": p["qty_sold"],
+            "revenue": p["total_revenue"]
+        }
+        for p in data.get("product_profitability", [])
+    ][:5]
+    
+    data["top_products"] = top_products
+    return FinancialReportSummary(**data).model_dump()
+
+@retry_on_deadlock(max_retries=3, delay=0.5)
 async def get_analytics_report(
     db: AsyncSession,
     start_date: Optional[str] = None,

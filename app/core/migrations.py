@@ -208,6 +208,20 @@ async def ensure_review_columns(conn: AsyncConnection):
     ))
 
 
+async def run_auto_migrations(conn: AsyncConnection):
+    """
+    Wrapper to run all auto-migrations sequentially on a given connection.
+    """
+    await ensure_product_columns(conn)
+    await ensure_buyer_columns(conn)
+    await ensure_stock_item_columns(conn)
+    await ensure_recipe_columns(conn)
+    await ensure_otp_columns(conn)
+    await ensure_user_columns(conn)
+    await ensure_order_columns(conn)
+    await ensure_payment_columns(conn)
+    await ensure_review_columns(conn)
+
 
 
 

@@ -63,16 +63,8 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.core.migrations import (
-            ensure_product_columns,
-            ensure_buyer_columns,
-            ensure_stock_item_columns,
-            ensure_recipe_columns,
-            ensure_otp_columns,
-            ensure_user_columns,
-            ensure_order_columns,
+            run_auto_migrations,
             ensure_order_status_enum,
-            ensure_payment_columns,
-            ensure_review_columns,
         )
 
         # 1. Run enum additions in isolated autocommit connection (PostgreSQL requires ALTER TYPE outside transaction blocks)
@@ -85,15 +77,7 @@ async def lifespan(app: FastAPI):
         # 2. Run table creations and column migrations in transactional block
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            await ensure_product_columns(conn)
-            await ensure_buyer_columns(conn)
-            await ensure_stock_item_columns(conn)
-            await ensure_recipe_columns(conn)
-            await ensure_otp_columns(conn)
-            await ensure_user_columns(conn)
-            await ensure_order_columns(conn)
-            await ensure_payment_columns(conn)
-            await ensure_review_columns(conn)
+            await run_auto_migrations(conn)
 
         # Auto-seed initial master data if roles table is empty
         from app.core.database import AsyncSessionLocal, seed_initial_data
