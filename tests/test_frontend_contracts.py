@@ -252,8 +252,8 @@ async def test_manual_payment_contract(setup_test_app):
     """
     Test POST /payments/manual:
     - Accepts order_id (str), amount (float), payment_method (str), notes (str).
-    - Transitions order status to in_process, invoice to paid, and payment_status to PAID.
-    - Records new payment with status Success.
+    - Keeps order status pending (consistent with online payments), transitions invoice to paid, and payment_status to PAID.
+    - Records new payment with status Success and notes.
     """
     token_staff = create_access_token(user_id=3, role_level=3, username="staff@toti.com")
 
@@ -276,7 +276,7 @@ async def test_manual_payment_contract(setup_test_app):
 
         assert data["success"] is True
         assert data["payment_status"] == "PAID"
-        assert data["order_status"] == "in_process"
+        assert data["order_status"] == "pending"
         assert data["order_id"] == 2
         assert float(data["amount"]) == 80000.0
         assert data["payment_method"] == "CASH"
@@ -286,7 +286,7 @@ async def test_manual_payment_contract(setup_test_app):
     async with SessionLocal() as db:
         order_res = await db.execute(select(Order).where(Order.id == 2))
         order = order_res.scalars().first()
-        assert order.status == OrderStatusEnum.in_process
+        assert order.status == OrderStatusEnum.pending
         assert order.payment_status == "PAID"
         assert order.invoice.status == InvoiceStatusEnum.paid
 
@@ -296,6 +296,7 @@ async def test_manual_payment_contract(setup_test_app):
         p = payments[0]
         assert p.payment_status == PaymentStatusEnum.success
         assert p.payment_method == "CASH"
+        assert p.notes == "Pembayaran tunai lunas di meja kasir"
         assert p.verified_by == 3
 
 

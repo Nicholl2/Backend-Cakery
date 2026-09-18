@@ -45,11 +45,13 @@ engine_kwargs = {
 
 # Add asyncpg connect_args for Neon / pgBouncer statement cache
 if "postgresql+asyncpg" in db_url or "postgresql" in db_url or "asyncpg" in db_url:
-    engine_kwargs["connect_args"] = {
-        "ssl": True,
+    connect_args = {
         "statement_cache_size": 0,
         "prepared_statement_cache_size": 0,
     }
+    if "neon.tech" in db_url or "-pooler" in db_url:
+        connect_args["ssl"] = True
+    engine_kwargs["connect_args"] = connect_args
 
 # Menggunakan create_async_engine untuk mendukung asyncpg & lifespan main.py
 engine = create_async_engine(db_url, **engine_kwargs)

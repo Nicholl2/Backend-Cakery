@@ -213,11 +213,14 @@ Table payments {
   pg_transaction_id varchar(100) [null, note: 'ID Transaksi Payment Gateway Midtrans']
   jumlah_bayar decimal(10,2) [not null]
   payment_method varchar(50) [not null, note: 'bank_transfer, qris, manual']
+  notes text [null, note: 'Catatan pembayaran manual / keterangan tambahan']
   verified_by int [ref: > users.id, null]
   payment_status enum('Success','Pending','Failed','Refunded') [default: 'Pending', not null]
   payment_type enum('DP','Final') [default: 'Final', not null]
   va_number varchar(50) [null]
   qris_url text [null]
+  settled_at timestamp [null]
+  updated_at timestamp [null]
   created_at timestamp [default: `now()`]
 }
 

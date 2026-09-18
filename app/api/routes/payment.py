@@ -76,7 +76,7 @@ async def create_manual_payment(
     """
     Mencatat pembayaran manual (CASH, TRANSFER, dll.):
     - Mengubah payment_status menjadi PAID
-    - Memperbarui status order ke in_process bila berstatus pending
+    - Mempertahankan status order tetap pending agar konsisten dengan alur pembayaran
     - Membuat record transaksi pembayaran baru di database
     """
     verified_by = None

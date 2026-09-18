@@ -179,12 +179,13 @@ async def ensure_order_status_enum(conn: AsyncConnection):
 
 async def ensure_payment_columns(conn: AsyncConnection):
     """
-    Ensure settled_at and updated_at columns are present in the 'payments' table on PostgreSQL database.
+    Ensure settled_at, updated_at, and notes columns are present in the 'payments' table on PostgreSQL database.
     Backfills existing payments with created_at if settled_at is NULL.
     """
     if conn.dialect.name != "postgresql":
         return
 
+    await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS notes TEXT;"))
     await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;"))
     await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;"))
     try:

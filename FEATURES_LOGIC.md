@@ -431,3 +431,16 @@ Untuk mengamankan listing pesanan pada Seller Dashboard:
 
 2. **Null Safety pada Kalkulasi SQL Laporan Keuangan (`app/repositories/report_repo.py`)**:
    - Query agregasi finansial `get_financial_report_data` menggunakan `func.coalesce(OrderItem.hpp_snapshot, Decimal("0.00"))`, `func.coalesce(OrderItem.custom_decoration_charge, Decimal("0.00"))`, dan `func.coalesce(Invoice.total_tagihan, Decimal("0.00"))` untuk mencegah `TypeError` / `NoneType` arithmetic saat mengolah data legacy di PostgreSQL.
+
+---
+
+## 23. Logika Pembayaran Manual & Konfigurasi Koneksi Database
+
+1. **Alur Pembayaran Manual Kasir / Tunai (`POST /payments/manual`)**:
+   - Pencatatan pembayaran manual (CASH, TRANSFER, dll.) oleh kasir/staff menghasilkan record `Payment` dengan status `Success` dan menyimpan catatan kasir pada kolom `notes`.
+   - Status `Invoice` diubah menjadi `paid` (atau `partial` jika belum lunas).
+   - **Preservasi Status Order**: Status `Order` dipertahankan tetap `pending` (tidak secara otomatis diubah ke `in_process`). Hal ini menjaga konsistensi alur antara pembayaran tunai dan pembayaran online, serta memungkinkan pembeli untuk mengajukan pembatalan/refund via chatbot sebelum pesanan diproses di dapur oleh seller.
+
+2. **Deteksi Otomatis SSL PostgreSQL (`app/core/database.py`)**:
+   - Pengaturan koneksi `asyncpg` hanya menyertakan parameter `ssl: True` jika `db_url` host mengandung string `"neon.tech"` atau `"-pooler"`.
+   - Untuk koneksi PostgreSQL lokal atau kontainer Docker (`postgres:16-alpine`), `ssl` tidak ditambahkan ke `connect_args`, mencegah kegagalan *handshake* SSL pada container database lokal.

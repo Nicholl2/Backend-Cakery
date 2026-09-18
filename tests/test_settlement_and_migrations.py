@@ -40,6 +40,28 @@ async def test_ensure_order_status_enum():
 
 
 @pytest.mark.asyncio
+async def test_ensure_payment_columns():
+    """Verify ensure_payment_columns adds notes and settled_at columns on PostgreSQL."""
+    from app.core.migrations import ensure_payment_columns
+
+    # 1. Non-postgres -> skips gracefully
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.connect() as conn:
+        await ensure_payment_columns(conn)
+    await engine.dispose()
+
+    # 2. Mock PostgreSQL dialect
+    mock_conn = AsyncMock()
+    mock_conn.dialect.name = "postgresql"
+
+    await ensure_payment_columns(mock_conn)
+    executed_statements = [str(call[0][0]) for call in mock_conn.execute.call_args_list]
+    assert any("ALTER TABLE payments ADD COLUMN IF NOT EXISTS notes TEXT;" in s for s in executed_statements)
+    assert any("ALTER TABLE payments ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;" in s for s in executed_statements)
+    assert any("ALTER TABLE payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;" in s for s in executed_statements)
+
+
+@pytest.mark.asyncio
 async def test_payment_settlement_keeps_order_pending():
     """
     Verify that when payment reaches full settlement:

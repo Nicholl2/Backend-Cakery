@@ -150,7 +150,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/payments` | `X-Service-Key` / Buyer JWT | Charge pembayaran ke Midtrans (Bank Transfer BCA VA atau QRIS), validasi nominal anti-tampering dan verifikasi kepemilikan order untuk Buyer |
-| `POST` | `/payments/manual` | Staff / Admin / Owner (JWT) / System | Catat transaksi pembayaran manual (CASH, TRANSFER, dll.). Mengubah `payment_status` pesanan menjadi `PAID`, memperbarui status order ke `in_process` bila berstatus pending, serta membuat record pembayaran baru di database |
+| `POST` | `/payments/manual` | Staff / Admin / Owner (JWT) / System | Catat transaksi pembayaran manual (CASH, TRANSFER, dll.). Mengubah `payment_status` pesanan menjadi `PAID`, mempertahankan status order tetap `pending` (agar konsisten dengan alur pembayaran dan dapat dibatalkan bila perlu), serta membuat record pembayaran baru di database (beserta kolom `notes`) |
 | `GET` | `/payments/{order_id}/status` | `X-Service-Key` / Buyer JWT | Cek status tagihan, total terbayar, sisa tagihan, dan refresh transaksi pending untuk Chatbot & Buyer |
 | `POST` | `/payments/notify` (alias: `/payments/notification`) | Public Webhook | Listener webhook otomatis Midtrans (validasi signature SHA512, defensive payload check, auto-settlement invoice & order, 200 OK acknowledgment jika order tidak ditemukan di database) |
 

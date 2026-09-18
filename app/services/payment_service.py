@@ -619,7 +619,7 @@ async def process_manual_payment(
     1. Validasi keberadaan order & invoice (buat invoice jika belum ada).
     2. Buat record transaksi pembayaran baru (status Success).
     3. Update invoice status -> 'paid' (atau 'partial' jika belum lunas).
-    4. Update status order jika sesuai workflow (pending -> in_process).
+    4. Status order tetap 'pending' agar konsisten dengan alur online payment & dapat dibatalkan jika diperlukan.
     5. Commit ke database & kirim notifikasi chatbot.
     """
     order = await order_repo.get_order_by_id(db, order_id)
@@ -652,6 +652,7 @@ async def process_manual_payment(
         pg_transaction_id=pg_txn_id,
         jumlah_bayar=amount,
         payment_method=payment_method,
+        notes=notes,
         verified_by=verified_by,
         payment_status=PaymentStatusEnum.success,
         payment_type=PaymentTypeEnum.final,
@@ -675,10 +676,6 @@ async def process_manual_payment(
         invoice.status = InvoiceStatusEnum.paid
     else:
         invoice.status = InvoiceStatusEnum.partial
-
-    # Perbarui status order jika sesuai workflow (pending -> in_process)
-    if order.status == OrderStatusEnum.pending:
-        order.status = OrderStatusEnum.in_process
 
     await db.commit()
     await db.refresh(order)

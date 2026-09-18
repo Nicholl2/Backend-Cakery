@@ -28,6 +28,7 @@ class Payment(Base):
     pg_transaction_id = Column(String(100), nullable=True)
     jumlah_bayar = Column(Numeric(10, 2), nullable=False)
     payment_method = Column(String(50), nullable=False)
+    notes = Column(Text, nullable=True)
     verified_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     payment_status = Column(
         SAEnum(PaymentStatusEnum, name="paymentstatusenum"),

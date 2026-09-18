@@ -6,6 +6,23 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001aa. Refactoring SSL Configuration, Payment Notes Migration & Cash Payment Pending Flow
+- **Konfigurasi SSL Fleksibel (`app/core/database.py`)**:
+  - Mengembalikan pemeriksaan SSL bersyarat pada `engine_kwargs["connect_args"]`.
+  - Mengaktifkan `ssl: True` HANYA jika `db_url` mengandung string `"neon.tech"` atau `"-pooler"`.
+  - Database PostgreSQL lokal atau container Docker (`postgres:16-alpine`) tidak lagi dipaksa menggunakan `ssl: True` atau `ssl: False` di `connect_args`, menghindari error koneksi SSL pada environment container lokal.
+- **Migrasi Kolom `notes` & Restorasi Model Field (`app/core/migrations.py`, `app/models/payment.py`, `app/services/payment_service.py`)**:
+  - Menambahkan statement DDL `ALTER TABLE payments ADD COLUMN IF NOT EXISTS notes TEXT;` pada fungsi `ensure_payment_columns()` di `app/core/migrations.py`.
+  - Mengembalikan field `notes = Column(Text, nullable=True)` pada model SQLAlchemy `Payment` di `app/models/payment.py`.
+  - Meneruskan parameter `notes=notes` saat pembuatan record `Payment` pada fungsi `process_manual_payment` di `app/services/payment_service.py`.
+- **Preservasi Status Order `pending` pada Pembayaran Manual/Tunai (`app/services/payment_service.py`, `app/api/routes/payment.py`)**:
+  - Menghapus blok kondisional auto-transition `order.status = OrderStatusEnum.in_process` dari fungsi `process_manual_payment()`.
+  - Membiarkan status order tetap `pending` (hanya `invoice.status` yang berubah menjadi `paid`), sehingga konsisten dengan alur pembayaran online dan pesanan dapat dibatalkan/refund oleh pelanggan via chatbot jika diperlukan sebelum seller/dapur memproses pesanan.
+- **Automated Tests & Verifikasi (`tests/test_frontend_contracts.py`, `tests/test_settlement_and_migrations.py`)**:
+  - Menyelaraskan pengujian `test_manual_payment_contract` pada `tests/test_frontend_contracts.py` untuk memverifikasi order tetap berstatus `pending` dan field `notes` tercatat dengan benar.
+  - Menambahkan pengujian `test_ensure_payment_columns` pada `tests/test_settlement_and_migrations.py`.
+  - Seluruh test suite backend (57 tests) lulus 100% (**100% PASSED**).
+
 ### 001z. Perbaikan UndefinedColumnError pada Model Payment (payment.py & payment_service.py)
 - **Penghapusan Kolom Unmigrated `payments.notes` (`app/models/payment.py`, `app/services/payment_service.py`)**:
   - Menghapus atribut kolom `notes = Column(Text, nullable=True)` dari model SQLAlchemy `Payment` di `app/models/payment.py`.
