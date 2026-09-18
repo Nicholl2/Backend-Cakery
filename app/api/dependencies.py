@@ -158,7 +158,13 @@ async def get_current_user_role_level(
     payload: dict = Depends(get_current_user_payload)
 ) -> int:
     """Extract role level from token"""
+    if payload.get("role") == "buyer" or payload.get("role_level") == 0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Buyers are not allowed to access internal APIs"
+        )
     return int(payload.get("role_level", 3))
+
 
 async def require_service_key(
     x_service_key: str = Header(None, alias="X-Service-Key")

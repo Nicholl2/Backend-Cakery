@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -19,6 +20,9 @@ class Buyer(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    wishlists = relationship("Wishlist", back_populates="buyer", cascade="all, delete-orphan")
+    # if there are other relationships like orders, they should be added here too.
+
     def __repr__(self):
         return f"<Buyer(id={self.id}, name={self.name}, email={self.email})>"
 
@@ -29,14 +33,14 @@ class Wishlist(Base):
     __tablename__ = "wishlists"
 
     id = Column(Integer, primary_key=True, index=True)
-    buyer_id = Column(Integer, ForeignKey("buyers.id"), nullable=False)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    buyer_id = Column(Integer, ForeignKey("buyers.id", ondelete="CASCADE"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint('buyer_id', 'product_id', name='uq_buyer_product'),
     )
 
-    buyer = relationship("Buyer", backref="wishlists")
+    buyer = relationship("Buyer", back_populates="wishlists")
     product = relationship("Product")
 

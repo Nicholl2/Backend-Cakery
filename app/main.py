@@ -54,6 +54,7 @@ from app.api.routes.payment import router as payment_router
 from app.api.routes.report import router as report_router
 from app.api.routes.user import router as user_router
 from app.api.routes.review import router as review_router
+from app.api.routes import admin_buyer
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -154,6 +155,7 @@ app.include_router(recipe_router, prefix="/recipes", tags=["Recipes"])
 app.include_router(purchasing_router, prefix="/purchases", tags=["Purchasing"])
 app.include_router(customer_router, prefix="/customers", tags=["Customers"])
 app.include_router(customer_admin_router)
+app.include_router(admin_buyer.router)
 app.include_router(buyer_router, prefix="/buyers", tags=["Buyers"])
 app.include_router(buyer_router, prefix="/v1/buyers", tags=["Buyers"])
 app.include_router(buyer_router, prefix="/api/v1/buyers", tags=["Buyers"])

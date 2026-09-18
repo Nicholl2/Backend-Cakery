@@ -289,3 +289,11 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
 | `GET` | `/buyers/me/wishlist` | Buyer Authenticated | List semua wishlist produk buyer login |
 | `POST` | `/buyers/me/wishlist/{id}` | Buyer Authenticated | Tambah produk ke wishlist |
 | `DELETE` | `/buyers/me/wishlist/{id}`| Buyer Authenticated | Hapus produk dari wishlist |
+
+### J. Manajemen Pembeli / Admin Buyer (`/admin/buyers`)
+
+| Method | Endpoint | Auth / Permission | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/admin/buyers` | Admin / Owner | List semua buyer dengan pagination |
+| `GET` | `/admin/buyers/{id}` | Admin / Owner | Ambil detail satu buyer spesifik |
+| `DELETE`| `/admin/buyers/{id}` | Admin / Owner | Hapus permanen buyer & seluruh wishlist/relasinya |
