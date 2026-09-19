@@ -14,6 +14,7 @@ from app.models.otp_code import OTPCode
 from app.core.config import settings
 from app.utils.phone import normalize_phone
 from app.utils.cloudinary_helper import upload_image_to_cloudinary
+from app.services.chatbot_notify import fetch_whatsapp_number
 
 # ── GENERAL OTP HELPERS ───────────────────────────────────────────────────────
 
@@ -144,11 +145,14 @@ async def start_wa_verification(db: AsyncSession, phone_number: str) -> dict:
     
     is_mock = (settings.WA_VERIFICATION_MODE == "mock")
     
-    if not is_mock and not settings.chatbot_wa_number:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Layanan verifikasi WA belum dikonfigurasi. Hubungi administrator."
-        )
+    wa_number = ""
+    if not is_mock:
+        wa_number = await fetch_whatsapp_number()
+        if not wa_number:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Layanan verifikasi WA belum dikonfigurasi. Hubungi administrator."
+            )
 
     # Generate unique 6-char alphanumeric nonce
     nonce = generate_nonce(6)
@@ -205,7 +209,7 @@ async def start_wa_verification(db: AsyncSession, phone_number: str) -> dict:
     db.add(otp)
     await db.commit()
     
-    deeplink = f"https://wa.me/{settings.chatbot_wa_number}?text=VERIFIKASI%20{nonce}"
+    deeplink = f"https://wa.me/{wa_number}?text=VERIFIKASI%20{nonce}"
     return {
         "nonce": nonce,
         "deeplink": deeplink,

@@ -54,7 +54,7 @@ from app.api.routes.payment import router as payment_router
 from app.api.routes.report import router as report_router
 from app.api.routes.user import router as user_router
 from app.api.routes.review import router as review_router
-from app.api.routes import admin_buyer
+from app.api.routes import admin_buyer, admin_whatsapp, public
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -148,6 +148,8 @@ app.include_router(payment_router, prefix="/payments", tags=["Payments"])
 app.include_router(report_router, prefix="/reports", tags=["Reports"])
 app.include_router(user_router, prefix="/users", tags=["Users"])
 app.include_router(review_router, prefix="/reviews", tags=["Reviews"])
+app.include_router(admin_whatsapp.router)
+app.include_router(public.router)
 
 
 # ── HEALTH CHECK ─────────────────────────────────────────────────────────────

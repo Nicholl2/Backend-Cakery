@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     midtrans_server_key: str = ""
     midtrans_is_production: bool = False
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://toti-cakery.vercel.app"
-    chatbot_wa_number: str = ""
+    chatbot_wa_number: str = "6287881273160"
     environment: str = "development"
     wa_verification_mode: str = "mock"  # "mock" | "real"
     cloudinary_cloud_name: str = ""
@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     @property
     def ACCESS_TOKEN_EXPIRE_MINUTES(self) -> int:
         return self.access_token_expire_minutes
+
+    @property
+    def CHATBOT_WA_NUMBER(self) -> str:
+        return self.chatbot_wa_number or "6287881273160"
 
     @property
     def DATABASE_URL(self) -> str:
