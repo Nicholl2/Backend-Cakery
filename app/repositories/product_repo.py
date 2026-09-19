@@ -22,7 +22,11 @@ async def get_by_id(db: AsyncSession, product_id: int) -> Optional[Product]:
     result = await db.execute(
         select(Product)
         .where(Product.id == product_id)
-        .options(selectinload(Product.recipes).selectinload(Recipe.stock_item))
+        .options(
+            selectinload(Product.category_rel),
+            selectinload(Product.recipes).selectinload(Recipe.stock_item),
+            selectinload(Product.price_histories),
+        )
     )
     return result.scalars().first()
 
@@ -32,7 +36,10 @@ async def get_all(
     only_active: bool = False,
     kategori: Optional[str] = None,
 ) -> list[Product]:
-    q = select(Product).options(selectinload(Product.recipes).selectinload(Recipe.stock_item))
+    q = select(Product).options(
+        selectinload(Product.category_rel),
+        selectinload(Product.recipes).selectinload(Recipe.stock_item),
+    )
     if only_active:
         q = q.where(Product.is_active == True)
     if kategori:

@@ -1,5 +1,6 @@
+from decimal import Decimal
 from typing import Optional
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, Text, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -10,7 +11,7 @@ class Category(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True, index=True, nullable=False)
-    description = Column(String(500), nullable=True)
+    description = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -23,21 +24,21 @@ class Product(Base):
     id = Column(Integer, primary_key=True)
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     nama_produk = Column(String(100), nullable=False)
-    deskripsi = Column(String(500), nullable=True)
+    deskripsi = Column(Text, nullable=True)
     kategori = Column(String(50), nullable=True)
     harga_jual = Column(Numeric(10, 2), nullable=True)
     hpp_total = Column(Numeric(10, 2), nullable=True, default=0)
     markup_percentage = Column(Numeric(5, 4), nullable=True)
-    is_active = Column(Boolean, default=True)
-    is_available = Column(Boolean, default=True, nullable=False)
-    image_url = Column(String(500), nullable=True)
+    is_active = Column(Boolean, default=True, server_default="true", nullable=False)
+    is_available = Column(Boolean, default=True, server_default="true", nullable=False)
+    image_url = Column(Text, nullable=True)
     
     # New catalog fields requested by Frontend
     slug = Column(String(100), unique=True, index=True, nullable=True)
-    rating = Column(Float, default=0.0, nullable=False)
+    rating = Column(Numeric(3, 2), default=Decimal("0.00"), nullable=False)
     review_count = Column(Integer, default=0, nullable=False)
     sold_count = Column(Integer, default=0, nullable=False)
-    is_featured = Column(Boolean, default=False, nullable=False)
+    is_featured = Column(Boolean, default=False, server_default="false", nullable=False)
     minimum_order = Column(Integer, default=1, nullable=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())

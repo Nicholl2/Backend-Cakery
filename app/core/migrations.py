@@ -208,6 +208,89 @@ async def ensure_review_columns(conn: AsyncConnection):
     ))
 
 
+async def ensure_trigram_and_schema_optimizations(conn: AsyncConnection):
+    """
+    Ensure PostgreSQL pg_trgm extension, GIN Trigram indexes, TEXT column types,
+    Numeric rating precision, and NOT NULL constraints on status flags.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    # 1. Enable pg_trgm extension
+    await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm;"))
+
+    # 2. GIN Trigram Indexes for accelerated ILIKE '%query%' substring searches
+    indexes = [
+        ("ix_products_nama_produk_trgm", "products", "nama_produk"),
+        ("ix_products_deskripsi_trgm", "products", "deskripsi"),
+        ("ix_categories_name_trgm", "categories", "name"),
+        ("ix_users_username_trgm", "users", "username"),
+        ("ix_users_email_trgm", "users", "email"),
+        ("ix_buyers_name_trgm", "buyers", "name"),
+        ("ix_buyers_email_trgm", "buyers", "email"),
+        ("ix_buyers_phone_trgm", "buyers", "phone"),
+        ("ix_customers_nama_trgm", "customers", "nama"),
+        ("ix_customers_nomor_wa_trgm", "customers", "nomor_wa"),
+        ("ix_stock_items_nama_item_trgm", "stock_items", "nama_item"),
+        ("ix_suppliers_nama_supplier_trgm", "suppliers", "nama_supplier"),
+    ]
+    for idx_name, table_name, col_name in indexes:
+        try:
+            await conn.execute(text(
+                f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name} USING gin ({col_name} gin_trgm_ops);"
+            ))
+        except Exception:
+            pass
+
+    # 3. Optimize column types to TEXT
+    type_conversions = [
+        ("categories", "description"),
+        ("products", "deskripsi"),
+        ("products", "image_url"),
+        ("buyers", "avatar_url"),
+        ("users", "avatar_url"),
+        ("orders", "notes"),
+    ]
+    for table_name, col_name in type_conversions:
+        try:
+            await conn.execute(text(
+                f"ALTER TABLE {table_name} ALTER COLUMN {col_name} TYPE TEXT;"
+            ))
+        except Exception:
+            pass
+
+    # 4. Rating precision conversion (DOUBLE PRECISION/FLOAT -> NUMERIC(3, 2))
+    try:
+        await conn.execute(text(
+            "ALTER TABLE products ALTER COLUMN rating TYPE NUMERIC(3, 2) USING rating::NUMERIC(3, 2);"
+        ))
+    except Exception:
+        pass
+
+    # 5. Enforce NOT NULL constraints and defaults on status/boolean flags
+    boolean_cleanups = [
+        ("products", "is_active", "TRUE"),
+        ("users", "is_active", "TRUE"),
+        ("customers", "is_verified", "FALSE"),
+        ("suppliers", "is_active", "TRUE"),
+        ("purchases", "is_received", "FALSE"),
+        ("faq_items", "is_active", "TRUE"),
+    ]
+    for table_name, col_name, default_val in boolean_cleanups:
+        try:
+            await conn.execute(text(
+                f"UPDATE {table_name} SET {col_name} = COALESCE({col_name}, {default_val}) WHERE {col_name} IS NULL;"
+            ))
+            await conn.execute(text(
+                f"ALTER TABLE {table_name} ALTER COLUMN {col_name} SET DEFAULT {default_val};"
+            ))
+            await conn.execute(text(
+                f"ALTER TABLE {table_name} ALTER COLUMN {col_name} SET NOT NULL;"
+            ))
+        except Exception:
+            pass
+
+
 async def run_auto_migrations(conn: AsyncConnection):
     """
     Wrapper to run all auto-migrations sequentially on a given connection.
@@ -221,6 +304,8 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_order_columns(conn)
     await ensure_payment_columns(conn)
     await ensure_review_columns(conn)
+    await ensure_trigram_and_schema_optimizations(conn)
+
 
 
 

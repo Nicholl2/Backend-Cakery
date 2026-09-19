@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
-    Column, Integer, String, Numeric, ForeignKey,
+    Column, Integer, String, Text, Numeric, ForeignKey,
     DateTime, Enum as SAEnum,
 )
 from sqlalchemy.orm import relationship
@@ -51,7 +51,7 @@ class Order(Base):
     )
     total_harga_pesanan = Column(Numeric(10, 2), nullable=False, default=Decimal("0.00"))
     created_via = Column(String(50), nullable=False, default="chatbot")
-    notes = Column(String(1000), nullable=True)
+    notes = Column(Text, nullable=True)
     due_date = Column(DateTime(timezone=True), nullable=True)
     payment_method_preference = Column(String(50), nullable=True)
 

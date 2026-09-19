@@ -149,7 +149,11 @@ async def get_all_purchases(
     only_received: Optional[bool] = None,
     supplier_id: Optional[int] = None,
 ) -> list[Purchase]:
-    q = select(Purchase)
+    q = select(Purchase).options(
+        selectinload(Purchase.supplier),
+        selectinload(Purchase.created_by_user),
+        selectinload(Purchase.purchase_items).selectinload(PurchaseItem.stock_item),
+    )
     if only_received is not None:
         q = q.where(Purchase.is_received == only_received)
     if supplier_id:
@@ -162,7 +166,11 @@ async def get_purchase_or_404(db: AsyncSession, purchase_id: int) -> Purchase:
     result = await db.execute(
         select(Purchase)
         .where(Purchase.id == purchase_id)
-        .options(selectinload(Purchase.purchase_items))
+        .options(
+            selectinload(Purchase.supplier),
+            selectinload(Purchase.created_by_user),
+            selectinload(Purchase.purchase_items).selectinload(PurchaseItem.stock_item),
+        )
     )
     purchase = result.scalars().first()
     if not purchase:

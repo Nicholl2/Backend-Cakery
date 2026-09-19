@@ -12,11 +12,11 @@ class Customer(Base):
     nama = Column(String(100), nullable=False)
     nomor_wa = Column(String(20), unique=True, nullable=False, index=True)
     alamat = Column(Text, nullable=True)
-    is_verified = Column(Boolean, default=False)
+    is_verified = Column(Boolean, default=False, server_default="false", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    human_takeover_active = Column(Boolean, default=False, nullable=False)
+    human_takeover_active = Column(Boolean, default=False, server_default="false", nullable=False)
     takeover_expires_at = Column(DateTime(timezone=True), nullable=True)
     orders = relationship("Order", back_populates="customer", cascade="all, delete-orphan")
 

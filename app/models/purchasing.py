@@ -14,7 +14,7 @@ class Supplier(Base):
     nomor_telepon = Column(String(20), nullable=True)
     alamat = Column(Text, nullable=True)
     kota = Column(String(50), nullable=True)
-    is_active = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True, server_default="true", nullable=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -36,7 +36,7 @@ class Purchase(Base):
     
     total_harga = Column(Numeric(15, 2), nullable=False, default=0)
     catatan = Column(Text, nullable=True)
-    is_received = Column(Boolean, default=False)
+    is_received = Column(Boolean, default=False, server_default="false", nullable=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

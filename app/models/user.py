@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, inspect
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, inspect
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -13,9 +13,9 @@ class User(Base):
     email = Column(String(100), unique=True, nullable=True, index=True)
     phone_number = Column(String(20), nullable=True)
     password_hash = Column(String(255), nullable=False)
-    avatar_url = Column(String(500), nullable=True)
+    avatar_url = Column(Text, nullable=True)
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
-    is_active = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True, server_default="true", nullable=False)
     nomor_wa_admin = Column(String(20), nullable=True)
     handles_takeover = Column(Boolean, default=False, server_default="false", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
