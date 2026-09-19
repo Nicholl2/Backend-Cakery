@@ -6,6 +6,37 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001ad. Audit & Optimasi Query Database PostgreSQL, pg_trgm Trigram Indexing & ORM Efficiency
+- **Optimasi Pencarian Teks Substring (`pg_trgm`)**:
+  - Mengaktifkan ekstensi `pg_trgm` di PostgreSQL untuk mengoptimasi query pencarian `ILIKE '%query%'`.
+  - Menambahkan GIN Trigram Index (`USING gin (col gin_trgm_ops)`) pada kolom `products.nama_produk`, `products.deskripsi`, `categories.name`, `users.username`, `users.email`, `buyers.name`, `buyers.email`, `buyers.phone`, `customers.nama`, `customers.nomor_wa`, `stock_items.nama_item`, `suppliers.nama_supplier`.
+- **Evaluasi & Standarisasi Tipe Data Skema Database**:
+  - Konversi kolom `VARCHAR(500)`/`VARCHAR(1000)` menjadi `TEXT` pada deskripsi produk/kategori, avatar URL buyer/user, dan notes pesanan.
+  - Standardisasi kolom rating produk dari `Float` / `DOUBLE PRECISION` menjadi `Numeric(3, 2)` / `Decimal` (default: `0.00`) untuk mencegah ketidakakuratan pembulatan biner floating-point.
+  - Penegasan constraint `NOT NULL` dan default value pada seluruh status flag boolean (`products.is_active`, `users.is_active`, `customers.is_verified`, `suppliers.is_active`, `purchases.is_received`, `faq_items.is_active`).
+- **Migrasi Alembic & Startup Auto-Migrations**:
+  - Menambahkan konfigurasi Alembic (`alembic.ini`, `alembic/env.py`, `alembic/script.py.mako`).
+  - Menambahkan migration file `alembic/versions/20260919_01_pg_trgm_and_schema_optimization.py`.
+  - Menambahkan fungsi DDL idempotent `ensure_trigram_and_schema_optimizations()` pada `app/core/migrations.py`.
+- **Pencegahan Masalah N+1 Query (ORM Eager Loading)**:
+  - `product_repo.py`: Eager loading `Product.category_rel` dan `Product.price_histories`.
+  - `purchasing_service.py`: Eager loading `Purchase.supplier`, `Purchase.created_by_user`, dan `Purchase.purchase_items.stock_item`.
+  - `wishlist_repo.py`: Eager loading `Product.category_rel` dan `Product.recipes.stock_item`.
+
+### 001ac. Integrasi WhatsApp Chatbot Management, Dynamic Deeplink & Public Contact Endpoint
+- **Helper Service (`app/services/chatbot_notify.py`)**:
+  - `fetch_whatsapp_number()`: Mengambil nomor WhatsApp aktif dari microservice chatbot via `GET /status` (timeout 5s). Memiliki fallback aman ke `settings.CHATBOT_WA_NUMBER` (default: `6287881273160`).
+- **Router Admin WhatsApp (`app/api/routes/admin_whatsapp.py`)**:
+  - `GET /admin/whatsapp/status`: Meneruskan status koneksi chatbot (auth: `require_admin_or_owner`).
+  - `GET /admin/whatsapp/qr`: Mengambil QR code autentikasi PNG dengan header `Cache-Control: no-store` (auth: `require_owner`).
+  - `POST /admin/whatsapp/ganti-nomor`: Meminta chatbot mereset sesi dan berganti nomor (timeout >= 65s) dengan pencatatan log audit (auth: `require_owner`).
+- **Integrasi Dinamis Deeplink OTP (`app/services/buyer_auth_service.py`)**:
+  - `start_wa_verification()` sekarang memanggil `fetch_whatsapp_number()` secara dinamis untuk pembentukan URL `https://wa.me/{wa_number}?text=VERIFIKASI%20{nonce}`.
+- **Public Endpoint Kontak Toko (`app/api/routes/public.py`)**:
+  - `GET /public/kontak-toko`: Public endpoint (tanpa autentikasi) untuk mendapatkan nomor WhatsApp toko dengan in-memory cache ±60 detik (`app_cache`).
+- **Test Suite (`tests/test_whatsapp_chatbot_routes.py`)**:
+  - Ditambahkan pengujian unit & integrasi lengkap untuk status, QR, ganti nomor, deeplink dinamis, dan caching publik (8 unit test).
+
 ### 001ab. Fitur Mutasi Profil Buyer & Forgot/Reset Password via Email
 - **Konfigurasi & Dependencies**:
   - Menambahkan package `aiosmtplib` ke `requirements.txt`.

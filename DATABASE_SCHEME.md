@@ -24,9 +24,9 @@ Table users {
   email varchar(100) [unique, null]
   phone_number varchar(20) [null]
   password_hash varchar(255) [not null]
-  avatar_url varchar(500) [null, note: 'Cloudinary secure HTTPS URL']
+  avatar_url text [null, note: 'Cloudinary secure HTTPS URL']
   role_id int [ref: > roles.id, not null]
-  is_active boolean [default: true]
+  is_active boolean [default: true, not null]
   nomor_wa_admin varchar(20) [null]
   handles_takeover boolean [default: false, not null, note: 'Siap menerima human takeover']
   created_at timestamp [default: `now()`]
@@ -39,7 +39,7 @@ Table buyers {
   email varchar(100) [unique, not null]
   phone varchar(20) [unique, not null]
   password_hash varchar(255) [not null]
-  avatar_url varchar(500) [null, note: 'Cloudinary secure HTTPS URL']
+  avatar_url text [null, note: 'Cloudinary secure HTTPS URL']
   is_verified boolean [default: false, not null]
   is_active boolean [default: true, not null]
   created_at timestamp [default: `now()`]
@@ -51,7 +51,7 @@ Table customers {
   nama varchar(100) [not null]
   nomor_wa varchar(20) [unique, not null]
   alamat text [null]
-  is_verified boolean [default: false]
+  is_verified boolean [default: false, not null]
   human_takeover_active boolean [default: false, not null]
   takeover_expires_at timestamp [null]
   created_at timestamp [default: `now()`]
@@ -83,7 +83,7 @@ Table suppliers {
   nomor_telepon varchar(20) [null]
   alamat text [null]
   kota varchar(50) [null]
-  is_active boolean [default: true]
+  is_active boolean [default: true, not null]
   created_at timestamp [default: `now()`]
   updated_at timestamp
 }
@@ -113,7 +113,7 @@ Table purchases {
   tanggal_diterima timestamp [null]
   total_harga decimal(15,2) [default: 0, not null]
   catatan text [null]
-  is_received boolean [default: false]
+  is_received boolean [default: false, not null]
   created_at timestamp [default: `now()`]
   updated_at timestamp
 }
@@ -129,19 +129,27 @@ Table purchase_items {
 }
 
 // 3. PRODUCTS, RECIPES & PRICING
+Table categories {
+  id int [pk, increment]
+  name varchar(100) [unique, not null]
+  description text [null]
+  created_at timestamp [default: `now()`]
+}
+
 Table products {
   id int [pk, increment]
+  category_id int [ref: > categories.id, null]
   nama_produk varchar(100) [not null]
-  deskripsi varchar(500) [null]
+  deskripsi text [null]
   kategori varchar(50) [null]
   harga_jual decimal(10,2) [null]
   hpp_total decimal(10,2) [default: 0, null]
   markup_percentage decimal(5,4) [null]
-  is_active boolean [default: true]
+  is_active boolean [default: true, not null]
   is_available boolean [default: true, not null, note: 'Status ketersediaan manual dari seller']
-  image_url varchar(500) [null]
+  image_url text [null]
   slug varchar(100) [unique, null]
-  rating float [default: 0.0, not null]
+  rating decimal(3,2) [default: 0.00, not null]
   review_count int [default: 0, not null]
   sold_count int [default: 0, not null]
   is_featured boolean [default: false, not null]
@@ -175,11 +183,11 @@ Table price_histories {
 Table orders {
   id int [pk, increment]
   customer_id int [ref: > customers.id, not null]
-  status enum('pending','in_process','ready','delivered','picked_up','cancelled') [default: 'pending', not null]
+  status enum('pending','in_process','ready','delivered','picked_up','completed','cancelled','refunded') [default: 'pending', not null]
   metode_pengiriman enum('pickup','delivery') [not null]
   total_harga_pesanan decimal(10,2) [default: 0, not null]
   created_via varchar(50) [default: 'chatbot', not null]
-  notes varchar(1000) [null, note: 'Catatan pesanan kustom / instruksi pengiriman']
+  notes text [null, note: 'Catatan pesanan kustom / instruksi pengiriman']
   due_date timestamp [null, note: 'Tenggat waktu pengerjaan / tanggal pengiriman']
   payment_method_preference varchar(50) [null, note: 'Preferensi metode bayar']
   created_at timestamp [default: `now()`]
@@ -293,3 +301,36 @@ Menyimpan relasi produk yang disukai (wishlist) oleh buyer.
 | `created_at` | DateTime | Default `NOW()` |
 
 *Note: Tabel `wishlists` memiliki unique constraint pada (`buyer_id`, `product_id`).*
+
+---
+
+## 3. PostgreSQL Trigram Indexing (`pg_trgm`)
+
+Untuk mengoptimalkan query pencarian substring (`ILIKE '%query%'`) pada tabel bervolume besar, database PostgreSQL menggunakan ekstensi `pg_trgm` dan **GIN Trigram Index**:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- Index GIN Trigram
+CREATE INDEX IF NOT EXISTS ix_products_nama_produk_trgm ON products USING gin (nama_produk gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_products_deskripsi_trgm ON products USING gin (deskripsi gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_categories_name_trgm ON categories USING gin (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_users_username_trgm ON users USING gin (username gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_users_email_trgm ON users USING gin (email gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_buyers_name_trgm ON buyers USING gin (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_buyers_email_trgm ON buyers USING gin (email gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_buyers_phone_trgm ON buyers USING gin (phone gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_customers_nama_trgm ON customers USING gin (nama gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_customers_nomor_wa_trgm ON customers USING gin (nomor_wa gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_stock_items_nama_item_trgm ON stock_items USING gin (nama_item gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_suppliers_nama_supplier_trgm ON suppliers USING gin (nama_supplier gin_trgm_ops);
+```
+
+---
+
+## 4. Alembic Migrations
+
+Manajemen skema database terkelola via Alembic (`alembic.ini` dan `alembic/versions/`):
+- `alembic/versions/20260919_01_pg_trgm_and_schema_optimization.py`: Mengaktifkan `pg_trgm`, GIN Trigram indexes, konversi kolom `TEXT`, presisi `Numeric(3, 2)` pada rating produk, dan constraint `NOT NULL` pada status boolean.
+- Pipeline aplikasi otomatis menjalankan DDL idempotent di `app/core/migrations.py` saat startup.
+

@@ -290,6 +290,8 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
 | `POST` | `/buyers/me/wishlist/{id}` | Buyer Authenticated | Tambah produk ke wishlist |
 | `DELETE` | `/buyers/me/wishlist/{id}`| Buyer Authenticated | Hapus produk dari wishlist |
 
+---
+
 ### J. Manajemen Pembeli / Admin Buyer (`/admin/buyers`)
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
@@ -297,3 +299,22 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
 | `GET` | `/admin/buyers` | Admin / Owner | List semua buyer dengan pagination |
 | `GET` | `/admin/buyers/{id}` | Admin / Owner | Ambil detail satu buyer spesifik |
 | `DELETE`| `/admin/buyers/{id}` | Admin / Owner | Hapus permanen buyer & seluruh wishlist/relasinya |
+
+---
+
+### K. Manajemen WhatsApp Chatbot Admin (`/admin/whatsapp`)
+
+| Method | Endpoint | Auth / Permission | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/admin/whatsapp/status` | Admin / Owner (`require_admin_or_owner`) | Mengambil status koneksi WhatsApp chatbot dari microservice chatbot |
+| `GET` | `/admin/whatsapp/qr` | Khusus Owner (`require_owner`) | Mengambil gambar QR code autentikasi WhatsApp (`image/png`, `Cache-Control: no-store`) |
+| `POST` | `/admin/whatsapp/ganti-nomor` | Khusus Owner (`require_owner`) | Meminta chatbot mereset sesi dan berganti nomor (timeout >= 65s) dengan pencatatan log audit |
+
+---
+
+### L. Public Kontak & Toko (`/public`)
+
+| Method | Endpoint | Auth / Permission | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/public/kontak-toko` | Public (Tanpa login) | Mengambil nomor WhatsApp aktif toko/chatbot dengan in-memory caching ±60 detik |
+

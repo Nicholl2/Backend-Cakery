@@ -1,23 +1,50 @@
 
+# Python Virtual Environments
 venv/
 .venv/
 env/
+ENV/
 
+# Environment Variables & Secrets
 .env
+.env.*
+!.env.example
 
+# Temporary & Local Scratch Files
 TODO.txt
 app.zip
-
 app/seed_admin.py
 app/seed_data.py
+*.log
 
+# Bytecode & Caching
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
 .pytest_cache/
 .coverage
 htmlcov/
+.tox/
+.nox/
 
+# Operating System Files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+
+# IDE & Editor Files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Static Uploads / User-generated Media (preserve folder structure)
+static/products/*
+!static/products/.gitkeep
+static/avatars/*
+

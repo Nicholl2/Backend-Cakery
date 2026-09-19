@@ -479,3 +479,37 @@ Fitur self-service bagi Buyer yang sudah terautentikasi untuk mengelola kredensi
    - Token dengan role selain `buyer` ditolak dengan `HTTP 401 (User is not a buyer)`.
    - Request mutasi tanpa token ditolak dengan `HTTP 401`.
    - Endpoint forgot/reset password via email bersifat **Public** tanpa autentikasi.
+
+---
+
+## 25. Integrasi WhatsApp Chatbot Management & Kontak Publik
+
+1. **Pengambilan Nomor Dinamis (`fetch_whatsapp_number()`)**:
+   - Sistem tidak lagi meng-hardcode nomor chatbot WhatsApp melainkan mengambil nomor aktif secara runtime via `GET {chatbot_url}/status` (timeout 5s).
+   - Jika chatbot offline/error, sistem otomatis fallback ke konfigurasi `settings.CHATBOT_WA_NUMBER` (default: `"6287881273160"`).
+   - Digunakan oleh alur verifikasi `start_wa_verification()` untuk membentuk deeplink `https://wa.me/{wa_number}?text=VERIFIKASI%20{nonce}`.
+
+2. **Manajemen Admin WhatsApp (`/admin/whatsapp`)**:
+   - `GET /admin/whatsapp/status`: Akses Admin/Owner (`require_admin_or_owner`) untuk memantau status koneksi chatbot.
+   - `GET /admin/whatsapp/qr`: Akses khusus Owner (`require_owner`) untuk mengambil QR code autentikasi PNG dengan header `Cache-Control: no-store`.
+   - `POST /admin/whatsapp/ganti-nomor`: Akses khusus Owner (`require_owner`) untuk mereset nomor. Sebelum memicu reset ke chatbot, sistem mengambil status nomor lama untuk dicatat pada log audit (siapa user, timestamp UTC, nomor lama) dan memanggil `POST {chatbot_url}/ganti-nomor` dengan timeout 70 detik (>= 65s).
+
+3. **Public Kontak Toko (`GET /public/kontak-toko`)**:
+   - Endpoint public tanpa autentikasi untuk mengambil nomor WhatsApp aktif toko/chatbot.
+   - Dilengkapi in-memory caching (`app_cache`) selama ±60 detik untuk mengurangi beban network HTTP ke chatbot.
+
+---
+
+## 26. Optimasi Query PostgreSQL, pg_trgm Trigram Indexing & ORM Eager Loading
+
+1. **GIN Trigram Indexing (`pg_trgm`)**:
+   - Ekstensi `pg_trgm` diaktifkan untuk mengoptimasi query pencarian teks substring (`ILIKE '%query%'`) pada kolom-kolom tabel `products`, `categories`, `users`, `buyers`, `customers`, `stock_items`, dan `suppliers`.
+   - Menghindari full table scan dan menjaga latensi query sub-detik saat volume data membesar.
+
+2. **Standardisasi Tipe Data Skema Database**:
+   - Kolom deskripsi dan URL gambar distandarkan menggunakan tipe `TEXT` (menghindari limitasi buatan `VARCHAR(500)`).
+   - Rating produk distandarkan menggunakan `Numeric(3, 2)` (menghindari binary rounding bug pada float).
+   - Seluruh status boolean ditegaskan dengan `NOT NULL` dan default value.
+
+3. **Pencegahan Masalah N+1 Query**:
+   - Repository `Product`, `Purchase`, `Wishlist`, dan `Order` menggunakan `selectinload` untuk relasi bersarang (`category_rel`, `recipes.stock_item`, `price_histories`, `supplier`, `purchase_items.stock_item`, `customer`, `invoice.payments`).
