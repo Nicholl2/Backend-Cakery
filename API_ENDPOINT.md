@@ -306,9 +306,9 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/admin/whatsapp/status` | Admin / Owner (`require_admin_or_owner`) | Mengambil status koneksi WhatsApp chatbot dari microservice chatbot |
-| `GET` | `/admin/whatsapp/qr` | Khusus Owner (`require_owner`) | Mengambil gambar QR code autentikasi WhatsApp (`image/png`, `Cache-Control: no-store`) |
-| `POST` | `/admin/whatsapp/ganti-nomor` | Khusus Owner (`require_owner`) | Meminta chatbot mereset sesi dan berganti nomor (timeout >= 65s) dengan pencatatan log audit |
+| `GET` | `/admin/whatsapp/status` | Admin / Owner (`require_admin_or_owner`) | Mengambil status koneksi WhatsApp chatbot: `{"keadaan": "tersambung" \| "menunggu_scan" \| "terputus", "nomor": str \| null, "profile_name": str \| null}` |
+| `GET` | `/admin/whatsapp/qr` | Khusus Owner (`require_owner`) | Mengambil gambar QR code autentikasi WhatsApp (`image/png`, `Cache-Control: no-store`). 404 jika belum siap/sudah scan, 503 jika timeout |
+| `POST` | `/admin/whatsapp/ganti-nomor` | Khusus Owner (`require_owner`) | Meminta chatbot mereset sesi dan berganti nomor (timeout >= 65s) dengan pencatatan log audit (`{"status": "ok"}`) |
 
 ---
 
@@ -316,5 +316,5 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/public/kontak-toko` | Public (Tanpa login) | Mengambil nomor WhatsApp aktif toko/chatbot dengan in-memory caching ±60 detik |
+| `GET` | `/public/kontak-toko` | Public (Tanpa login) | Mengambil nomor WhatsApp aktif toko/chatbot (`{"whatsapp": "..."}`) dengan in-memory caching ±60 detik (fallback ke config jika offline) |
 

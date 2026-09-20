@@ -486,13 +486,14 @@ Fitur self-service bagi Buyer yang sudah terautentikasi untuk mengelola kredensi
 
 1. **Pengambilan Nomor Dinamis (`fetch_whatsapp_number()`)**:
    - Sistem tidak lagi meng-hardcode nomor chatbot WhatsApp melainkan mengambil nomor aktif secara runtime via `GET {chatbot_url}/status` (timeout 5s).
-   - Jika chatbot offline/error, sistem otomatis fallback ke konfigurasi `settings.CHATBOT_WA_NUMBER` (default: `"6287881273160"`).
+   - Jika keadaan `tersambung` dan nomor tersedia, gunakan nomor live tersebut.
+   - Jika chatbot offline/error/keadaan `terputus` atau `menunggu_scan`, sistem otomatis fallback ke konfigurasi `settings.CHATBOT_WA_NUMBER` (default: `"6287881273160"`).
    - Digunakan oleh alur verifikasi `start_wa_verification()` untuk membentuk deeplink `https://wa.me/{wa_number}?text=VERIFIKASI%20{nonce}`.
 
 2. **Manajemen Admin WhatsApp (`/admin/whatsapp`)**:
-   - `GET /admin/whatsapp/status`: Akses Admin/Owner (`require_admin_or_owner`) untuk memantau status koneksi chatbot.
+   - `GET /admin/whatsapp/status`: Akses Admin/Owner (`require_admin_or_owner`) untuk memantau status koneksi chatbot. Meneruskan data realtime dari chatbot (`keadaan`: `"tersambung"` | `"menunggu_scan"` | `"terputus"`, `nomor`, `profile_name`).
    - `GET /admin/whatsapp/qr`: Akses khusus Owner (`require_owner`) untuk mengambil QR code autentikasi PNG dengan header `Cache-Control: no-store`.
-   - `POST /admin/whatsapp/ganti-nomor`: Akses khusus Owner (`require_owner`) untuk mereset nomor. Sebelum memicu reset ke chatbot, sistem mengambil status nomor lama untuk dicatat pada log audit (siapa user, timestamp UTC, nomor lama) dan memanggil `POST {chatbot_url}/ganti-nomor` dengan timeout 70 detik (>= 65s).
+   - `POST /admin/whatsapp/ganti-nomor`: Akses khusus Owner (`require_owner`) untuk mereset nomor. Sebelum memicu reset ke chatbot, sistem mengambil status nomor lama untuk dicatat pada log audit (siapa user, timestamp UTC, nomor lama) dan memanggil `POST {chatbot_url}/ganti-nomor` dengan timeout 70 detik (>= 65s). Setelah reset, chatbot masuk ke state `"menunggu_scan"`.
 
 3. **Public Kontak Toko (`GET /public/kontak-toko`)**:
    - Endpoint public tanpa autentikasi untuk mengambil nomor WhatsApp aktif toko/chatbot.

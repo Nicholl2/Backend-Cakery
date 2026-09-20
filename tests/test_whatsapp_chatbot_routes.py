@@ -99,7 +99,21 @@ async def test_fetch_whatsapp_number_connected():
 async def test_fetch_whatsapp_number_disconnected_fallback():
     mock_resp = httpx.Response(
         200,
-        json={"keadaan": "terputus", "nomor": None}
+        json={"keadaan": "terputus", "nomor": None, "profile_name": None}
+    )
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with patch("app.services.chatbot_notify.httpx.AsyncClient", create_mock_client_ctx(mock_client)):
+        num = await fetch_whatsapp_number()
+        assert num == (settings.CHATBOT_WA_NUMBER or "6287881273160")
+
+
+@pytest.mark.asyncio
+async def test_fetch_whatsapp_number_waiting_scan_fallback():
+    mock_resp = httpx.Response(
+        200,
+        json={"keadaan": "menunggu_scan", "nomor": None, "profile_name": None}
     )
     mock_client = AsyncMock()
     mock_client.get.return_value = mock_resp
@@ -133,21 +147,30 @@ async def test_admin_whatsapp_status_auth(test_session, owner_token, admin_token
         res = await client.get("/admin/whatsapp/status", headers={"Authorization": f"Bearer {staff_token}"})
         assert res.status_code == status.HTTP_403_FORBIDDEN
 
-        # 3. Admin Token (Role level 2) -> 200 (Mock chatbot response)
-        mock_resp = httpx.Response(200, json={"keadaan": "tersambung", "nomor": "6281122334455"})
+        # 3. Admin Token (Role level 2) -> 200 (Mock chatbot response with profile_name)
+        mock_resp = httpx.Response(200, json={
+            "keadaan": "tersambung",
+            "nomor": "6281122334455",
+            "profile_name": "Toti Cakery Official"
+        })
         mock_ext_client = AsyncMock()
         mock_ext_client.get.return_value = mock_resp
 
         with patch("app.api.routes.admin_whatsapp.httpx.AsyncClient", create_mock_client_ctx(mock_ext_client)):
             res = await client.get("/admin/whatsapp/status", headers={"Authorization": f"Bearer {admin_token}"})
             assert res.status_code == status.HTTP_200_OK
-            assert res.json() == {"keadaan": "tersambung", "nomor": "6281122334455"}
+            assert res.json() == {
+                "keadaan": "tersambung",
+                "nomor": "6281122334455",
+                "profile_name": "Toti Cakery Official"
+            }
 
         # 4. Owner Token (Role level 1) -> 200
         with patch("app.api.routes.admin_whatsapp.httpx.AsyncClient", create_mock_client_ctx(mock_ext_client)):
             res = await client.get("/admin/whatsapp/status", headers={"Authorization": f"Bearer {owner_token}"})
             assert res.status_code == status.HTTP_200_OK
             assert res.json()["nomor"] == "6281122334455"
+            assert res.json()["profile_name"] == "Toti Cakery Official"
 
         # 5. Chatbot Error -> 503
         mock_err_client = AsyncMock()
@@ -155,6 +178,60 @@ async def test_admin_whatsapp_status_auth(test_session, owner_token, admin_token
         with patch("app.api.routes.admin_whatsapp.httpx.AsyncClient", create_mock_client_ctx(mock_err_client)):
             res = await client.get("/admin/whatsapp/status", headers={"Authorization": f"Bearer {owner_token}"})
             assert res.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_admin_whatsapp_status_all_states(test_session, owner_token):
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # State 1: tersambung
+        mock_resp_connected = httpx.Response(200, json={
+            "keadaan": "tersambung",
+            "nomor": "6281122334455",
+            "profile_name": "Toti Cakery Bot"
+        })
+        mock_ext_client = AsyncMock()
+        mock_ext_client.get.return_value = mock_resp_connected
+
+        with patch("app.api.routes.admin_whatsapp.httpx.AsyncClient", create_mock_client_ctx(mock_ext_client)):
+            res = await client.get("/admin/whatsapp/status", headers={"Authorization": f"Bearer {owner_token}"})
+            assert res.status_code == status.HTTP_200_OK
+            data = res.json()
+            assert data["keadaan"] == "tersambung"
+            assert data["nomor"] == "6281122334455"
+            assert data["profile_name"] == "Toti Cakery Bot"
+
+        # State 2: menunggu_scan
+        mock_resp_waiting = httpx.Response(200, json={
+            "keadaan": "menunggu_scan",
+            "nomor": None,
+            "profile_name": None
+        })
+        mock_ext_client.get.return_value = mock_resp_waiting
+
+        with patch("app.api.routes.admin_whatsapp.httpx.AsyncClient", create_mock_client_ctx(mock_ext_client)):
+            res = await client.get("/admin/whatsapp/status", headers={"Authorization": f"Bearer {owner_token}"})
+            assert res.status_code == status.HTTP_200_OK
+            data = res.json()
+            assert data["keadaan"] == "menunggu_scan"
+            assert data["nomor"] is None
+            assert data["profile_name"] is None
+
+        # State 3: terputus
+        mock_resp_disconnected = httpx.Response(200, json={
+            "keadaan": "terputus",
+            "nomor": None,
+            "profile_name": None
+        })
+        mock_ext_client.get.return_value = mock_resp_disconnected
+
+        with patch("app.api.routes.admin_whatsapp.httpx.AsyncClient", create_mock_client_ctx(mock_ext_client)):
+            res = await client.get("/admin/whatsapp/status", headers={"Authorization": f"Bearer {owner_token}"})
+            assert res.status_code == status.HTTP_200_OK
+            data = res.json()
+            assert data["keadaan"] == "terputus"
+            assert data["nomor"] is None
+            assert data["profile_name"] is None
 
 
 # ── 3. ADMIN WHATSAPP QR ENDPOINT ───────────────────────────────────────────
