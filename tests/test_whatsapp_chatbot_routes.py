@@ -54,7 +54,10 @@ async def test_session():
     yield TestSessionLocal
 
     app.dependency_overrides.clear()
-    await test_engine.dispose()
+    try:
+        await test_engine.dispose()
+    except RuntimeError:
+        pass  # Suppress aiosqlite "Event loop is closed" during teardown
 
 
 @pytest.fixture
@@ -302,7 +305,7 @@ async def test_admin_whatsapp_ganti_nomor(test_session, owner_token, admin_token
              patch("app.api.routes.admin_whatsapp.logger.info") as mock_logger_info:
             res = await client.post("/admin/whatsapp/ganti-nomor", headers={"Authorization": f"Bearer {owner_token}"})
             assert res.status_code == status.HTTP_200_OK
-            assert res.json() == {"status": "ok"}
+            assert res.json() == {"status": "ok", "nomor_lama": "628999888777"}
             # Verify audit log was recorded
             mock_logger_info.assert_called()
             log_str = " ".join([str(call.args) for call in mock_logger_info.call_args_list])
