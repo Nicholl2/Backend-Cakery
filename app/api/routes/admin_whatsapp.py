@@ -159,7 +159,7 @@ async def ganti_nomor_whatsapp(
         async with httpx.AsyncClient(timeout=70.0) as client:
             resp = await client.post(f"{base_url}/ganti-nomor", headers=headers)
             if resp.status_code in (200, 201):
-                return {"status": "ok"}
+                return {"status": "ok", "nomor_lama": old_number}
             else:
                 logger.error(
                     f"[ADMIN_WA_GANTI_NOMOR_ERROR] Chatbot returned {resp.status_code}: {resp.text}"

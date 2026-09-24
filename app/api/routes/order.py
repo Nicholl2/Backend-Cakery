@@ -30,6 +30,7 @@ from app.schemas.order import (
 from app.repositories import customer_repo, order_repo
 from app.services import order_service
 from app.utils.pdf_generator import generate_order_invoice_pdf
+from app.services.chatbot_notify import fetch_whatsapp_number
 
 router = APIRouter(
     tags=["Orders"],
@@ -348,7 +349,10 @@ async def download_order_invoice_pdf(
     # Attach payment amounts & ensure item product names
     await order_service._attach_payment_amounts(db, order)
 
-    pdf_buffer = generate_order_invoice_pdf(order)
+    # Fetch dynamic store WhatsApp number for invoice footer
+    store_wa = await fetch_whatsapp_number()
+
+    pdf_buffer = generate_order_invoice_pdf(order, store_whatsapp=store_wa)
 
     filename = f"Invoice-TotiCakery-{id}.pdf"
     headers = {

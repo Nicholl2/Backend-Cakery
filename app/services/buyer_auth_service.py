@@ -10,11 +10,47 @@ from sqlalchemy import select
 from app.repositories import buyer_repo, otp_repo, user_repo
 from app.models.buyer import Buyer
 from app.core.security import hash_password, verify_password, create_access_token
+from app.core.cache import app_cache
 from app.models.otp_code import OTPCode
 from app.core.config import settings
 from app.utils.phone import normalize_phone
 from app.utils.cloudinary_helper import upload_image_to_cloudinary
 from app.services.chatbot_notify import fetch_whatsapp_number
+
+# ── BUYER LOGIN ATTEMPT TRACKING ─────────────────────────────────────────────
+_MAX_BUYER_LOGIN_ATTEMPTS = 5
+_BUYER_LOCKOUT_SECONDS = 15 * 60  # 15 menit
+
+
+def _buyer_login_key(identifier: str) -> str:
+    return f"login_attempts:buyer:{identifier.lower().strip()}"
+
+
+def _check_buyer_lockout(identifier: str) -> None:
+    """Raise 429 if the buyer identifier has exceeded max login attempts."""
+    key = _buyer_login_key(identifier)
+    attempts = app_cache.get(key)
+    if attempts is not None and attempts >= _MAX_BUYER_LOGIN_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Terlalu banyak percobaan login gagal. "
+                "Akun dikunci sementara selama 15 menit. Silakan coba lagi nanti."
+            ),
+        )
+
+
+def _record_buyer_failed_login(identifier: str) -> None:
+    """Increment failed buyer login attempt counter."""
+    key = _buyer_login_key(identifier)
+    current = app_cache.get(key) or 0
+    app_cache.set(key, current + 1, ttl=_BUYER_LOCKOUT_SECONDS)
+
+
+def _clear_buyer_login_attempts(identifier: str) -> None:
+    """Reset buyer login attempt counter on successful login."""
+    key = _buyer_login_key(identifier)
+    app_cache.invalidate(key)
 
 # ── GENERAL OTP HELPERS ───────────────────────────────────────────────────────
 
@@ -385,18 +421,24 @@ async def register_buyer(
 
 async def login_buyer_password(db: AsyncSession, email: str, password: str) -> dict:
     """Login buyer via email and password"""
+    _check_buyer_lockout(email)
+
     buyer = await buyer_repo.get_buyer_by_email(db, email)
     if not buyer:
+        _record_buyer_failed_login(email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
         )
         
     if not verify_password(password, buyer.password_hash):
+        _record_buyer_failed_login(email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
         )
+
+    _clear_buyer_login_attempts(email)
         
     # Generate JWT
     access_token = create_access_token(
@@ -421,18 +463,24 @@ async def login_buyer_password(db: AsyncSession, email: str, password: str) -> d
 async def login_buyer_phone(db: AsyncSession, phone: str, password: str) -> dict:
     """Login buyer via phone number and password"""
     phone = normalize_phone(phone)
+    _check_buyer_lockout(phone)
+
     buyer = await buyer_repo.get_buyer_by_phone(db, phone)
     if not buyer or not buyer.is_active:
+        _record_buyer_failed_login(phone)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid phone number or password"
         )
         
     if not verify_password(password, buyer.password_hash):
+        _record_buyer_failed_login(phone)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid phone number or password"
         )
+
+    _clear_buyer_login_attempts(phone)
         
     # Generate JWT
     access_token = create_access_token(

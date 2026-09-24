@@ -56,7 +56,7 @@ def get_payment_badge_color(status_str: str) -> tuple[colors.Color, colors.Color
         return colors.HexColor("#FEE2E2"), colors.HexColor("#991B1B")  # Rose/Red
 
 
-def generate_order_invoice_pdf(order: Order) -> io.BytesIO:
+def generate_order_invoice_pdf(order: Order, store_whatsapp: str = "") -> io.BytesIO:
     """
     Menghasilkan file PDF Invoice pesanan Toti Cakery dalam format A4.
     Mengembalikan objek io.BytesIO yang berisi byte PDF.
@@ -558,6 +558,16 @@ def generate_order_invoice_pdf(order: Order) -> io.BytesIO:
             footer_style
         ),
         Spacer(1, 2),
+    ]
+    if store_whatsapp:
+        footer_elements.append(
+            Paragraph(
+                f"Hubungi kami via WhatsApp: <b>{store_whatsapp}</b>",
+                footer_style
+            )
+        )
+        footer_elements.append(Spacer(1, 2))
+    footer_elements += [
         Paragraph(
             f"Dicetak pada: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')} &bull; ID Pesanan: #{order.id}",
             footer_style
