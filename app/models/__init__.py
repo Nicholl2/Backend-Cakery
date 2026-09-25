@@ -14,6 +14,7 @@ from .payment import Payment
 from .review import Review
 from .buyer import Buyer
 from .otp_code import OTPCode
+from .notification import Notification
 
 __all__ = [
     "Base",
@@ -38,4 +39,5 @@ __all__ = [
     "Review",
     "Buyer",
     "OTPCode",
+    "Notification",
 ]

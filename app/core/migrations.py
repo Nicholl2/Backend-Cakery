@@ -329,6 +329,35 @@ async def ensure_product_images_table(conn: AsyncConnection):
         pass
 
 
+async def ensure_notification_table(conn: AsyncConnection):
+    """
+    Ensure notifications table exists with proper indices on PostgreSQL.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id SERIAL PRIMARY KEY,
+            recipient_buyer_id INTEGER REFERENCES buyers(id) ON DELETE CASCADE,
+            recipient_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            type VARCHAR(50) NOT NULL,
+            order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
+            actor_type VARCHAR(20),
+            actor_id INTEGER,
+            metadata_json TEXT,
+            read_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+        );
+    """))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notifications_recipient_buyer_id ON notifications (recipient_buyer_id);"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notifications_recipient_user_id ON notifications (recipient_user_id);"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notifications_type ON notifications (type);"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notifications_order_id ON notifications (order_id);"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notifications_read_at ON notifications (read_at);"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notifications_created_at ON notifications (created_at);"))
+
+
 async def run_auto_migrations(conn: AsyncConnection):
     """
     Wrapper to run all auto-migrations sequentially on a given connection.
@@ -344,10 +373,5 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_review_columns(conn)
     await ensure_trigram_and_schema_optimizations(conn)
     await ensure_product_images_table(conn)
-
-
-
-
-
-
+    await ensure_notification_table(conn)
 

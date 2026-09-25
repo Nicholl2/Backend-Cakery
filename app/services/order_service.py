@@ -500,6 +500,8 @@ async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCre
             payment_method_preference=data.payment_method_preference,
         )
         await _attach_payment_amounts(db, order)
+        from app.services.notification_service import notify_order_created
+        await notify_order_created(db, order, actor_buyer=buyer)
         return order
     except HTTPException:
         raise
@@ -648,12 +650,16 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
                         payment.payment_status = PaymentStatusEnum.refunded
                         payment.updated_at = datetime.now(timezone.utc)
 
+    old_status_val = order.status.value
     order.status = new_status_enum
     await db.commit()
 
     # Re-query order with details to avoid lazy loading issues
     order_refetched = await order_repo.get_order_with_details(db, order_id)
     await _attach_payment_amounts(db, order_refetched)
+
+    from app.services.notification_service import notify_order_status_updated
+    await notify_order_status_updated(db, order_refetched, old_status_val, new_status)
 
     if new_status == "ready":
         from app.services.chatbot_notify import notify_chatbot_order_event
