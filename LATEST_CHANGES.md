@@ -6,7 +6,35 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001af. Implementasi Fitur Upload Multiple Images pada Review Produk oleh Buyer
+- **Model SQLAlchemy `ReviewImage` & Relasi Cascading (`app/models/review.py`, `app/models/__init__.py`)**:
+  - Model baru `ReviewImage(Base)` dengan tabel `review_images`:
+    * `id`: Integer (PK, index)
+    * `review_id`: Integer (FK ke `reviews.id` dengan `ondelete="CASCADE"`, nullable=False, index)
+    * `image_url`: Text (nullable=False, Cloudinary secure HTTPS URL)
+    * `created_at`: DateTime (timezone=True, default=now())
+  - Relasi pada model `Review`:
+    `images = relationship("ReviewImage", back_populates="review", cascade="all, delete-orphan", lazy="selectin", order_by="ReviewImage.id")`
+- **Alembic & Startup Auto-Migrations (`alembic/versions/20260925_02_add_review_images_table.py`, `app/core/migrations.py`)**:
+  - Dibuat skrip migrasi Alembic baru (`20260925_02_add_review_images_table.py`) untuk pembuatan tabel `review_images` beserta index foreign key.
+  - Ditambahkan fungsi DDL `ensure_review_images_table(conn)` pada `app/core/migrations.py` yang dipanggil otomatis saat startup lifespan.
+- **Skema Pydantic (`app/schemas/review.py`)**:
+  - Skema `ReviewImageOut(BaseModel)`: `id: int`, `review_id: Optional[int]`, `image_url: str`, `created_at: Optional[datetime]`.
+  - Skema `ReviewOut`: Ditambahkan field `images: list[ReviewImageOut] = []`.
+- **Repository Eager Loading & ORM Optimization (`app/repositories/review_repo.py`)**:
+  - Seluruh fungsi query review (`get_by_id`, `get_by_product`, `get_all`, `get_latest`, `get_by_order_and_product`) ditambahkan `selectinload(Review.images)` dan `.execution_options(populate_existing=True)` untuk mencegah N+1 Query problem.
+  - Ditambahkan fungsi repository galeri gambar ulasan: `add_review_images`, `get_review_image`, dan `delete_review_image`.
+- **Service & API Endpoints (`app/services/review_service.py`, `app/api/routes/review.py`)**:
+  - `POST /reviews/`: Mendukung pembuatan review baik via format JSON standar (`ReviewCreate`) maupun `multipart/form-data` dengan upload multiple foto (`images`). Seluruh file di-stream langsung secara *in-memory* dan paralel (`asyncio.gather`) ke Cloudinary folder `toti-cakery/reviews/`.
+  - `POST /reviews/{review_id}/images`: Mengunggah foto baru ke ulasan yang sudah ada (khusus Buyer pemilik ulasan).
+  - `DELETE /reviews/{review_id}/images/{image_id}`: Menghapus foto tertentu dari ulasan (khusus pemilik ulasan atau Admin/Owner) serta membersihkan asset dari storage Cloudinary (`delete_image_from_cloudinary`).
+  - `DELETE /reviews/{review_id}`: Saat ulasan dihapus, seluruh foto terkait di Cloudinary ikut dibersihkan otomatis.
+- **Automated Tests Suite (`tests/test_review_multiple_images.py`)**:
+  - Pengujian pembuatan review dengan upload multiple image (multipart form-data), backward compatibility JSON payload, penambahan foto baru, penghapusan foto, serta proteksi hak akses / BOLA (Broken Object Level Authorization).
+  - 100% test suite backend lulus (**78 passed**).
+
 ### 001ae. Implementasi Fitur Multiple Product Images, Cloudinary Cloud Uploader & Resiliensi Order Stats
+
 - **Model SQLAlchemy `ProductImage` & Relasi Cascading (`app/models/product.py`)**:
   - Model `ProductImage(Base)` terhubung ke `products.id` via Foreign Key dengan `ondelete="CASCADE"`.
   - Field `ProductImage`: `id`, `product_id`, `image_url`, `is_primary` (Boolean, default=False), `created_at`.

@@ -52,6 +52,15 @@ class ReviewUpdate(BaseModel):
         return self
 
 
+class ReviewImageOut(BaseModel):
+    id: int
+    review_id: Optional[int] = None
+    image_url: str
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ReviewOut(BaseModel):
     id: int
     order_id: int
@@ -61,6 +70,7 @@ class ReviewOut(BaseModel):
     komentar: Optional[str] = None
     comment: Optional[str] = None
     created_at: datetime
+    images: list[ReviewImageOut] = Field(default_factory=list)
 
     # Direct name fields for frontend convenience
     product_name: Optional[str] = None
@@ -83,4 +93,5 @@ class ReviewOut(BaseModel):
         if self.customer_name is None and self.customer is not None:
             self.customer_name = getattr(self.customer, "nama", None)
         return self
+
 

@@ -190,12 +190,15 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/reviews/` | Buyer Auth | Buat ulasan produk baru. Wajib menyertakan `order_id`, `product_id`, `rating` (1-5), dan `comment` / `komentar`. **Validasi ketat**: Pesanan harus ada & berstatus selesai (`completed` / `delivered` / `picked_up`), produk harus merupakan item pesanan terkait, dan 1 item pesanan tidak dapat diulas lebih dari satu kali (*duplicate protection*). |
-| `GET` | `/reviews/latest` | Public | List ulasan terbaru secara global (query param `limit`, default 6) untuk Landing Page / Frontend tanpa memerlukan `product_id`. Eager-loading menyertakan `product_name` dan `customer_name` langsung pada response |
-| `GET` | `/reviews/product/{product_id}` | Public | List semua ulasan untuk produk tertentu (termasuk data buyer & pesanan) |
-| `GET` | `/reviews/{review_id}` | Public | Detail ulasan berdasarkan ID |
+| `POST` | `/reviews/` | Buyer Auth | Buat ulasan produk baru. Mendukung **JSON body** (`order_id`, `product_id`, `rating`, `comment`) maupun **multipart/form-data** dengan upload multiple file foto ulasan (`images`). Foto di-stream langsung ke folder Cloudinary `toti-cakery/reviews/`. **Validasi ketat**: Pesanan harus ada & berstatus selesai (`completed` / `delivered` / `picked_up`), produk harus merupakan item pesanan terkait, dan 1 item pesanan tidak dapat diulas lebih dari satu kali (*duplicate protection*). |
+| `POST` | `/reviews/{review_id}/images` | Buyer Author | Upload multiple foto baru ke ulasan yang sudah ada (khusus pemilik ulasan). File gambar maks 5MB/file (JPEG/PNG/WEBP). |
+| `DELETE` | `/reviews/{review_id}/images/{image_id}` | Buyer Author / Admin / Owner | Hapus salah satu foto dari ulasan produk dan otomatis menghapusnya dari storage Cloudinary. |
+| `GET` | `/reviews/latest` | Public | List ulasan terbaru secara global (query param `limit`, default 6) untuk Landing Page / Frontend tanpa memerlukan `product_id`. Eager-loading menyertakan `product_name`, `customer_name`, dan array `images: list[ReviewImageOut]` langsung pada response |
+| `GET` | `/reviews/product/{product_id}` | Public | List semua ulasan untuk produk tertentu (termasuk data buyer, pesanan, dan array `images`) |
+| `GET` | `/reviews/{review_id}` | Public | Detail ulasan berdasarkan ID lengkap dengan relasi `images` |
 | `PUT` | `/reviews/{review_id}` | Buyer Author | Edit rating / komentar ulasan milik sendiri |
-| `DELETE` | `/reviews/{review_id}` | Buyer Author / Admin / Owner | Hapus ulasan (otomatis rekalkulasi rata-rata rating produk) |
+| `DELETE` | `/reviews/{review_id}` | Buyer Author / Admin / Owner | Hapus ulasan beserta seluruh foto terkait (otomatis hapus dari Cloudinary dan rekalkulasi rata-rata rating produk) |
+
 
 
 ---

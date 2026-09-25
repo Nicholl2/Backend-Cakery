@@ -358,6 +358,28 @@ async def ensure_notification_table(conn: AsyncConnection):
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notifications_created_at ON notifications (created_at);"))
 
 
+async def ensure_review_images_table(conn: AsyncConnection):
+    """
+    Ensure 'review_images' table exists on PostgreSQL database.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    # 1. Create table if not exists
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS review_images (
+            id SERIAL PRIMARY KEY,
+            review_id INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+            image_url TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """))
+
+    # 2. Indices
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_review_images_id ON review_images (id);"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_review_images_review_id ON review_images (review_id);"))
+
+
 async def run_auto_migrations(conn: AsyncConnection):
     """
     Wrapper to run all auto-migrations sequentially on a given connection.
@@ -374,4 +396,6 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_trigram_and_schema_optimizations(conn)
     await ensure_product_images_table(conn)
     await ensure_notification_table(conn)
+    await ensure_review_images_table(conn)
+
 

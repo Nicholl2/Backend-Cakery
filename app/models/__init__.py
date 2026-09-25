@@ -11,7 +11,7 @@ from .expense import Expense
 from .customer import Customer
 from .order import Order, OrderItem, Invoice
 from .payment import Payment
-from .review import Review
+from .review import Review, ReviewImage
 from .buyer import Buyer
 from .otp_code import OTPCode
 from .notification import Notification
@@ -37,6 +37,7 @@ __all__ = [
     "Invoice",
     "Payment",
     "Review",
+    "ReviewImage",
     "Buyer",
     "OTPCode",
     "Notification",

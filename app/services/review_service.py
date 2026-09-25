@@ -1,4 +1,5 @@
-from fastapi import HTTPException, status
+import asyncio
+from fastapi import HTTPException, status, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from app.repositories import review_repo, buyer_repo, customer_repo, product_repo, order_repo
@@ -6,6 +7,7 @@ from app.schemas.review import ReviewCreate, ReviewUpdate
 from app.models.review import Review
 from app.models.order import OrderStatusEnum
 from app.utils.phone import get_phone_variants
+from app.utils.cloudinary_helper import upload_image_to_cloudinary, delete_image_from_cloudinary
 
 
 def _is_matching_phone(phone1: Optional[str], phone2: Optional[str]) -> bool:
@@ -40,7 +42,12 @@ async def get_or_create_customer_from_buyer(db: AsyncSession, buyer_id: int):
     return customer
 
 
-async def create_review(db: AsyncSession, buyer_id: int, data: ReviewCreate) -> Review:
+async def create_review(
+    db: AsyncSession,
+    buyer_id: int,
+    data: ReviewCreate,
+    files: Optional[list[UploadFile]] = None
+) -> Review:
     """Create a new review for a product with order completion and eligibility checks."""
     # 1. Verify product exists
     product = await product_repo.get_by_id(db, data.product_id)
@@ -90,7 +97,21 @@ async def create_review(db: AsyncSession, buyer_id: int, data: ReviewCreate) -> 
         )
 
     # 6. Create review
-    return await review_repo.create(db, customer.id, data)
+    review = await review_repo.create(db, customer.id, data)
+
+    # 7. Upload multiple images if provided
+    valid_files = [f for f in (files or []) if f and getattr(f, "filename", None)]
+    if valid_files:
+        upload_tasks = [
+            upload_image_to_cloudinary(f, folder="toti-cakery/reviews")
+            for f in valid_files
+        ]
+        secure_urls = await asyncio.gather(*upload_tasks)
+        await review_repo.add_review_images(db, review.id, secure_urls)
+        # Re-fetch review with eager-loaded images
+        review = await review_repo.get_by_id(db, review.id)
+
+    return review
 
 
 
@@ -143,6 +164,76 @@ async def update_review(
     return await review_repo.update(db, review, data)
 
 
+async def upload_review_images(
+    db: AsyncSession,
+    review_id: int,
+    buyer_id: int,
+    files: list[UploadFile],
+    is_admin_or_owner: bool = False
+) -> Review:
+    """Upload multiple images to an existing review (Buyer owner or Admin/Owner)."""
+    review = await get_review_or_404(db, review_id)
+
+    # Check authorization
+    if not is_admin_or_owner:
+        buyer = await buyer_repo.get_buyer_by_id(db, buyer_id)
+        if not buyer or not _is_matching_phone(review.customer.nomor_wa, buyer.phone):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Anda tidak memiliki izin untuk menambahkan foto pada ulasan ini."
+            )
+
+    valid_files = [f for f in (files or []) if f and getattr(f, "filename", None)]
+    if not valid_files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Minimal 1 file gambar yang valid wajib diunggah."
+        )
+
+    upload_tasks = [
+        upload_image_to_cloudinary(f, folder="toti-cakery/reviews")
+        for f in valid_files
+    ]
+    secure_urls = await asyncio.gather(*upload_tasks)
+    await review_repo.add_review_images(db, review.id, secure_urls)
+    
+    refetched = await review_repo.get_by_id(db, review.id)
+    return refetched
+
+
+async def delete_review_image(
+    db: AsyncSession,
+    review_id: int,
+    image_id: int,
+    buyer_id: int,
+    is_admin_or_owner: bool = False
+) -> dict:
+    """Delete a single review image from DB and Cloudinary (Buyer owner or Admin/Owner)."""
+    review = await get_review_or_404(db, review_id)
+
+    # Check authorization
+    if not is_admin_or_owner:
+        buyer = await buyer_repo.get_buyer_by_id(db, buyer_id)
+        if not buyer or not _is_matching_phone(review.customer.nomor_wa, buyer.phone):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Anda tidak memiliki izin untuk menghapus foto dari ulasan ini."
+            )
+
+    deleted_url = await review_repo.delete_review_image(db, review.id, image_id)
+    if not deleted_url:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Foto ulasan tidak ditemukan."
+        )
+
+    # Async best-effort deletion from Cloudinary
+    if deleted_url:
+        await delete_image_from_cloudinary(deleted_url)
+
+    return {"deleted": True, "review_id": review_id, "image_id": image_id}
+
+
 async def delete_review(
     db: AsyncSession,
     review_id: int,
@@ -160,5 +251,12 @@ async def delete_review(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Anda tidak memiliki izin untuk menghapus ulasan ini."
             )
+
+    # Clean up associated review images from Cloudinary
+    if review.images:
+        for img in review.images:
+            if img.image_url:
+                await delete_image_from_cloudinary(img.image_url)
             
     return await review_repo.delete(db, review)
+

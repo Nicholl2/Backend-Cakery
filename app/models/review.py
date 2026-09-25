@@ -23,6 +23,13 @@ class Review(Base):
     order = relationship("Order", lazy="selectin")
     product = relationship("Product", lazy="selectin")
     customer = relationship("Customer", lazy="selectin")
+    images = relationship(
+        "ReviewImage",
+        back_populates="review",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="ReviewImage.id",
+    )
 
     @property
     def comment(self) -> Optional[str]:
@@ -46,3 +53,19 @@ class Review(Base):
 
     def __repr__(self):
         return f"<Review(id={self.id}, order_id={self.order_id}, product_id={self.product_id}, rating={self.rating})>"
+
+
+class ReviewImage(Base):
+    __tablename__ = "review_images"
+
+    id = Column(Integer, primary_key=True, index=True)
+    review_id = Column(Integer, ForeignKey("reviews.id", ondelete="CASCADE"), nullable=False, index=True)
+    image_url = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    review = relationship("Review", back_populates="images")
+
+    def __repr__(self):
+        return f"<ReviewImage(id={self.id}, review_id={self.review_id}, image_url='{self.image_url}')>"
+

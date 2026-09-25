@@ -245,10 +245,18 @@ Table expenses {
 
 Table reviews {
   id int [pk, increment]
+  order_id int [ref: > orders.id, not null]
   product_id int [ref: > products.id, not null]
   customer_id int [ref: > customers.id, not null]
   rating int [not null, note: 'Nilai 1 s/d 5']
   komentar text [null]
+  created_at timestamp [default: `now()`]
+}
+
+Table review_images {
+  id int [pk, increment]
+  review_id int [ref: > reviews.id, not null]
+  image_url text [not null, note: 'Cloudinary secure HTTPS URL']
   created_at timestamp [default: `now()`]
 }
 
