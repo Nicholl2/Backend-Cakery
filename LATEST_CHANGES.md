@@ -6,6 +6,36 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001ae. Implementasi Fitur Multiple Product Images, Cloudinary Cloud Uploader & Resiliensi Order Stats
+- **Model SQLAlchemy `ProductImage` & Relasi Cascading (`app/models/product.py`)**:
+  - Model `ProductImage(Base)` terhubung ke `products.id` via Foreign Key dengan `ondelete="CASCADE"`.
+  - Field `ProductImage`: `id`, `product_id`, `image_url`, `is_primary` (Boolean, default=False), `created_at`.
+  - Relasi di `Product`: `images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan", lazy="selectin", order_by="ProductImage.id")`.
+- **Skema Pydantic Backward Compatibility (`app/schemas/product.py`)**:
+  - Skema `ProductImageOut`: `id: int`, `product_id: Optional[int]`, `image_url: str`, `is_primary: bool`, `created_at: Optional[datetime]`.
+  - Skema `ProductOut`:
+    * Ditambahkan field `images: list[ProductImageOut] = []`.
+    * Mempertahankan field legacy `image_url: Optional[str] = None` dengan `@model_validator(mode='after')` yang secara otomatis menetapkan `image_url` dari gambar yang `is_primary=True` (atau elemen pertama gambar jika tidak ada yang primary) agar seluruh kontrak Frontend existing tidak mengalami *breaking changes*.
+- **Repository Eager Loading & ORM Efficiency (`app/repositories/product_repo.py`, `app/repositories/wishlist_repo.py`)**:
+  - Menambahkan `selectinload(Product.images)` pada seluruh fungsi pencarian dan detail produk (`get_by_id`, `get_all`, `search`, serta `get_buyer_wishlist_products` pada `wishlist_repo.py`) guna mengeliminasi potensi N+1 Query.
+  - Menambahkan operasi galeri gambar pada repository: `get_product_images`, `add_product_images`, `set_primary_image`, dan `delete_product_image` (dengan reassign primary otomatis ke gambar tersisa jika gambar utama dihapus).
+- **Cloudinary Uploader & Image Management (`app/utils/cloudinary_helper.py`, `app/services/product_service.py`, `app/api/routes/product.py`)**:
+  - Meniadakan penyimpanan file ke filesystem lokal (`/static/...`). Seluruh proses upload gambar diproses langsung secara *in-memory* via Cloudinary Async API (`upload_image_to_cloudinary`).
+  - Menambahkan helper `delete_image_from_cloudinary` untuk penghapusan asset Cloudinary saat gambar dihapus dari katalog produk (best-effort async).
+  - Endpoint upload & galeri:
+    * `POST /products/{id}/images`: Mengunggah multi-gambar secara paralel (`asyncio.gather`), menyimpan ke `product_images`, dan menetapkan gambar utama (`primary_index`).
+    * `POST /products/{id}/image`: Endpoint kompatibilitas untuk single upload.
+    * `PATCH /products/{id}/images/{image_id}/primary`: Mengubah gambar tertentu menjadi primary dan mereset gambar lain menjadi non-primary.
+    * `DELETE /products/{id}/images/{image_id}`: Menghapus 1 gambar dari galeri produk.
+- **Resiliensi Endpoint Order Stats (`app/api/routes/order.py`, `app/services/order_service.py`, `app/repositories/order_repo.py`)**:
+  - Menambahkan endpoint `GET /orders/stats` (didefinisikan sebelum `GET /orders/{order_id}` untuk mencegah route shadowing/422).
+  - Parameter query tanggal `start_date` dan `end_date` bersifat opsional dengan penanganan fallback default aman (tidak memicu HTTP 422 Unprocessable Content jika tidak dikirim atau jika dikirim berupa string kosong oleh frontend).
+  - Mengembalikan skema `OrderStatsOut` (total orders, count per status, active/completed orders, total revenue).
+- **Automated Tests & Audit Keamanan (`tests/test_product_multiple_images.py`, `tests/test_seller_orders.py`)**:
+  - Pengujian backward compatibility skema respons, upload multi-gambar, set primary, delete image, dan query parameter order stats.
+  - 100% test suite backend lulus (**75 passed**).
+
+
 ### 001ad. Audit & Optimasi Query Database PostgreSQL, pg_trgm Trigram Indexing & ORM Efficiency
 - **Optimasi Pencarian Teks Substring (`pg_trgm`)**:
   - Mengaktifkan ekstensi `pg_trgm` di PostgreSQL untuk mengoptimasi query pencarian `ILIKE '%query%'`.

@@ -54,7 +54,7 @@ class Product(Base):
     
     # Relationships
     category_rel = relationship("Category", back_populates="products")
-    images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
+    images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan", lazy="selectin", order_by="ProductImage.id")
     recipes = relationship("Recipe", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
     price_histories = relationship("PriceHistory", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
 

@@ -267,3 +267,24 @@ from app.models.order import OrderStatusEnum
 
 class OrderStatusUpdate(BaseModel):
     status: OrderStatusEnum
+
+
+class OrderStatsOut(BaseModel):
+    total_orders: int = 0
+    pending: int = 0
+    in_process: int = 0
+    ready: int = 0
+    delivered: int = 0
+    picked_up: int = 0
+    cancelled: int = 0
+    refunded: int = 0
+    active_orders: int = 0
+    completed_orders: int = 0
+    total_revenue: Decimal = Decimal("0.00")
+
+    @field_validator("total_revenue", mode="before")
+    @classmethod
+    def round_revenue(cls, v):
+        return _round2(v, default=Decimal("0.00"))
+
+    model_config = ConfigDict(from_attributes=True)

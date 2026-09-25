@@ -1,10 +1,12 @@
+from datetime import datetime
+from decimal import Decimal
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func, cast, String
 from sqlalchemy.orm import selectinload
 
 from app.models.order import Order, OrderItem, Invoice, OrderStatusEnum, InvoiceStatusEnum
 from app.models.customer import Customer
-from typing import Optional
 
 
 async def create_order(db: AsyncSession, order_obj: Order) -> Order:
@@ -183,3 +185,64 @@ async def get_all_orders(
 
 # Alias for backward compatibility
 get_seller_orders = get_all_orders
+
+
+async def get_order_stats(
+    db: AsyncSession,
+    start_dt: Optional[datetime] = None,
+    end_dt: Optional[datetime] = None,
+) -> dict:
+    from app.models.payment import Payment
+    query = select(Order)
+    if start_dt:
+        query = query.where(Order.created_at >= start_dt)
+    if end_dt:
+        query = query.where(Order.created_at <= end_dt)
+
+    orders_res = await db.execute(query)
+    orders = orders_res.scalars().all()
+
+    counts = {
+        "pending": 0,
+        "in_process": 0,
+        "ready": 0,
+        "delivered": 0,
+        "picked_up": 0,
+        "cancelled": 0,
+        "refunded": 0,
+    }
+    for o in orders:
+        st = o.status.value if hasattr(o.status, "value") else str(o.status)
+        st_lower = st.lower()
+        if st_lower in counts:
+            counts[st_lower] += 1
+
+    order_ids = [
+        o.id for o in orders 
+        if (o.status.value if hasattr(o.status, "value") else str(o.status)).lower() not in ["cancelled", "refunded"]
+    ]
+    total_revenue = Decimal("0.00")
+    if order_ids:
+        rev_q = await db.execute(
+            select(func.sum(Payment.jumlah_bayar))
+            .join(Invoice, Invoice.id == Payment.invoice_id)
+            .where(
+                func.lower(cast(Payment.payment_status, String)) == "success",
+                Invoice.order_id.in_(order_ids),
+            )
+        )
+        total_revenue = rev_q.scalar() or Decimal("0.00")
+
+    return {
+        "total_orders": len(orders),
+        "pending": counts["pending"],
+        "in_process": counts["in_process"],
+        "ready": counts["ready"],
+        "delivered": counts["delivered"],
+        "picked_up": counts["picked_up"],
+        "cancelled": counts["cancelled"],
+        "refunded": counts["refunded"],
+        "active_orders": counts["pending"] + counts["in_process"] + counts["ready"],
+        "completed_orders": counts["delivered"] + counts["picked_up"],
+        "total_revenue": total_revenue,
+    }

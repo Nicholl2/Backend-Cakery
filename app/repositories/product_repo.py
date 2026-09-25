@@ -51,6 +51,27 @@ async def get_all(
     return result.scalars().all()
 
 
+async def search(
+    db: AsyncSession,
+    query_str: str,
+    only_active: bool = False,
+    kategori: Optional[str] = None,
+) -> list[Product]:
+    q = select(Product).options(
+        selectinload(Product.category_rel),
+        selectinload(Product.recipes).selectinload(Recipe.stock_item),
+        selectinload(Product.images),
+    ).execution_options(populate_existing=True)
+    if only_active:
+        q = q.where(Product.is_active == True)
+    if kategori:
+        q = q.where(Product.kategori == kategori)
+    if query_str:
+        q = q.where(Product.nama_produk.ilike(f"%{query_str}%"))
+    result = await db.execute(q.order_by(Product.nama_produk))
+    return result.scalars().all()
+
+
 async def update(db: AsyncSession, product: Product, data: ProductUpdate) -> Product:
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(product, field, value)
@@ -243,7 +264,7 @@ async def delete_product_image(
     db: AsyncSession,
     product_id: int,
     image_id: int,
-) -> bool:
+) -> Optional[str]:
     result = await db.execute(
         select(ProductImage).where(
             ProductImage.id == image_id,
@@ -252,8 +273,9 @@ async def delete_product_image(
     )
     img = result.scalars().first()
     if not img:
-        return False
+        return None
 
+    deleted_image_url = img.image_url
     was_primary = img.is_primary
     await db.delete(img)
     await db.commit()
@@ -278,4 +300,4 @@ async def delete_product_image(
                 prod.image_url = None
             await db.commit()
 
-    return True
+    return deleted_image_url

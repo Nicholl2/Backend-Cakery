@@ -41,6 +41,7 @@ async def get_buyer_wishlist_products(db: AsyncSession, buyer_id: int) -> list[P
         .options(
             selectinload(Product.category_rel),
             selectinload(Product.recipes).selectinload(Recipe.stock_item),
+            selectinload(Product.images),
         )
     )
     return result.scalars().all()

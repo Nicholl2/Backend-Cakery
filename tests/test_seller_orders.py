@@ -343,10 +343,32 @@ async def run_seller_order_tests():
         assert legacy_matched[0]["invoice"]["total_tagihan"] == "120000.00"
         assert legacy_matched[0]["order_items"][0]["custom_decoration_charge"] == "0.00"
         assert legacy_matched[0]["order_items"][0]["hpp_snapshot"] == "0.00"
-        print("✓ GET /orders handled legacy null fields gracefully (200 OK)!")
+        # ── Test 7: GET /orders/stats endpoint resilience ──
+        print("\n7. Testing GET /orders/stats without query params and with dates...")
+        res_stats_no_params = await client.get("/orders/stats", headers={"Authorization": f"Bearer {token_admin}"})
+        assert res_stats_no_params.status_code == 200, f"Expected 200, got {res_stats_no_params.status_code}: {res_stats_no_params.text}"
+        stats_json = res_stats_no_params.json()
+        assert "total_orders" in stats_json
+        assert "pending" in stats_json
+        assert "cancelled" in stats_json
+        assert "active_orders" in stats_json
+        assert "total_revenue" in stats_json
+        assert stats_json["total_orders"] >= 3
+        print("✓ GET /orders/stats without query params returned 200 OK!")
+
+        # With empty string params (e.g. frontend empty form values)
+        res_stats_empty_params = await client.get("/orders/stats?start_date=&end_date=", headers={"Authorization": f"Bearer {token_admin}"})
+        assert res_stats_empty_params.status_code == 200, f"Expected 200, got {res_stats_empty_params.status_code}: {res_stats_empty_params.text}"
+        print("✓ GET /orders/stats with empty query strings handled safely (200 OK)!")
+
+        # With valid date filters
+        res_stats_dates = await client.get("/orders/stats?start_date=2020-01-01&end_date=2030-12-31", headers={"Authorization": f"Bearer {token_admin}"})
+        assert res_stats_dates.status_code == 200
+        print("✓ GET /orders/stats with date filter returned 200 OK!")
 
     app.dependency_overrides.clear()
     print("\n🎉 ALL SELLER ORDER & INVENTORY TESTS PASSED FLAWLESSLY!")
+
 
 
 async def test_seller_orders():

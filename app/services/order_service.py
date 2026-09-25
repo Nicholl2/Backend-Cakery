@@ -811,3 +811,28 @@ async def cancel_and_refund_order(
         payment_status="refunded",
         refund_mode=refund_mode,
     )
+
+
+async def get_order_stats(
+    db: AsyncSession,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict:
+    """
+    Mengambil data ringkasan statistik pesanan dengan penanganan tanggal yang tangguh.
+    """
+    from datetime import time
+    start_dt = None
+    end_dt = None
+    if start_date and str(start_date).strip():
+        try:
+            start_dt = datetime.combine(datetime.strptime(str(start_date).strip(), "%Y-%m-%d"), time.min)
+        except ValueError:
+            pass
+    if end_date and str(end_date).strip():
+        try:
+            end_dt = datetime.combine(datetime.strptime(str(end_date).strip(), "%Y-%m-%d"), time.max)
+        except ValueError:
+            pass
+
+    return await order_repo.get_order_stats(db, start_dt, end_dt)

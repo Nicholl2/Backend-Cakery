@@ -128,7 +128,7 @@ async def get_price_history(db: AsyncSession, product_id: int) -> list[PriceHist
     return [PriceHistoryOut.model_validate(h) for h in history]
 
 
-from app.utils.cloudinary_helper import upload_image_to_cloudinary
+from app.utils.cloudinary_helper import upload_image_to_cloudinary, delete_image_from_cloudinary
 import asyncio
 
 async def upload_product_images(
@@ -208,15 +208,19 @@ async def delete_product_image(
     image_id: int,
 ) -> dict:
     """
-    Delete a single product image and reassign primary if necessary.
+    Delete a single product image, remove from Cloudinary, and reassign primary if necessary.
     """
     await get_product_or_404(db, product_id)
-    deleted = await product_repo.delete_product_image(db, product_id, image_id)
-    if not deleted:
+    deleted_url = await product_repo.delete_product_image(db, product_id, image_id)
+    if deleted_url is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Gambar produk tidak ditemukan.",
         )
+    # Async background/best-effort delete from Cloudinary
+    if deleted_url:
+        await delete_image_from_cloudinary(deleted_url)
+
     return {"deleted": True, "product_id": product_id, "image_id": image_id}
 
 

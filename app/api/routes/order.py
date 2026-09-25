@@ -26,6 +26,7 @@ from app.schemas.order import (
     OrderStatusUpdate,
     RefundRequest,
     RefundResponse,
+    OrderStatsOut,
 )
 from app.repositories import customer_repo, order_repo
 from app.services import order_service
@@ -205,6 +206,23 @@ async def get_latest_order(
 ) -> OrderOut:
     order = await order_service.get_customer_latest_order(db, nomor_wa)
     return OrderOut.model_validate(order)
+
+
+@router.get("/stats", response_model=OrderStatsOut,
+            dependencies=[Depends(require_internal_user)],
+            summary="Ringkasan statistik pesanan toko (Khusus Staff/Admin/Owner)")
+async def get_order_stats(
+    start_date: Optional[str] = Query(None, description="Tanggal mulai (YYYY-MM-DD) opsional"),
+    end_date: Optional[str] = Query(None, description="Tanggal akhir (YYYY-MM-DD) opsional"),
+    db: AsyncSession = Depends(get_db),
+) -> OrderStatsOut:
+    """
+    Mengambil ringkasan statistik order (total, per status, pendapatan, aktif, selesai).
+    Query parameter tanggal bersifat opsional dan memiliki default yang aman (tidak error 422).
+    """
+    stats_data = await order_service.get_order_stats(db, start_date, end_date)
+    return OrderStatsOut(**stats_data)
+
 
 
 @router.post("/{order_id}/cancel", dependencies=[Depends(require_service_key)],

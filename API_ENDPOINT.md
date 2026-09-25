@@ -64,10 +64,14 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `GET` | `/products/{product_id}` | Public | Detail produk lengkap beserta ketersediaan manual (`is_available`), stok bahan (`stock_quantity`), dan status siap beli (`is_in_stock`) |
 | `PUT` | `/products/{product_id}` | Admin / Owner | Update data produk (nama, deskripsi, kategori, is_active, is_available, slug, minimum_order, dll.) |
 | `DELETE` | `/products/{product_id}` | Admin / Owner | Hapus produk beserta seluruh relasi resep dan riwayat harganya |
-| `POST` | `/products/{product_id}/image` | Admin / Owner | Upload gambar produk langsung ke Cloudinary (`toti-cakery/products`, maks 5MB, format JPEG/PNG/WEBP), simpan HTTPS secure_url ke DB |
+| `POST` | `/products/{product_id}/images` | Admin / Owner | Upload multiple foto produk langsung ke Cloudinary (`toti-cakery/products`, maks 5MB per file, format JPEG/PNG/WEBP), simpan array secure URLs ke tabel `product_images`, dan set gambar pertama/pilihan sebagai primary image |
+| `POST` | `/products/{product_id}/image` | Admin / Owner | Upload gambar produk tunggal (Backward Compatibility) ke Cloudinary |
+| `PATCH` | `/products/{product_id}/images/{image_id}/primary` | Admin / Owner | Tetapkan salah satu gambar produk sebagai primary image (otomatis sinkronisasi `products.image_url`) |
+| `DELETE` | `/products/{product_id}/images/{image_id}` | Admin / Owner | Hapus salah satu gambar dari galeri produk (dan hapus resource Cloudinary jika memungkinkan; reassign primary ke gambar berikutnya jika gambar utama dihapus) |
 | `PATCH` | `/products/{product_id}/price` | Admin / Owner | Tetapkan/ubah harga jual produk (audit riwayat harga otomatis) |
 | `GET` | `/products/{product_id}/pricing` | Public / Internal | Lihat rincian breakdown HPP bahan + kalkulasi margin vs harga jual |
 | `GET` | `/products/{product_id}/price-history`| Public / Internal | Riwayat perubahan harga jual produk oleh Owner |
+
 
 ---
 
@@ -135,6 +139,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/orders` | Staff / Admin / Owner | List seluruh pesanan toko untuk Seller (Staff/Admin/Owner) dengan relasi lengkap (Customer, OrderItems, Invoice, Payments, amount_paid, amount_due). Filter: `status`, `limit`, `offset`. |
+| `GET` | `/orders/stats` | Staff / Admin / Owner | Ringkasan statistik pesanan toko (total orders, count per status, active/completed orders, dan total revenue). Parameter query tanggal `start_date` dan `end_date` bersifat opsional (default: seluruh/rentang aman tanpa memicu error HTTP 422). |
 | `GET` | `/orders/{order_id}` | Staff / Admin / Owner | Detail pesanan spesifik untuk Seller beserta customer, item kustom/produk (dengan field `product_name`), invoice, dan ringkasan pembayaran. |
 | `POST` | `/orders/custom` | Staff / Admin / Owner | Buat pesanan kustom buatan seller tanpa master produk (otomatis create customer, bypass stock deduction, generate invoice, set `created_via = 'seller'`). |
 | `POST` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Buat order baru khusus Buyer: (1) Otomatis derive `customer_id` via logika `get_or_create` berbasis varian nomor HP untuk mencegah error 409 Conflict / duplicate constraint; (2) Generate `nomor_invoice` unik dengan suffix acak; (3) Validasi ketersediaan produk `is_in_stock` & batas `stock_quantity`, reservasi bahan via Optimistic Locking; (4) Exception handling terpusat yang mereturn HTTP 400 jika ada kesalahan data (mencegah crash HTTP 500 dan mempertahankan header CORS). |

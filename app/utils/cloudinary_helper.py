@@ -1,9 +1,14 @@
 import os
+import re
+import logging
 import anyio
 import cloudinary
 import cloudinary.uploader
 from fastapi import HTTPException, status, UploadFile
+from typing import Optional
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -91,3 +96,51 @@ async def upload_image_to_cloudinary(
         )
 
     return secure_url
+
+
+def extract_cloudinary_public_id(image_url: str) -> Optional[str]:
+    """
+    Extract public_id with folder path from a Cloudinary image URL.
+    Example: https://res.cloudinary.com/demo/image/upload/v1234567890/toti-cakery/products/cake.jpg -> toti-cakery/products/cake
+    """
+    if not image_url or "cloudinary.com" not in image_url:
+        return None
+    try:
+        # Regex to match path after /upload/(v[0-9]+/)?
+        pattern = r"/upload/(?:v\d+/)?(.+?)(?:\.[a-zA-Z0-9]+)?$"
+        match = re.search(pattern, image_url)
+        if match:
+            return match.group(1)
+    except Exception as e:
+        logger.warning(f"Failed to extract Cloudinary public_id from URL '{image_url}': {e}")
+    return None
+
+
+async def delete_image_from_cloudinary(image_url: str) -> bool:
+    """
+    Safely delete an image from Cloudinary (best effort, will not raise exception).
+    """
+    public_id = extract_cloudinary_public_id(image_url)
+    if not public_id:
+        return False
+
+    if not (settings.cloudinary_cloud_name and settings.cloudinary_api_key and settings.cloudinary_api_secret):
+        return False
+
+    cloudinary.config(
+        cloud_name=settings.cloudinary_cloud_name,
+        api_key=settings.cloudinary_api_key,
+        api_secret=settings.cloudinary_api_secret,
+        secure=True,
+    )
+
+    try:
+        def _sync_destroy():
+            return cloudinary.uploader.destroy(public_id, resource_type="image", invalidate=True)
+
+        result = await anyio.to_thread.run_sync(_sync_destroy)
+        return result.get("result") == "ok"
+    except Exception as e:
+        logger.warning(f"Failed to destroy Cloudinary image '{public_id}': {e}")
+        return False
+
