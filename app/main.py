@@ -128,6 +128,8 @@ app.add_middleware(
 # ── UPLOAD SIZE LIMIT ────────────────────────────────────────────────────────
 app.add_middleware(MaxBodySizeMiddleware)
 
+from app.api.routes.notification import router as notification_router
+
 # Include routers
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(faq.router, prefix="/faq", tags=["FAQ Management"])
@@ -148,6 +150,7 @@ app.include_router(payment_router, prefix="/payments", tags=["Payments"])
 app.include_router(report_router, prefix="/reports", tags=["Reports"])
 app.include_router(user_router, prefix="/users", tags=["Users"])
 app.include_router(review_router, prefix="/reviews", tags=["Reviews"])
+app.include_router(notification_router)
 app.include_router(admin_whatsapp.router)
 app.include_router(public.router)
 
