@@ -204,11 +204,12 @@ def require_role(required_level: int):
         if role_level > required_level:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Insufficient permissions. Required role level: {required_level}, your level: {role_level}"
+                detail="Akses ditolak: Anda tidak memiliki izin untuk mengakses resource ini."
             )
         return role_level
 
     return check_role
+
 
 
 # Convenience dependencies for specific roles

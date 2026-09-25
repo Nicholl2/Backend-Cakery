@@ -1,16 +1,16 @@
 from decimal import Decimal
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.pricing_repo import get_recipe_with_cost
 
 
-def calculate_hpp(db, product_id: int):
-    rows = get_recipe_with_cost(db, product_id)
+async def calculate_hpp(db: AsyncSession, product_id: int):
+    rows = await get_recipe_with_cost(db, product_id)
 
     total = Decimal("0")
-
     detail = []
 
     for r in rows:
-        cost = r.jumlah_dibutuhkan * r.harga_per_satuan
+        cost = Decimal(str(r.jumlah_dibutuhkan)) * Decimal(str(r.harga_per_satuan))
         total += cost
 
         detail.append({
@@ -24,4 +24,5 @@ def calculate_hpp(db, product_id: int):
 
 
 def apply_margin(hpp: Decimal, margin_percent: float):
-    return hpp * (1 + Decimal(margin_percent) / 100)
+    return hpp * (1 + Decimal(str(margin_percent)) / 100)
+

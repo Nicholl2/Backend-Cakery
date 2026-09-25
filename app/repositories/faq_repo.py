@@ -1,9 +1,10 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, desc
+from sqlalchemy import select, update, delete, desc, func
 from app.models.faq_item import FaqItem
 from app.models.user import User
 from typing import Optional, List
 from sqlalchemy.orm import selectinload
+
 
 
 async def create_faq(
@@ -86,6 +87,6 @@ async def delete_faq(db: AsyncSession, faq_id: int) -> bool:
 
 
 async def count_faqs(db: AsyncSession) -> int:
-    """Count total FAQ items"""
-    result = await db.execute(select(FaqItem))
-    return len(result.scalars().all())
+    """Count total FAQ items via SQL COUNT"""
+    result = await db.execute(select(func.count(FaqItem.id)))
+    return result.scalar() or 0

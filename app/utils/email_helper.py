@@ -39,10 +39,12 @@ async def send_otp_email(to_email: str, otp_code: str) -> bool:
 
     # ── Mock mode: SMTP not configured ────────────────────────────────────────
     if not settings.smtp_host:
-        logger.warning(
-            f"[EMAIL MOCK] SMTP not configured. OTP for {to_email}: {otp_code}"
+        masked_otp = f"{otp_code[:2]}****" if len(otp_code) >= 2 else "***"
+        logger.info(
+            f"[EMAIL MOCK] SMTP not configured. OTP generated for {to_email}: {masked_otp}"
         )
         return True
+
 
     # ── Real SMTP sending ─────────────────────────────────────────────────────
     try:

@@ -29,15 +29,22 @@ async def get_by_product(db: AsyncSession, product_id: int) -> list[Review]:
     return result.scalars().all()
 
 
-async def get_all(db: AsyncSession) -> list[Review]:
-    """Get all reviews."""
-    stmt = select(Review).order_by(Review.created_at.desc()).options(
-        selectinload(Review.product),
-        selectinload(Review.customer),
-        selectinload(Review.order),
+async def get_all(db: AsyncSession, limit: int = 100, offset: int = 0) -> list[Review]:
+    """Get all reviews with pagination."""
+    stmt = (
+        select(Review)
+        .order_by(Review.created_at.desc())
+        .options(
+            selectinload(Review.product),
+            selectinload(Review.customer),
+            selectinload(Review.order),
+        )
+        .limit(limit)
+        .offset(offset)
     )
     result = await db.execute(stmt)
     return result.scalars().all()
+
 
 
 async def get_latest(db: AsyncSession, limit: int = 6) -> list[Review]:

@@ -77,6 +77,9 @@ async def send_otp(db: AsyncSession, target: str, channel: str, purpose: str) ->
     }
 
 
+_MAX_OTP_VERIFY_ATTEMPTS = 5
+
+
 async def verify_otp(db: AsyncSession, otp_id: str, code: str) -> dict:
     """Verify OTP code from database and issue a single-use DB verify_token"""
     otp = await otp_repo.get_otp_by_id(db, otp_id)
@@ -89,7 +92,15 @@ async def verify_otp(db: AsyncSession, otp_id: str, code: str) -> dict:
     if otp.is_used:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Kode OTP sudah digunakan."
+            detail="Kode OTP sudah digunakan atau telah kedaluwarsa."
+        )
+
+    if (otp.attempt_count or 0) >= _MAX_OTP_VERIFY_ATTEMPTS:
+        otp.is_used = True
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Batas percobaan verifikasi OTP tercapai (maksimal 5 kali). Silakan minta kode baru."
         )
 
     otp_expires = otp.expires_at
@@ -102,9 +113,19 @@ async def verify_otp(db: AsyncSession, otp_id: str, code: str) -> dict:
         )
 
     if not verify_password(code, otp.code_hash):
+        otp.attempt_count = (otp.attempt_count or 0) + 1
+        await db.commit()
+        if otp.attempt_count >= _MAX_OTP_VERIFY_ATTEMPTS:
+            otp.is_used = True
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Batas percobaan verifikasi OTP tercapai (maksimal 5 kali). Silakan minta kode baru."
+            )
+        remaining = _MAX_OTP_VERIFY_ATTEMPTS - otp.attempt_count
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Kode OTP salah."
+            detail=f"Kode OTP salah. Sisa percobaan: {remaining}."
         )
 
     verify_token = str(uuid.uuid4())
@@ -117,6 +138,7 @@ async def verify_otp(db: AsyncSession, otp_id: str, code: str) -> dict:
         "verify_token": verify_token,
         "target": otp.target
     }
+
 
 
 # ── DB VERIFICATION TOKENS ────────────────────────────────────────────────────
@@ -737,16 +759,21 @@ async def reset_buyer_password_email(
 # ── SELLER AUTH ──────────────────────────────────────────────────────────────
 
 async def request_seller_forgot_password(db: AsyncSession, email: str) -> dict:
-    """Request password reset for a seller/internal user (matches username to email)"""
+    """Request password reset for a seller/internal user (prevents email enumeration)"""
     user = await user_repo.get_user_by_username(db, email)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Seller account not found with this email"
-        )
+        user = await user_repo.get_user_by_email(db, email)
 
-    # Send mock OTP
-    return await send_otp(db, email, "email", "reset_password")
+    if user:
+        target_email = user.email or user.username
+        return await send_otp(db, target_email, "email", "reset_password")
+
+    # Anti-enumeration response: return fake otp_id to protect user privacy
+    return {
+        "otp_id": str(uuid.uuid4()),
+        "expires_in": 300
+    }
+
 
 
 async def verify_seller_forgot_password(db: AsyncSession, otp_id: str, code: str) -> dict:

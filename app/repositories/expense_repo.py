@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, desc, and_
+from sqlalchemy import select, update, desc, and_, func
 from app.models.expense import Expense
 from app.models.user import User
 from typing import Optional, List
@@ -70,8 +70,8 @@ async def get_total_expenses(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None
 ) -> Decimal:
-    """Get sum of expenses for P&L calculation"""
-    query = select(Expense)
+    """Get sum of expenses for P&L calculation via database aggregation"""
+    query = select(func.coalesce(func.sum(Expense.jumlah), Decimal("0.00")))
 
     filters = []
     if kategori:
@@ -85,27 +85,21 @@ async def get_total_expenses(
         query = query.where(and_(*filters))
 
     result = await db.execute(query)
-    expenses = result.scalars().all()
-    return sum(e.jumlah for e in expenses) if expenses else Decimal("0.00")
+    total = result.scalar()
+    return Decimal(str(total)) if total is not None else Decimal("0.00")
 
 
 async def get_expenses_by_category(
     db: AsyncSession
 ) -> dict[str, Decimal]:
-    """Get total expenses grouped by category (for P&L dashboard)"""
-    result = await db.execute(select(Expense))
-    expenses = result.scalars().all()
-
-    category_totals = {}
-    for expense in expenses:
-        if expense.kategori not in category_totals:
-            category_totals[expense.kategori] = Decimal("0.00")
-        category_totals[expense.kategori] += expense.jumlah
-
-    return category_totals
+    """Get total expenses grouped by category via SQL GROUP BY"""
+    stmt = select(Expense.kategori, func.coalesce(func.sum(Expense.jumlah), Decimal("0.00"))).group_by(Expense.kategori)
+    result = await db.execute(stmt)
+    rows = result.all()
+    return {row[0]: Decimal(str(row[1])) for row in rows}
 
 
 async def count_expenses(db: AsyncSession) -> int:
-    """Count total expenses"""
-    result = await db.execute(select(Expense))
-    return len(result.scalars().all())
+    """Count total expenses via SQL COUNT"""
+    result = await db.execute(select(func.count(Expense.id)))
+    return result.scalar() or 0

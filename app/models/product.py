@@ -54,8 +54,18 @@ class Product(Base):
     
     # Relationships
     category_rel = relationship("Category", back_populates="products")
+    images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
     recipes = relationship("Recipe", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
     price_histories = relationship("PriceHistory", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
+
+    @property
+    def primary_image_url(self) -> Optional[str]:
+        if hasattr(self, "images") and self.images:
+            for img in self.images:
+                if img.is_primary:
+                    return img.image_url
+            return self.images[0].image_url
+        return self.image_url
 
     @property
     def stock_quantity(self) -> int:
@@ -81,3 +91,17 @@ class Product(Base):
     @property
     def is_in_stock(self) -> bool:
         return bool(self.is_available and self.stock_quantity > 0)
+
+
+class ProductImage(Base):
+    __tablename__ = "product_images"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    image_url = Column(Text, nullable=False)
+    is_primary = Column(Boolean, default=False, server_default="false", nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    product = relationship("Product", back_populates="images")
+

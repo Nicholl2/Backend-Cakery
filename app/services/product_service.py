@@ -129,6 +129,47 @@ async def get_price_history(db: AsyncSession, product_id: int) -> list[PriceHist
 
 
 from app.utils.cloudinary_helper import upload_image_to_cloudinary
+import asyncio
+
+async def upload_product_images(
+    db: AsyncSession,
+    product_id: int,
+    files: list[UploadFile],
+    primary_index: int = 0,
+) -> ProductOut:
+    """
+    Upload multiple product images to Cloudinary in parallel,
+    save URLs to product_images table, and set one as primary.
+    """
+    # 1. Validasi keberadaan file
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Minimal 1 file gambar harus diunggah.",
+        )
+
+    # 2. Ambil data produk, error 404 jika tidak ditemukan
+    product = await get_product_or_404(db, product_id)
+
+    # 3. Upload paralel ke Cloudinary menggunakan asyncio.gather
+    upload_tasks = [
+        upload_image_to_cloudinary(f, folder="toti-cakery/products")
+        for f in files
+    ]
+    secure_urls = await asyncio.gather(*upload_tasks)
+
+    # 4. Simpan ke database via repository
+    await product_repo.add_product_images(
+        db=db,
+        product_id=product.id,
+        image_urls=secure_urls,
+        primary_index=primary_index,
+    )
+
+    # 5. Ambil data produk terbaru beserta relasi images
+    updated_product = await get_product_or_404(db, product_id)
+    return ProductOut.model_validate(updated_product)
+
 
 async def upload_product_image(
     db: AsyncSession,
@@ -136,18 +177,47 @@ async def upload_product_image(
     file: UploadFile
 ) -> ProductOut:
     """
-    Upload product image to Cloudinary: validates type and size,
-    uploads directly from memory stream (file.file), and saves secure HTTPS URL to DB.
+    Single image upload (Backward compatibility):
+    Delegates to upload_product_images with a single item list.
     """
-    # 1. Ambil data produk, error 404 jika tidak ditemukan
-    product = await get_product_or_404(db, product_id)
+    return await upload_product_images(db, product_id, [file], primary_index=0)
 
-    # 2. Upload via helper Cloudinary
-    secure_url = await upload_image_to_cloudinary(file, folder="toti-cakery/products")
 
-    # 3. Update database dengan URL Cloudinary
-    updated_product = await product_repo.update_image_url(db, product, secure_url)
-    return ProductOut.model_validate(updated_product)
+async def set_product_primary_image(
+    db: AsyncSession,
+    product_id: int,
+    image_id: int,
+) -> ProductOut:
+    """
+    Set one product image as the primary image.
+    """
+    await get_product_or_404(db, product_id)
+    target = await product_repo.set_primary_image(db, product_id, image_id)
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Gambar produk tidak ditemukan.",
+        )
+    fresh_product = await get_product_or_404(db, product_id)
+    return ProductOut.model_validate(fresh_product)
+
+
+async def delete_product_image(
+    db: AsyncSession,
+    product_id: int,
+    image_id: int,
+) -> dict:
+    """
+    Delete a single product image and reassign primary if necessary.
+    """
+    await get_product_or_404(db, product_id)
+    deleted = await product_repo.delete_product_image(db, product_id, image_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Gambar produk tidak ditemukan.",
+        )
+    return {"deleted": True, "product_id": product_id, "image_id": image_id}
 
 
 

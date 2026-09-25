@@ -164,7 +164,9 @@ async def buyer_login(
 
 
 @router.post("/buyer/login-phone", response_model=BuyerAuthResponse, status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_AUTH_LOGIN)
 async def buyer_login_phone(
+    request: Request,
     data: BuyerLoginPhoneRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -173,7 +175,9 @@ async def buyer_login_phone(
 
 
 @router.post("/buyer/login/otp", response_model=BuyerAuthResponse, status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_AUTH_LOGIN)
 async def buyer_login_otp(
+    request: Request,
     data: BuyerLoginOTPRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -188,7 +192,9 @@ async def buyer_login_otp(
 
 
 @router.post("/buyer/reset-password", status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_AUTH_VERIFY)
 async def buyer_reset_password(
+    request: Request,
     data: BuyerResetPasswordRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -212,7 +218,9 @@ async def buyer_forgot_password(
 
 
 @router.post("/buyer/reset-password/email", status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_AUTH_VERIFY)
 async def buyer_reset_password_email(
+    request: Request,
     data: BuyerResetPasswordEmailRequest,
     db: AsyncSession = Depends(get_db),
 ):
@@ -228,7 +236,9 @@ async def buyer_reset_password_email(
 # ── SELLER AUTHENTICATION ENDPOINTS ──────────────────────────────────────────
 
 @router.post("/seller/forgot-password/request", response_model=OTPSendResponse, status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_AUTH_VERIFY)
 async def seller_forgot_password_request(
+    request: Request,
     data: SellerForgotPasswordRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -237,7 +247,9 @@ async def seller_forgot_password_request(
 
 
 @router.post("/seller/forgot-password/verify", response_model=OTPVerifyResponse, status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_AUTH_VERIFY)
 async def seller_forgot_password_verify(
+    request: Request,
     data: SellerForgotPasswordVerifyRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -246,7 +258,9 @@ async def seller_forgot_password_verify(
 
 
 @router.post("/seller/reset-password", status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_AUTH_VERIFY)
 async def seller_reset_password(
+    request: Request,
     data: SellerResetPasswordRequest,
     db: AsyncSession = Depends(get_db)
 ):

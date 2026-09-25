@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, File, UploadFile
+from fastapi import APIRouter, Depends, Query, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
@@ -6,7 +6,7 @@ from app.core.database import get_db
 from app.core.cache import app_cache
 from app.api.dependencies import require_admin_or_owner
 from app.schemas.product import (
-    ProductCreate, ProductUpdate, ProductOut,
+    ProductCreate, ProductUpdate, ProductOut, ProductImageOut,
     SetPriceRequest, SetPriceResponse,
     PricingResponse, PriceHistoryOut,
     CategoryCreate, CategoryUpdate, CategoryResponse,
@@ -96,15 +96,55 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     return result
 
 
+@router.post("/{product_id}/images", response_model=ProductOut,
+             dependencies=[Depends(require_admin_or_owner)],
+             summary="Upload multiple foto produk (Admin/Owner) — format JPEG, PNG, WEBP, maks 5MB per file")
+async def upload_product_images(
+    product_id: int,
+    files: list[UploadFile] = File(..., description="Daftar file gambar produk (JPEG/PNG/WEBP)"),
+    primary_index: int = Form(0, description="Index file yang dijadikan sebagai primary image (default: 0)"),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await product_service.upload_product_images(db, product_id, files, primary_index)
+    app_cache.invalidate_prefix("products:")
+    return result
+
+
 @router.post("/{product_id}/image", response_model=ProductOut,
              dependencies=[Depends(require_admin_or_owner)],
-             summary="Upload foto produk (Admin/Owner) — format JPEG, PNG, WEBP, maks 5MB")
+             summary="Upload foto produk tunggal (Admin/Owner — Kompatibilitas)")
 async def upload_product_image(
     product_id: int,
     file: UploadFile = File(..., description="File gambar produk (JPEG/PNG/WEBP)"),
     db: AsyncSession = Depends(get_db),
 ):
     result = await product_service.upload_product_image(db, product_id, file)
+    app_cache.invalidate_prefix("products:")
+    return result
+
+
+@router.patch("/{product_id}/images/{image_id}/primary", response_model=ProductOut,
+              dependencies=[Depends(require_admin_or_owner)],
+              summary="Set salah satu gambar sebagai primary image produk")
+async def set_primary_product_image(
+    product_id: int,
+    image_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await product_service.set_product_primary_image(db, product_id, image_id)
+    app_cache.invalidate_prefix("products:")
+    return result
+
+
+@router.delete("/{product_id}/images/{image_id}",
+               dependencies=[Depends(require_admin_or_owner)],
+               summary="Hapus salah satu gambar produk")
+async def delete_product_image(
+    product_id: int,
+    image_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await product_service.delete_product_image(db, product_id, image_id)
     app_cache.invalidate_prefix("products:")
     return result
 

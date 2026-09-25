@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from app.core.database import get_db
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_user_id, require_admin_or_owner, require_internal_user
 from app.schemas.purchasing import (
     SupplierCreate, SupplierUpdate, SupplierOut,
     PurchaseCreate, PurchaseUpdate, PurchaseOut, PurchaseDetailOut,
@@ -20,12 +20,14 @@ router = APIRouter(tags=["Purchasing"])
 # ── SUPPLIER ROUTES ──────────────────────────────────────────────────────────
 
 @router.post("/suppliers", response_model=SupplierOut, status_code=201,
+             dependencies=[Depends(require_admin_or_owner)],
              summary="Tambah supplier baru")
 async def create_supplier(data: SupplierCreate, db: AsyncSession = Depends(get_db)):
     return await purchasing_service.create_supplier(db, data)
 
 
 @router.get("/suppliers", response_model=list[SupplierOut],
+            dependencies=[Depends(require_internal_user)],
             summary="List semua supplier — bisa filter hanya yang aktif")
 async def list_suppliers(
     only_active: bool = Query(False, description="True = hanya supplier aktif"),
@@ -35,12 +37,14 @@ async def list_suppliers(
 
 
 @router.get("/suppliers/{supplier_id}", response_model=SupplierOut,
+            dependencies=[Depends(require_internal_user)],
             summary="Lihat detail supplier")
 async def get_supplier(supplier_id: int, db: AsyncSession = Depends(get_db)):
     return await purchasing_service.get_supplier_or_404(db, supplier_id)
 
 
 @router.put("/suppliers/{supplier_id}", response_model=SupplierOut,
+            dependencies=[Depends(require_admin_or_owner)],
             summary="Edit data supplier")
 async def update_supplier(
     supplier_id: int, data: SupplierUpdate, db: AsyncSession = Depends(get_db)
@@ -49,6 +53,7 @@ async def update_supplier(
 
 
 @router.delete("/suppliers/{supplier_id}",
+               dependencies=[Depends(require_admin_or_owner)],
                summary="Hapus supplier — gagal jika ada pemesanan terkait")
 async def delete_supplier(supplier_id: int, db: AsyncSession = Depends(get_db)):
     await purchasing_service.delete_supplier(db, supplier_id)
@@ -58,6 +63,7 @@ async def delete_supplier(supplier_id: int, db: AsyncSession = Depends(get_db)):
 # ── PURCHASE ROUTES ──────────────────────────────────────────────────────────
 
 @router.post("/purchases", response_model=PurchaseOut, status_code=201,
+             dependencies=[Depends(require_internal_user)],
              summary="Buat pemesanan baru dengan item-item")
 async def create_purchase(
     data: PurchaseCreate,
@@ -68,6 +74,7 @@ async def create_purchase(
 
 
 @router.get("/purchases", response_model=list[PurchaseOut],
+            dependencies=[Depends(require_internal_user)],
             summary="List semua pemesanan — bisa filter by status / supplier")
 async def list_purchases(
     only_received: Optional[bool] = Query(None, description="True = sudah diterima, False = belum diterima"),
@@ -78,12 +85,14 @@ async def list_purchases(
 
 
 @router.get("/purchases/{purchase_id}", response_model=PurchaseDetailOut,
+            dependencies=[Depends(require_internal_user)],
             summary="Lihat detail pemesanan dengan semua item")
 async def get_purchase(purchase_id: int, db: AsyncSession = Depends(get_db)):
     return await purchasing_service.get_purchase_or_404(db, purchase_id)
 
 
 @router.put("/purchases/{purchase_id}", response_model=PurchaseOut,
+            dependencies=[Depends(require_admin_or_owner)],
             summary="Update pemesanan (status diterima, tanggal diterima, catatan)")
 async def update_purchase(
     purchase_id: int, data: PurchaseUpdate, db: AsyncSession = Depends(get_db)
@@ -92,7 +101,9 @@ async def update_purchase(
 
 
 @router.delete("/purchases/{purchase_id}",
+               dependencies=[Depends(require_admin_or_owner)],
                summary="Hapus pemesanan — gagal jika sudah diterima")
 async def delete_purchase(purchase_id: int, db: AsyncSession = Depends(get_db)):
     await purchasing_service.delete_purchase(db, purchase_id)
     return {"deleted": True, "purchase_id": purchase_id}
+

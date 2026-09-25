@@ -291,6 +291,44 @@ async def ensure_trigram_and_schema_optimizations(conn: AsyncConnection):
             pass
 
 
+async def ensure_product_images_table(conn: AsyncConnection):
+    """
+    Ensure 'product_images' table exists and migrate existing image_url data from 'products' table.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    # 1. Create table if not exists
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS product_images (
+            id SERIAL PRIMARY KEY,
+            product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+            image_url TEXT NOT NULL,
+            is_primary BOOLEAN DEFAULT FALSE NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """))
+
+    # 2. Indices
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_product_images_id ON product_images (id);"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_product_images_product_id ON product_images (product_id);"))
+
+    # 3. Data migration: Migrate existing products.image_url if not already in product_images
+    try:
+        await conn.execute(text("""
+            INSERT INTO product_images (product_id, image_url, is_primary, created_at)
+            SELECT p.id, p.image_url, TRUE, NOW()
+            FROM products p
+            WHERE p.image_url IS NOT NULL 
+              AND TRIM(p.image_url) != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM product_images pi WHERE pi.product_id = p.id
+              );
+        """))
+    except Exception:
+        pass
+
+
 async def run_auto_migrations(conn: AsyncConnection):
     """
     Wrapper to run all auto-migrations sequentially on a given connection.
@@ -305,6 +343,8 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_payment_columns(conn)
     await ensure_review_columns(conn)
     await ensure_trigram_and_schema_optimizations(conn)
+    await ensure_product_images_table(conn)
+
 
 
 

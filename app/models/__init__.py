@@ -1,5 +1,5 @@
 from app.core.database import Base
-from .product import Product
+from .product import Product, ProductImage, Category
 from .recipe import Recipe
 from .stock_item import StockItem
 from .price_history import PriceHistory
@@ -18,6 +18,8 @@ from .otp_code import OTPCode
 __all__ = [
     "Base",
     "Product",
+    "ProductImage",
+    "Category",
     "Recipe",
     "StockItem",
     "PriceHistory",

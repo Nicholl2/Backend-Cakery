@@ -35,7 +35,21 @@ class Settings(BaseSettings):
     def enforce_production_security(self) -> "Settings":
         if self.environment.lower() == "production":
             self.wa_verification_mode = "real"
+            if self.secret_key == "your-secret-key-change-in-production":
+                raise ValueError("CRITICAL SECURITY: 'secret_key' wajib diganti dengan string rahasia kuat pada environment production!")
+            if self.service_api_key == "change-this-service-key":
+                raise ValueError("CRITICAL SECURITY: 'service_api_key' wajib diganti pada environment production!")
+            
+            # Filter out localhost and 127.0.0.1 from CORS in production
+            cleaned_origins = [
+                origin.strip() for origin in self.cors_origins.split(",")
+                if origin.strip() and not ("localhost" in origin.lower() or "127.0.0.1" in origin.lower())
+            ]
+            if cleaned_origins:
+                self.cors_origins = ",".join(cleaned_origins)
         return self
+
+
 
     @property
     def ENVIRONMENT(self) -> str:

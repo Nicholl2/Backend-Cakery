@@ -110,6 +110,8 @@ async def get_orders_by_customer_id(
     customer_id: int,
     status: Optional[str] = None,
     created_via: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
 ) -> list[Order]:
     query = (
         select(Order)
@@ -127,8 +129,11 @@ async def get_orders_by_customer_id(
     if created_via:
         created_via_val = created_via.value if hasattr(created_via, "value") else str(created_via)
         query = query.where(func.lower(cast(Order.created_via, String)) == created_via_val.lower())
+    
+    query = query.limit(limit).offset(offset)
     result = await db.execute(query)
     return list(result.scalars().all())
+
 
 
 # Alias for backward compatibility

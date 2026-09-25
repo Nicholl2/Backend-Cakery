@@ -75,10 +75,12 @@ async def upload_image_to_cloudinary(
 
         upload_result = await anyio.to_thread.run_sync(_sync_upload)
     except Exception as e:
+        logger.error(f"[CLOUDINARY_UPLOAD_ERROR] Failed to upload image: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Gagal mengunggah gambar ke Cloudinary: {str(e)}"
+            detail="Gagal mengunggah gambar ke server media Cloudinary."
         )
+
 
     # 6. Retrieve secure_url
     secure_url = upload_result.get("secure_url") if isinstance(upload_result, dict) else None

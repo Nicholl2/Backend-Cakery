@@ -72,6 +72,18 @@ class SetPriceResponse(BaseModel):
     def round_money(cls, v):
         return _round2(v)
 
+
+# ── PRODUCT IMAGES ───────────────────────────────────────────────────────────
+class ProductImageOut(BaseModel):
+    id: int
+    product_id: Optional[int] = None
+    image_url: str
+    is_primary: bool = False
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ── OUT ──────────────────────────────────────────────────────────────────────
 class ProductOut(BaseModel):
     id: int
@@ -88,6 +100,7 @@ class ProductOut(BaseModel):
     stock_quantity: int = 0
     is_in_stock: bool = False
     image_url: Optional[str] = None
+    images: list[ProductImageOut] = []
     
     # New catalog fields requested by Frontend
     slug: Optional[str] = None
@@ -111,8 +124,15 @@ class ProductOut(BaseModel):
         return data
 
     @model_validator(mode='after')
-    def compute_stock_status(self):
+    def compute_fields_and_fallback(self):
         self.is_in_stock = bool(self.is_available and (self.stock_quantity or 0) > 0)
+        # Backward compatibility for single image_url
+        if self.images:
+            primary_img = next((img.image_url for img in self.images if img.is_primary), None)
+            if primary_img:
+                self.image_url = primary_img
+            elif not self.image_url and len(self.images) > 0:
+                self.image_url = self.images[0].image_url
         return self
 
     @field_validator('hpp_total', mode='before')
