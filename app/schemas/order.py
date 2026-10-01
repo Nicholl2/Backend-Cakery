@@ -26,7 +26,22 @@ class OrderCreate(BaseModel):
     created_via: str = "chatbot"
     notes: Optional[str] = Field(None, max_length=500)
     due_date: Optional[datetime] = None
+    fulfillment_date: datetime
     payment_method_preference: Optional[str] = Field(None, max_length=50)
+
+    @field_validator("fulfillment_date", mode="after")
+    @classmethod
+    def validate_fulfillment_date(cls, v):
+        from datetime import timezone, timedelta
+        now = datetime.now(timezone.utc)
+        # fulfillment_date must be at least H+1 (tomorrow)
+        min_date = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        if v.tzinfo is None:
+            from datetime import timezone as tz
+            v = v.replace(tzinfo=tz.utc)
+        if v < min_date:
+            raise ValueError("Pemesanan kue minimal H-1 sebelum tanggal pengambilan/pengiriman.")
+        return v
 
     @field_validator("notes", mode="before")
     @classmethod
@@ -42,7 +57,22 @@ class BuyerOrderCreate(BaseModel):
     created_via: str = "web"
     notes: Optional[str] = Field(None, max_length=500)
     due_date: Optional[datetime] = None
+    fulfillment_date: datetime
     payment_method_preference: Optional[str] = Field(None, max_length=50)
+
+    @field_validator("fulfillment_date", mode="after")
+    @classmethod
+    def validate_fulfillment_date(cls, v):
+        from datetime import timezone, timedelta
+        now = datetime.now(timezone.utc)
+        # fulfillment_date must be at least H+1 (tomorrow)
+        min_date = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        if v.tzinfo is None:
+            from datetime import timezone as tz
+            v = v.replace(tzinfo=tz.utc)
+        if v < min_date:
+            raise ValueError("Pemesanan kue minimal H-1 sebelum tanggal pengambilan/pengiriman.")
+        return v
 
     @field_validator("notes", mode="before")
     @classmethod
@@ -71,6 +101,7 @@ class CustomOrderCreate(BaseModel):
     metode_pengiriman: str = Field(default="pickup", pattern="^(pickup|delivery)$")
     notes: Optional[str] = Field(None, max_length=500)
     due_date: Optional[datetime] = None
+    fulfillment_date: Optional[datetime] = None
     payment_method_preference: Optional[str] = Field(None, max_length=50)
     items: list[CustomOrderItemCreate] = Field(..., min_length=1)
 
@@ -210,6 +241,8 @@ class OrderOut(BaseModel):
     created_via: str = "BUYER_SITE"
     notes: Optional[str] = None
     due_date: Optional[datetime] = None
+    fulfillment_date: Optional[datetime] = None
+    settlement_due_date: Optional[datetime] = None
     payment_method_preference: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

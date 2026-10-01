@@ -6,6 +6,29 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### 001ag. Perbaikan Logika Availability Produk, Aturan H-1 Pre-Order & Skema Pembayaran DP 50%
+- **Perbaikan Bug: Logika Availability Produk (`app/models/product.py`, `app/schemas/product.py`)**:
+  - Menambahkan properti `has_recipe` dan `computed_availability` pada model SQLAlchemy `Product`.
+  - Pada skema `ProductOut.compute_fields_and_fallback`: Produk dianggap `is_available = True` HANYA JIKA memiliki relasi resep dan memiliki minimal 1 item bahan baku (`len(product.recipes) > 0`).
+  - Jika resep kosong (`recipes == []`), secara dinamis mengembalikan `is_available = False` sehingga Seller Dashboard dan Buyer Catalog menampilkan status *"Unavailable"*.
+- **Aturan Bisnis: Aturan Minimal H-1 Pre-Order (`app/schemas/order.py`, `app/services/order_service.py`, `app/api/routes/order.py`)**:
+  - Menambahkan atribut wajib `fulfillment_date` (Tanggal & Jam Pengambilan/Pengiriman) pada `OrderCreate` dan `BuyerOrderCreate`.
+  - Menambahkan validasi Pydantic yang memastikan `fulfillment_date` minimal H+1 dari tanggal pesanan dibuat. Menolak pesanan Same-day dengan HTTP 400 Bad Request: *"Pemesanan kue minimal H-1 sebelum tanggal pengambilan/pengiriman."*
+- **Skema Pembayaran DP 50% & Due Date Pelunasan (`app/models/order.py`, `app/services/payment_service.py`, `app/api/routes/payment.py`, `app/core/state_machine.py`)**:
+  - Menambahkan kolom `fulfillment_date` (DateTime, nullable) dan `settlement_due_date` (DateTime, nullable) pada tabel `orders`.
+  - Menambahkan nilai enum `cancelled_settlement_expired` pada `OrderStatusEnum` dan memperbarui `ORDER_TRANSITIONS` / `ORDER_TERMINAL_STATES`.
+  - Logika pembayaran DP 50%: Validasi nominal tepat $50\%$ tagihan, serta kalkulasi otomatis `settlement_due_date = fulfillment_date - 1 hari` (pukul 18:00 WIB / 11:00 UTC).
+  - Background task / Endpoint internal `check_expired_settlements` (`POST /payments/check-expired-settlements`): Memeriksa pesanan `PARTIALLY_PAID` yang telah melewati `settlement_due_date`, otomatis membatalkan status pesanan menjadi `cancelled_settlement_expired`, dan memulihkan stok bahan baku via Optimistic Concurrency Control.
+- **Database Migrations (`alembic/versions/20261001_01_add_fulfillment_and_settlement_columns.py`, `app/core/migrations.py`)**:
+  - Skrip migrasi Alembic baru untuk penambahan kolom `fulfillment_date` dan `settlement_due_date` pada tabel `orders`, serta penambahan nilai enum `cancelled_settlement_expired`.
+  - Menambahkan fungsi DDL runtime `ensure_fulfillment_columns` pada lifespan auto-migrations.
+- **Unit & Integration Tests (`tests/test_product_stock_catalog.py`, `tests/test_buyer_orders_payments.py`)**:
+  - Pengujian ketersediaan produk tanpa resep mengembalikan `is_available = False`.
+  - Pengujian penolakan checkout Same-day dan penerimaan minimal H+1.
+  - Pengujian kalkulasi nominal DP 50% dan ketepatan `settlement_due_date` (H-1 pukul 18:00 WIB).
+  - Pengujian pembatalan otomatis pesanan DP jatuh tempo.
+  - Seluruh test suite backend lulus 100% (**79 passed**).
+
 ### 001af. Implementasi Fitur Upload Multiple Images pada Review Produk oleh Buyer
 - **Model SQLAlchemy `ReviewImage` & Relasi Cascading (`app/models/review.py`, `app/models/__init__.py`)**:
   - Model baru `ReviewImage(Base)` dengan tabel `review_images`:

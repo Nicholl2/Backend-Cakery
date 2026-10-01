@@ -202,6 +202,8 @@ async def run_audit_tests():
         print(f"  ✓ Custom order item product_name populated: {custom_items[0]['product_name']}")
 
         # Buyer creates standard order from catalog
+        from datetime import datetime, timezone, timedelta
+        future_fulfillment = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
         buyer_order_payload = {
             "metode_pengiriman": "pickup",
             "items": [
@@ -211,7 +213,8 @@ async def run_audit_tests():
                     "custom_decoration_charge": "10000.00"
                 }
             ],
-            "notes": "Pesanan catalog buyer"
+            "notes": "Pesanan catalog buyer",
+            "fulfillment_date": future_fulfillment,
         }
         res = await client.post("/orders/buyer", json=buyer_order_payload, headers={"Authorization": f"Bearer {token_buyer}"})
         assert res.status_code == 201, f"Buyer order failed: {res.text}"

@@ -89,8 +89,22 @@ class Product(Base):
         return max(0, max_creatable if max_creatable is not None else 0)
 
     @property
+    def has_recipe(self) -> bool:
+        """Cek apakah produk memiliki resep dengan minimal 1 item bahan baku."""
+        from sqlalchemy.orm import attributes
+        state = attributes.instance_state(self)
+        if "recipes" in state.unloaded:
+            return False
+        return bool(self.recipes and len(self.recipes) > 0)
+
+    @property
+    def computed_availability(self) -> bool:
+        """Produk dianggap available jika toggle aktif DAN memiliki resep."""
+        return bool(self.is_available and self.has_recipe)
+
+    @property
     def is_in_stock(self) -> bool:
-        return bool(self.is_available and self.stock_quantity > 0)
+        return bool(self.computed_availability and self.stock_quantity > 0)
 
 
 class ProductImage(Base):

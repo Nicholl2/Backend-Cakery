@@ -150,6 +150,15 @@ async def ensure_order_columns(conn: AsyncConnection):
     # Invoice column length
     await conn.execute(text("ALTER TABLE invoices ALTER COLUMN nomor_invoice TYPE VARCHAR(50);"))
 
+async def ensure_fulfillment_columns(conn: AsyncConnection):
+    """
+    Ensure fulfillment_date and settlement_due_date columns exist in 'orders' table.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfillment_date TIMESTAMPTZ;"))
+    await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS settlement_due_date TIMESTAMPTZ;"))
 
 
 async def ensure_order_status_enum(conn: AsyncConnection):
@@ -391,6 +400,7 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_otp_columns(conn)
     await ensure_user_columns(conn)
     await ensure_order_columns(conn)
+    await ensure_fulfillment_columns(conn)
     await ensure_payment_columns(conn)
     await ensure_review_columns(conn)
     await ensure_trigram_and_schema_optimizations(conn)

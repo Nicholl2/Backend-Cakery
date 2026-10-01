@@ -79,6 +79,7 @@ ORDER_TRANSITIONS: dict[OrderStatusEnum, set[OrderStatusEnum]] = {
         OrderStatusEnum.refunded,
     },
     OrderStatusEnum.refunded: set(),     # terminal state
+    OrderStatusEnum.cancelled_settlement_expired: set(),  # terminal state
 }
 
 ORDER_TERMINAL_STATES: set[OrderStatusEnum] = {
@@ -86,6 +87,7 @@ ORDER_TERMINAL_STATES: set[OrderStatusEnum] = {
     OrderStatusEnum.picked_up,
     OrderStatusEnum.completed,
     OrderStatusEnum.refunded,
+    OrderStatusEnum.cancelled_settlement_expired,
 }
 
 

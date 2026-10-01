@@ -168,6 +168,25 @@ async def create_midtrans_charge(
     )
     
     await payment_repo.create_payment(db, payment_obj)
+
+    # DP settlement logic
+    if payment_type == "dp":
+        if order.fulfillment_date:
+            from datetime import timedelta, timezone as tz
+            wib_tz = tz(timedelta(hours=7))
+            f_dt = order.fulfillment_date
+            if f_dt.tzinfo is None:
+                f_dt = f_dt.replace(tzinfo=tz.utc)
+            f_wib = f_dt.astimezone(wib_tz)
+            h_minus_1_wib = f_wib.date() - timedelta(days=1)
+            settlement_due_wib = datetime(
+                h_minus_1_wib.year, h_minus_1_wib.month, h_minus_1_wib.day,
+                18, 0, 0, tzinfo=wib_tz
+            )
+            order.settlement_due_date = settlement_due_wib.astimezone(tz.utc)
+    elif payment_type == "full":
+        order.settlement_due_date = None
+
     await db.commit()
     
     logger.info(
@@ -698,3 +717,62 @@ async def process_manual_payment(
         "order_status": order.status.value if hasattr(order.status, "value") else str(order.status),
     }
 
+async def check_expired_settlements(db: AsyncSession) -> int:
+    """
+    Background task: cek pesanan PARTIALLY_PAID yang sudah melewati settlement_due_date.
+    Jika waktu saat ini > settlement_due_date dan masih ada remaining_amount > 0,
+    ubah status order menjadi cancelled_settlement_expired dan bebaskan stok.
+    """
+    from sqlalchemy.orm import selectinload
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.recipe import Recipe
+    
+    now = datetime.now(timezone.utc)
+    
+    # Find orders with partial payment that have passed settlement_due_date
+    result = await db.execute(
+        select(Order)
+        .where(
+            Order.settlement_due_date != None,
+            Order.settlement_due_date < now,
+            Order.status.in_([OrderStatusEnum.pending, OrderStatusEnum.in_process]),
+        )
+        .options(
+            selectinload(Order.invoice),
+            selectinload(Order.order_items)
+            .selectinload(OrderItem.product)
+            .selectinload(Product.recipes)
+            .selectinload(Recipe.stock_item)
+        )
+    )
+    orders = result.scalars().all()
+    
+    cancelled_count = 0
+    for order in orders:
+        if not order.invoice:
+            continue
+        # Only cancel if invoice is partial (DP paid, remaining not paid)
+        if order.invoice.status != InvoiceStatusEnum.partial:
+            continue
+            
+        # Cancel the order
+        from app.services.order_service import _rollback_order_stock
+        try:
+            await _rollback_order_stock(db, order)
+        except Exception as e:
+            logger.error(f"Failed to rollback stock for order {order.id}: {e}")
+            continue
+            
+        order.status = OrderStatusEnum.cancelled_settlement_expired
+        cancelled_count += 1
+        logger.info(
+            "[SETTLEMENT_AUDIT] order_cancelled_expired | order_id=%s | "
+            "settlement_due_date=%s",
+            order.id, order.settlement_due_date,
+        )
+    
+    if cancelled_count > 0:
+        await db.commit()
+    
+    return cancelled_count

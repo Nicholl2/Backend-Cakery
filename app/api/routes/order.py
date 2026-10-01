@@ -172,6 +172,7 @@ async def create_order(
         created_via=data.created_via,
         notes=data.notes,
         due_date=data.due_date,
+        fulfillment_date=data.fulfillment_date,
         payment_method_preference=data.payment_method_preference,
     )
     return OrderOut.model_validate(order)

@@ -90,6 +90,20 @@ async def test_pydantic_schema_aliases_and_computed_in_stock():
     assert p3.stock_quantity == 10
     assert p3.is_in_stock is False
 
+    # Case D: is_available=True, but recipes=[] (empty recipe list) -> is_available=False
+    p4 = ProductResponse(
+        id=4,
+        nama_produk="Kue Tanpa Resep",
+        hpp_total=Decimal("10000.00"),
+        harga_jual=Decimal("20000.00"),
+        is_active=True,
+        is_available=True,
+        recipes=[],
+        stock_quantity=0,
+    )
+    assert p4.is_available is False
+    assert p4.is_in_stock is False
+
 
 @pytest.mark.asyncio
 async def test_product_stock_calculation_and_queries(test_session: AsyncSession):
@@ -409,3 +423,62 @@ async def test_api_products_endpoint_integration():
 
     app.dependency_overrides.clear()
     await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_product_availability_empty_recipe(test_session: AsyncSession):
+    """Test 5: Memverifikasi is_available mengembalikan False ketika produk tidak memiliki resep (recipe_items = [])."""
+    db = test_session
+
+    tepung = StockItem(
+        id=99,
+        nama_item="Tepung Terigu Khusus",
+        satuan=SatuanEnum.gram,
+        kategori=KategoriEnum.bahan_baku,
+        harga_per_satuan=Decimal("25.00"),
+        stok_tersedia=Decimal("1000.00"),
+        version=0,
+    )
+    db.add(tepung)
+
+    # Product with no recipe
+    p_no_recipe = Product(
+        id=99,
+        nama_produk="Kue Baru Belum Diatur Resep",
+        harga_jual=Decimal("50000.00"),
+        hpp_total=Decimal("0.00"),
+        is_active=True,
+        is_available=True,  # Seller set toggle to True
+        minimum_order=1,
+    )
+    db.add(p_no_recipe)
+    await db.commit()
+
+    # Query through service
+    prod = await product_service.get_product_or_404(db, 99)
+    # Model check
+    assert prod.has_recipe is False
+    assert prod.computed_availability is False
+    assert prod.is_in_stock is False
+
+    # Schema output validation (Seller dashboard view)
+    out = ProductOut.model_validate(prod)
+    assert out.is_available is False, "is_available must be False when recipes is empty"
+    assert out.is_in_stock is False
+
+    # Now add a recipe item
+    r = Recipe(product_id=99, stock_item_id=tepung.id, jumlah_dibutuhkan=Decimal("100.0000"))
+    db.add(r)
+    await db.commit()
+
+    # Re-fetch
+    prod_with_recipe = await product_service.get_product_or_404(db, 99)
+    assert prod_with_recipe.has_recipe is True
+    assert prod_with_recipe.computed_availability is True
+    assert prod_with_recipe.stock_quantity == 10
+    assert prod_with_recipe.is_in_stock is True
+
+    out_with_recipe = ProductOut.model_validate(prod_with_recipe)
+    assert out_with_recipe.is_available is True
+    assert out_with_recipe.is_in_stock is True
+

@@ -234,12 +234,15 @@ async def run_seller_order_tests():
 
         # ── Test 4: Buyer Order (POST /orders/buyer) with Stock Deduction ──
         print("\n4. Testing Buyer Order with Recipe Stock Deduction...")
+        from datetime import datetime, timezone, timedelta
+        future_fulfillment = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
         buyer_order_payload = {
             "metode_pengiriman": "delivery",
             "items": [
                 {"product_id": 1, "jumlah": 2, "custom_decoration_charge": "10000.00"}
             ],
-            "created_via": "web"
+            "created_via": "web",
+            "fulfillment_date": future_fulfillment,
         }
         res_buyer_order = await client.post(
             "/orders/buyer",

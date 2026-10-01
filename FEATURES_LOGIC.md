@@ -9,16 +9,25 @@ Dokumentasi lengkap logika bisnis, aturan validasi, dan otomasi alur kerja Backe
 Alur kerja saat endpoint `POST /orders` dipanggil oleh Chatbot atau Client:
 1. **Validasi Tagihan Aktif**:
    Sistem memeriksa apakah customer memiliki order yang belum lunas (`InvoiceStatusEnum.unpaid` atau `partial`). Jika ada, pembuatan order baru ditolak dengan HTTP `409 Conflict`.
-2. **Validasi Produk, Ketersediaan Stok & Minimum Order**:
+2. **Validasi Aturan Minimal H-1 Pre-Order (`fulfillment_date`)**:
+   - Skema checkout (`OrderCreate` & `BuyerOrderCreate`) mewajibkan atribut `fulfillment_date` (Tanggal & Jam Pengambilan/Pengiriman).
+   - `fulfillment_date` **minimal harus H+1** (besok hari) dari tanggal pesanan dibuat (`created_at`).
+   - Jika pembeli memilih tanggal pengambilan pada hari yang sama (*Same-day order*), sistem menolak dengan HTTP `400 Bad Request`:
+     > *"Pemesanan kue minimal H-1 sebelum tanggal pengambilan/pengiriman."*
+3. **Validasi Produk, Ketersediaan Resep & Stok (`is_available` & `is_in_stock`)**:
    - Produk harus berstatus `is_active = True` dan sudah memiliki `harga_jual`.
-   - **Ketersediaan Manual Seller**: Produk wajib memiliki status `is_available = True`. Jika seller menonaktifkan ketersediaan manual produk, sistem melempar HTTP `400 Bad Request` ("Produk 'X' sedang tidak tersedia.").
-   - **Ketersediaan Stok Bahan Baku (`is_in_stock`)**: Produk wajib memiliki `is_in_stock == True` dan `stock_quantity > 0`. Jika stok habis, sistem melempar HTTP `400 Bad Request` ("Stok produk 'X' sedang habis.").
+   - **Logika Availability Berbasis Resep**: Produk dianggap `is_available = True` HANYA JIKA:
+     1. Record `recipes` terhubung (`product.recipes is not None`).
+     2. Resep memiliki minimal 1 item bahan baku (`len(product.recipes) > 0`).
+     3. Toggle ketersediaan manual dari seller bernilai `True`.
+     - Jika resep kosong (`recipes == []`), sistem secara dinamis mengevaluasi `is_available = False` sehingga Seller Dashboard & Buyer Catalog menampilkan status *"Unavailable"*.
+   - **Ketersediaan Stok Bahan Baku (`is_in_stock`)**: Produk wajib memiliki `is_in_stock == True` dan `stock_quantity > 0`. Jika stok bahan baku habis di gudang, sistem melempar HTTP `400 Bad Request` ("Stok produk 'X' sedang habis.").
    - **Batas Kuantitas Pesanan**: Kuantitas pesanan (`jumlah`) tidak boleh melebihi `stock_quantity` yang tersedia, dan tidak boleh kurang dari `minimum_order` produk.
-3. **Kalkulasi Kebutuhan Bahan Baku (Bill of Materials)**:
+4. **Kalkulasi Kebutuhan Bahan Baku (Bill of Materials)**:
    - Untuk setiap produk dalam pesanan, sistem mengalikan kuantitas pesanan dengan takaran bahan baku di tabel `recipes`:
      $$\text{total\_needed} = \text{jumlah pesanan} \times \text{jumlah\_dibutuhkan}$$
    - Sistem menjumlahkan kebutuhan per `stock_item_id` dan memvalidasi apakah `stok_tersedia >= total_needed`.
-4. **Pengurangan Stok dengan Optimistic Locking & Auto-Retry**:
+5. **Pengurangan Stok dengan Optimistic Locking & Auto-Retry**:
    - Pengurangan stok dieksekusi dengan query berfilter versi:
      ```sql
      UPDATE stock_items 
@@ -27,9 +36,9 @@ Alur kerja saat endpoint `POST /orders` dipanggil oleh Chatbot atau Client:
      ```
    - **Auto-Retry Loop (Maksimal 3 Kali)**: Jika `rowcount == 0` (terjadi modifikasi bersamaan oleh transaksi checkout lain), sistem tidak langsung menolak pesanan melainkan me-refetch data bahan baku terkini dan mencoba kembali hingga 3 percobaan (`MAX_STOCK_RETRY = 3`).
    - Jika setelah 3 kali percobaan tetap terjadi conflict atau sisa stok tidak mencukupi kebutuhan pesanan, transaksi di-rollback dan melempar HTTP `400 Bad Request` untuk mencegah overselling.
-5. **Snapshot HPP & Pembuatan Invoice**:
+6. **Snapshot HPP & Pembuatan Invoice**:
    - Nilai HPP produk saat transaksi disimpan ke kolom `order_items.hpp_snapshot` untuk integritas audit laba kotor di masa mendatang.
-   - Nomor invoice dibuat dengan format: `INV-YYYYMMDD-{order_id}` dengan status awal `unpaid`.
+   - Nomor invoice dibuat dengan format: `INV-YYYYMMDD-{order_id}-{suffix}` dengan status awal `unpaid`.
 
 ---
 
@@ -47,21 +56,35 @@ Alur kerja saat endpoint `POST /orders/{order_id}/cancel` dipanggil:
 
 ---
 
-## 3. Integrasi Pembayaran Midtrans Core API (Headless Charge)
+## 3. Integrasi Pembayaran Midtrans Core API (DP 50% & Full Payment)
 
 Alur kerja pada endpoint `POST /payments`:
 1. **Validasi Anti-Tampering Nominal**:
-   - Pembayaran tipe `full` wajib sama persis dengan `order.total_harga_pesanan`.
-   - Pembayaran tipe `dp` wajib bernilai $50\%$ dari `order.total_harga_pesanan` ($0.5 \times \text{total}$).
+   - Pembayaran tipe `full`: Wajib sama persis dengan `order.total_harga_pesanan` ($100\%$). Kolom `order.settlement_due_date` diset ke `None`.
+   - Pembayaran tipe `dp`: Wajib bernilai tepat $50\%$ dari `order.total_harga_pesanan` ($0.5 \times \text{total}$).
+   - **Kalkulasi Tanggal Jatuh Tempo Pelunasan (`settlement_due_date`)**:
+     Jika tipe pembayaran `dp`, sistem menghitung:
+     $$\text{settlement\_due\_date} = \text{fulfillment\_date} - 1\text{ hari (pukul 18:00 WIB / 11:00 UTC)}$$
    - Jika nominal tidak cocok dengan kalkulasi backend, sistem menolak dengan HTTP `400 Bad Request`.
 2. **Dispatch Transaksi ke Midtrans**:
    - Mengirim request HTTP POST ke `/charge` Midtrans Sandbox/Production menggunakan `Basic Auth` (`midtrans_server_key`).
    - Mendukung metode `bank_transfer` (BCA Virtual Account) dan `qris` (dynamic QR code URL).
 3. **Pencatatan Record Pembayaran & Audit Trail**:
    - Membuat record baru di tabel `payments` dengan status awal `Pending` dan tipe `DP` atau `Final`.
+   - Menyimpan `settlement_due_date` pada record `Order`.
    - Menghasilkan structured log `[PAYMENT_AUDIT] charge_created`.
 
 ---
+
+## 3b. Otomasi Pembatalan Pesanan DP Jatuh Tempo (`check_expired_settlements`)
+
+Alur kerja background task / endpoint internal `POST /payments/check-expired-settlements`:
+1. **Pencarian Pesanan Kadaluarsa**:
+   - Mencari order yang memiliki `settlement_due_date < now()` dengan status pesanan masih `pending` atau `in_process` dan status invoice `partial` (DP lunas, sisa pelunasan belum dibayar).
+2. **Eksekusi Pembatalan & Pemulihan Stok**:
+   - Memulihkan kuantitas bahan baku (`StockItem`) ke gudang via Optimistic Concurrency Control (`_rollback_order_stock`).
+   - Mengubah status pesanan menjadi `OrderStatusEnum.cancelled_settlement_expired`.
+   - Mencatat log audit `[SETTLEMENT_AUDIT] order_cancelled_expired`.
 
 ## 4. Otomasi Webhook Settlement, Idempotency & State Machine
 

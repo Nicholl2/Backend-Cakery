@@ -21,6 +21,7 @@ class OrderStatusEnum(str, enum.Enum):
     completed = "completed"
     cancelled = "cancelled"
     refunded = "refunded"
+    cancelled_settlement_expired = "cancelled_settlement_expired"
 
 
 class MetodePengirimanEnum(str, enum.Enum):
@@ -53,6 +54,8 @@ class Order(Base):
     created_via = Column(String(50), nullable=False, default="chatbot")
     notes = Column(Text, nullable=True)
     due_date = Column(DateTime(timezone=True), nullable=True)
+    fulfillment_date = Column(DateTime(timezone=True), nullable=True)
+    settlement_due_date = Column(DateTime(timezone=True), nullable=True)
     payment_method_preference = Column(String(50), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -129,7 +132,7 @@ class Invoice(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     order = relationship("Order", back_populates="invoice")
-    payments = relationship("Payment", back_populates="invoice")
+    payments = relationship("Payment", back_populates="invoice", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Invoice(id={self.id}, nomor_invoice={self.nomor_invoice}, status={self.status})>"

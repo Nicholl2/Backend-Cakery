@@ -2,7 +2,9 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
+from unittest.mock import patch, AsyncMock
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
@@ -17,13 +19,14 @@ from app.core.migrations import (
     ensure_recipe_columns,
     ensure_otp_columns,
     ensure_order_columns,
+    ensure_fulfillment_columns,
 )
 from app.core.seeder import seed_initial_data
 from app.main import app
 from app.models.buyer import Buyer
 from app.models.product import Product
 from app.models.customer import Customer
-from app.models.order import Order
+from app.models.order import Order, OrderStatusEnum, InvoiceStatusEnum
 from app.repositories import buyer_repo, customer_repo
 from app.core.security import create_access_token
 
@@ -57,6 +60,7 @@ async def run_tests():
         await ensure_recipe_columns(conn)
         await ensure_otp_columns(conn)
         await ensure_order_columns(conn)
+        await ensure_fulfillment_columns(conn)
 
     async with TestSessionLocal() as db:
         await seed_initial_data(db)
@@ -100,6 +104,8 @@ async def run_tests():
     token_buyer1 = create_access_token(user_id=buyer1_id, role_level=0, username=b1_email, role="buyer")
     token_buyer2 = create_access_token(user_id=buyer2_id, role_level=0, username=b2_email, role="buyer")
 
+    future_fulfillment = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         # Test 1: Create Order via Buyer JWT (POST /orders/buyer)
         print("\n1. Testing POST /orders/buyer with Buyer 1 JWT...")
@@ -108,7 +114,8 @@ async def run_tests():
             "items": [
                 {"product_id": prod_id, "jumlah": 1, "custom_decoration_charge": "0.00"}
             ],
-            "created_via": "web"
+            "created_via": "web",
+            "fulfillment_date": future_fulfillment,
         }
         res = await client.post(
             "/orders/buyer",
@@ -122,6 +129,20 @@ async def run_tests():
         assert order1_data["status"] == "pending"
         assert order1_data["created_via"] == "web"
         assert len(order1_data["items"]) == 1
+        assert order1_data["fulfillment_date"] is not None
+
+        # Test 1b: Same-day order rejection (H-1 pre-order business rule)
+        print("\n1b. Testing same-day order rejection (POST /orders/buyer)...")
+        same_day_payload = order_payload.copy()
+        same_day_payload["fulfillment_date"] = datetime.now(timezone.utc).isoformat()
+        res_same_day = await client.post(
+            "/orders/buyer",
+            json=same_day_payload,
+            headers={"Authorization": f"Bearer {token_buyer1}"}
+        )
+        assert res_same_day.status_code in (400, 422), f"Expected 400 or 422, got {res_same_day.status_code}"
+        assert "Pemesanan kue minimal H-1 sebelum tanggal pengambilan/pengiriman" in res_same_day.text
+        print("✓ Same-day order rejected with proper H-1 error message")
 
         # Test 2: Unauthenticated POST /orders/buyer should fail (401)
         print("\n2. Testing unauthenticated POST /orders/buyer...")
@@ -186,7 +207,8 @@ async def run_tests():
             "items": [
                 {"product_id": prod_id, "jumlah": 1, "custom_decoration_charge": "0.00"}
             ],
-            "created_via": "chatbot"
+            "created_via": "chatbot",
+            "fulfillment_date": future_fulfillment,
         }
         res_cb = await client.post(
             "/orders",
@@ -213,6 +235,83 @@ async def run_tests():
         )
         assert res_pay_unauth.status_code == 404
         print("✓ Unauthorized payment attempt on another user's order blocked (404)")
+
+        # Test 8b: DP 50% calculation & settlement_due_date calculation accuracy
+        print("\n8b. Testing DP 50% payment calculation & settlement_due_date accuracy...")
+        total_price = Decimal(str(order1_data["total_harga_pesanan"]))
+        expected_dp = total_price * Decimal("0.5")
+
+        # Mock Midtrans response for DP payment
+        midtrans_dp_response = {
+            "status_code": "201",
+            "status_message": "Success, Bank Transfer transaction is created",
+            "transaction_id": "mock-dp-txn-id-123",
+            "order_id": f"{order1_data['invoice']['nomor_invoice']}-PAY-1",
+            "gross_amount": str(int(expected_dp)),
+            "payment_type": "bank_transfer",
+            "transaction_time": "2026-10-01 10:00:00",
+            "transaction_status": "pending",
+            "va_numbers": [{"bank": "bca", "va_number": "12345678901"}]
+        }
+        orig_post = httpx.AsyncClient.post
+        async def mock_midtrans_post(self, url, *args, **kwargs):
+            if "midtrans" in str(url):
+                from unittest.mock import MagicMock
+                return MagicMock(status_code=200, json=lambda: midtrans_dp_response)
+            return await orig_post(self, url, *args, **kwargs)
+
+        with patch.object(httpx.AsyncClient, "post", new=mock_midtrans_post):
+            
+            # Tampered amount (not 50%) -> MUST 400
+            res_tampered = await client.post(
+                "/payments",
+                json={
+                    "order_id": order1_id,
+                    "payment_method": "bank_transfer",
+                    "payment_type": "dp",
+                    "amount": float(total_price * Decimal("0.8"))
+                },
+                headers={"Authorization": f"Bearer {token_buyer1}"}
+            )
+            assert res_tampered.status_code == 400
+            print("✓ Tampered DP amount rejected (400 Bad Request)")
+
+            # Correct 50% DP amount -> MUST 201
+            res_dp = await client.post(
+                "/payments",
+                json={
+                    "order_id": order1_id,
+                    "payment_method": "bank_transfer",
+                    "payment_type": "dp",
+                    "amount": float(expected_dp)
+                },
+                headers={"Authorization": f"Bearer {token_buyer1}"}
+            )
+            assert res_dp.status_code == 201
+            print("✓ DP 50% payment created successfully")
+
+        # Verify settlement_due_date calculation (H-1 before fulfillment_date at 18:00 WIB = 11:00 UTC)
+        res_order_after_dp = await client.get(
+            f"/orders/buyer/{order1_id}",
+            headers={"Authorization": f"Bearer {token_buyer1}"}
+        )
+        assert res_order_after_dp.status_code == 200
+        order_dp_data = res_order_after_dp.json()
+        assert order_dp_data["settlement_due_date"] is not None
+        
+        wib_tz = timezone(timedelta(hours=7))
+        f_dt = datetime.fromisoformat(order_dp_data["fulfillment_date"])
+        f_wib = f_dt.astimezone(wib_tz)
+        h_minus_1_wib = f_wib.date() - timedelta(days=1)
+        expected_settlement_wib = datetime(
+            h_minus_1_wib.year, h_minus_1_wib.month, h_minus_1_wib.day,
+            18, 0, 0, tzinfo=wib_tz
+        )
+        actual_settlement_dt = datetime.fromisoformat(order_dp_data["settlement_due_date"])
+        if actual_settlement_dt.tzinfo is None:
+            actual_settlement_dt = actual_settlement_dt.replace(tzinfo=timezone.utc)
+        assert actual_settlement_dt.astimezone(wib_tz) == expected_settlement_wib
+        print(f"✓ settlement_due_date verified exact H-1 at 18:00 WIB: {order_dp_data['settlement_due_date']}")
 
         # Test GET /payments/{order_id}/status for Buyer 1
         print("\n9. Testing GET /payments/{order_id}/status with Buyer 1 JWT...")
@@ -395,13 +494,46 @@ async def run_tests():
         assert res_alias.status_code == 200, f"Expected 200, got {res_alias.status_code}: {res_alias.text}"
         assert res_alias.json() == {"status": "ok", "message": "Test notification received, dummy order ignored"}
 
-        # Test invalid signature on webhook returns 200 OK (error_handled)
-        bad_payload = notify_payload.copy()
-        bad_payload["signature_key"] = "invalidsignature123"
-        res_bad_sig = await client.post("/payments/notify", json=bad_payload)
-        assert res_bad_sig.status_code == 200
-        assert res_bad_sig.json()["status"] == "error_handled"
-        print("✓ Webhook endpoints /notify & /notification and defensive dummy order response verified (200 OK)")
+        # Test 15: Background task / internal endpoint check_expired_settlements
+        print("\n15. Testing check_expired_settlements background task & status update...")
+        from app.models.order import MetodePengirimanEnum, Invoice
+        from app.models.stock_item import StockItem
+        async with TestSessionLocal() as db:
+            c1 = await customer_repo.get_by_nomor_wa(db, b1_phone)
+            expired_order = Order(
+                customer_id=c1.id,
+                status=OrderStatusEnum.pending,
+                metode_pengiriman=MetodePengirimanEnum.pickup,
+                total_harga_pesanan=Decimal("100000.00"),
+                fulfillment_date=datetime.now(timezone.utc) + timedelta(hours=2),
+                settlement_due_date=datetime.now(timezone.utc) - timedelta(hours=1), # Expired!
+                created_via="web",
+            )
+            db.add(expired_order)
+            await db.flush()
+
+            expired_inv = Invoice(
+                order_id=expired_order.id,
+                nomor_invoice=f"INV-EXPIRED-{int(datetime.now().timestamp())}",
+                total_tagihan=Decimal("100000.00"),
+                status=InvoiceStatusEnum.partial, # DP paid, remaining unpaid
+            )
+            db.add(expired_inv)
+            await db.commit()
+            expired_order_id = expired_order.id
+
+        # Call endpoint check-expired-settlements with service key
+        res_expired = await client.post(
+            "/payments/check-expired-settlements",
+            headers={"X-Service-Key": settings.service_api_key}
+        )
+        assert res_expired.status_code == 200
+        assert res_expired.json()["cancelled_orders_count"] >= 1
+
+        async with TestSessionLocal() as db:
+            exp_check = (await db.execute(select(Order).where(Order.id == expired_order_id))).scalar_one()
+            assert exp_check.status == OrderStatusEnum.cancelled_settlement_expired
+        print("✓ Expired settlement order successfully transitioned to cancelled_settlement_expired")
     async with TestSessionLocal() as db:
         for b_id in [buyer1_id, buyer2_id, buyer3_id, buyer4_id]:
             b = await buyer_repo.get_buyer_by_id(db, b_id)

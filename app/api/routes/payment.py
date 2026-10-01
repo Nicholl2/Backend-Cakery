@@ -222,3 +222,24 @@ async def handle_midtrans_notification(
     except Exception as e:
         logger.error(f"Midtrans notification error: {e}", exc_info=True)
         return JSONResponse(status_code=200, content={"status": "error_handled"})
+
+
+# 4. Endpoint POST /payments/check-expired-settlements (Internal / Background task)
+@router.post("/check-expired-settlements",
+             summary="Check and cancel expired partially paid orders (Internal / Service / Staff)")
+async def check_expired_settlements_endpoint(
+    auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Memeriksa dan membatalkan pesanan DP (partially paid) yang melewati settlement_due_date.
+    Mengembalikan jumlah pesanan yang dibatalkan.
+    """
+    if not auth.is_service and not auth.is_internal_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak"
+        )
+    cancelled_count = await payment_service.check_expired_settlements(db)
+    return {"success": True, "cancelled_orders_count": cancelled_count}
+

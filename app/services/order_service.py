@@ -38,6 +38,7 @@ async def create_new_order(
     created_via: str = "chatbot",
     notes: Optional[str] = None,
     due_date: Optional[datetime] = None,
+    fulfillment_date: Optional[datetime] = None,
     payment_method_preference: Optional[str] = None,
 ) -> Order:
     try:
@@ -199,6 +200,7 @@ async def create_new_order(
             created_via=created_via,
             notes=notes,
             due_date=due_date,
+            fulfillment_date=fulfillment_date,
             payment_method_preference=payment_method_preference,
         )
         await order_repo.create_order(db, order_obj)  # flush → dapat order.id
@@ -316,6 +318,7 @@ async def create_custom_order(
                 created_via="seller",
                 notes=data.notes,
                 due_date=data.due_date,
+                fulfillment_date=data.fulfillment_date if hasattr(data, 'fulfillment_date') else None,
                 payment_method_preference=data.payment_method_preference,
             )
             await order_repo.create_order(db, order_obj)
@@ -497,6 +500,7 @@ async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCre
             created_via=data.created_via,
             notes=data.notes,
             due_date=data.due_date,
+            fulfillment_date=data.fulfillment_date,
             payment_method_preference=data.payment_method_preference,
         )
         await _attach_payment_amounts(db, order)

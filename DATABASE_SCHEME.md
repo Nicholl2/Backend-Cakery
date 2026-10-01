@@ -183,12 +183,14 @@ Table price_histories {
 Table orders {
   id int [pk, increment]
   customer_id int [ref: > customers.id, not null]
-  status enum('pending','in_process','ready','delivered','picked_up','completed','cancelled','refunded') [default: 'pending', not null]
+  status enum('pending','in_process','ready','delivered','picked_up','completed','cancelled','refunded','cancelled_settlement_expired') [default: 'pending', not null]
   metode_pengiriman enum('pickup','delivery') [not null]
   total_harga_pesanan decimal(10,2) [default: 0, not null]
   created_via varchar(50) [default: 'chatbot', not null]
   notes text [null, note: 'Catatan pesanan kustom / instruksi pengiriman']
-  due_date timestamp [null, note: 'Tenggat waktu pengerjaan / tanggal pengiriman']
+  due_date timestamp [null, note: 'Tenggat waktu pengerjaan / tanggal pengiriman legacy']
+  fulfillment_date timestamp [null, note: 'Tanggal & Jam Pengambilan/Pengiriman (Wajib minimal H-1 sebelum pesanan)']
+  settlement_due_date timestamp [null, note: 'Tenggat waktu pelunasan sisa tagihan DP (H-1 sebelum fulfillment_date pukul 18:00 WIB)']
   payment_method_preference varchar(50) [null, note: 'Preferensi metode bayar']
   created_at timestamp [default: `now()`]
   updated_at timestamp

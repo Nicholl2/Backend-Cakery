@@ -125,6 +125,10 @@ class ProductOut(BaseModel):
 
     @model_validator(mode='after')
     def compute_fields_and_fallback(self):
+        # If recipes list is empty, product has no recipes and is NOT available
+        if self.recipes is not None:
+            has_recipe = bool(len(self.recipes) > 0)
+            self.is_available = bool(self.is_available and has_recipe)
         self.is_in_stock = bool(self.is_available and (self.stock_quantity or 0) > 0)
         # Backward compatibility for single image_url
         if self.images:
