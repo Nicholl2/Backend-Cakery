@@ -126,13 +126,18 @@ async def get_auth_identity_optional_service_or_jwt(
                     )
                 return AuthIdentity(auth_type="buyer", buyer=buyer, user_id=sub_id, role="buyer")
             else:
-                is_active = await user_repo.is_user_active(db, sub_id)
-                if not is_active:
+                user = await user_repo.get_user_by_id(db, sub_id)
+                if user and not user.is_active:
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="User is no longer active"
                     )
-                return AuthIdentity(auth_type="user", user_id=sub_id, role=payload.get("role_level"))
+                jwt_role = payload.get("role_level")
+                if user and user.role and user.role.level is not None:
+                    effective_role = max(int(jwt_role) if jwt_role is not None else 3, user.role.level)
+                else:
+                    effective_role = jwt_role
+                return AuthIdentity(auth_type="user", user_id=sub_id, role=effective_role)
         except HTTPException:
             raise
         except SQLAlchemyError as err:
@@ -155,15 +160,45 @@ async def get_auth_identity_optional_service_or_jwt(
 
 
 async def get_current_user_role_level(
-    payload: dict = Depends(get_current_user_payload)
+    payload: dict = Depends(get_current_user_payload),
+    db: Optional[AsyncSession] = Depends(get_db),
 ) -> int:
-    """Extract role level from token"""
+    """
+    Extract role level from token and verify against DB to prevent stale
+    JWT role privilege escalation.
+    - Buyers are strictly rejected from internal endpoints.
+    - If user exists in DB, inactive users are rejected and demotions are enforced.
+    - If DB lookup is unavailable or user unseeded in unit tests, uses token role_level.
+    """
     if payload.get("role") == "buyer" or payload.get("role_level") == 0:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Buyers are not allowed to access internal APIs"
         )
-    return int(payload.get("role_level", 3))
+
+    jwt_role_level = int(payload.get("role_level", 3))
+
+    if db is not None:
+        try:
+            sub = payload.get("sub")
+            if sub is not None:
+                user = await user_repo.get_user_by_id(db, int(sub))
+                if user:
+                    if not user.is_active:
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="User is no longer active"
+                        )
+                    if user.role and user.role.level is not None:
+                        # Enforce freshest DB role: lower level = higher privilege,
+                        # so max() prevents maintaining higher privilege after demotion
+                        return max(jwt_role_level, user.role.level)
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    return jwt_role_level
 
 
 async def require_service_key(

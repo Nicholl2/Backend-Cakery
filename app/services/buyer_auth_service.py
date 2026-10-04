@@ -392,6 +392,16 @@ async def register_buyer(
 ) -> dict:
     """Register a new buyer if verification token is valid"""
     phone = normalize_phone(phone)
+
+    from app.core.security import validate_password_strength
+    try:
+        validate_password_strength(password)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
     # Validate and consume verify token from DB
     await validate_and_consume_db_verify_token(db, verify_token, phone)
         
@@ -576,10 +586,13 @@ async def change_buyer_password(
             detail="Password saat ini tidak sesuai."
         )
 
-    if len(new_password) < 6:
+    from app.core.security import validate_password_strength
+    try:
+        validate_password_strength(new_password)
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password baru harus minimal 6 karakter."
+            detail=str(e),
         )
 
     new_hash = hash_password(new_password)
@@ -612,6 +625,16 @@ async def change_buyer_phone(
 
 async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password: str) -> dict:
     """Reset buyer password via verification token"""
+    from app.core.security import validate_password_strength
+
+    try:
+        validate_password_strength(new_password)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
     stmt = select(OTPCode).where(OTPCode.verify_token == verify_token)
     res = await db.execute(stmt)
     otp = res.scalars().first()
@@ -701,6 +724,9 @@ async def reset_buyer_password_email(
     db: AsyncSession, email: str, otp_code: str, new_password: str
 ) -> dict:
     """Reset buyer password via email + OTP verification."""
+    from app.core.security import validate_password_strength
+
+    validate_password_strength(new_password)
 
     # Find the latest unused OTP for this email & purpose
     stmt = (
@@ -721,6 +747,15 @@ async def reset_buyer_password_email(
             detail="Kode OTP tidak valid atau tidak ditemukan."
         )
 
+    # Check max attempts — lock OTP if exceeded
+    if (otp.attempt_count or 0) >= _MAX_OTP_VERIFY_ATTEMPTS:
+        otp.is_used = True
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Batas percobaan verifikasi OTP tercapai (maksimal 5 kali). Silakan minta kode baru."
+        )
+
     # Check expiry
     otp_expires = otp.expires_at
     if otp_expires.tzinfo is None:
@@ -731,14 +766,24 @@ async def reset_buyer_password_email(
             detail="Kode OTP telah kedaluwarsa."
         )
 
-    # Verify OTP code against hash
+    # Verify OTP code against hash — increment attempts on failure
     if not verify_password(otp_code, otp.code_hash):
+        otp.attempt_count = (otp.attempt_count or 0) + 1
+        await db.commit()
+        if otp.attempt_count >= _MAX_OTP_VERIFY_ATTEMPTS:
+            otp.is_used = True
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Batas percobaan verifikasi OTP tercapai (maksimal 5 kali). Silakan minta kode baru."
+            )
+        remaining = _MAX_OTP_VERIFY_ATTEMPTS - otp.attempt_count
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Kode OTP salah."
+            detail=f"Kode OTP salah. Sisa percobaan: {remaining}."
         )
 
-    # Mark OTP as used
+    # Mark OTP as used (single-use)
     otp.is_used = True
     await db.commit()
 
@@ -783,6 +828,16 @@ async def verify_seller_forgot_password(db: AsyncSession, otp_id: str, code: str
 
 async def reset_seller_password(db: AsyncSession, verify_token: str, new_password: str) -> dict:
     """Reset seller/internal user password via verification token"""
+    from app.core.security import validate_password_strength
+
+    try:
+        validate_password_strength(new_password)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
     stmt = select(OTPCode).where(OTPCode.verify_token == verify_token)
     res = await db.execute(stmt)
     otp = res.scalars().first()

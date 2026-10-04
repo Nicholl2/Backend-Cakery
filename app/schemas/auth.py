@@ -13,7 +13,7 @@ class UserLogin(BaseModel):
     email: Optional[str] = Field(None, max_length=100)
     phone: Optional[str] = Field(None, max_length=16)
     phone_number: Optional[str] = Field(None, max_length=16)
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=8)
 
     @model_validator(mode="before")
     @classmethod
@@ -106,7 +106,7 @@ class BuyerRegisterRequest(BaseModel):
     email: str = Field(..., max_length=100)
     phone: Optional[str] = Field(None, max_length=16)
     phone_number: Optional[str] = Field(None, max_length=16)
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=8)
     verify_token: str
 
     @field_validator("phone", "phone_number", mode="before")
@@ -180,7 +180,7 @@ class BuyerLoginOTPRequest(BaseModel):
 
 class BuyerResetPasswordRequest(BaseModel):
     verify_token: str
-    new_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=8)
 
 
 class SellerForgotPasswordRequest(BaseModel):
@@ -194,7 +194,7 @@ class SellerForgotPasswordVerifyRequest(BaseModel):
 
 class SellerResetPasswordRequest(BaseModel):
     verify_token: str
-    new_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=8)
 
 
 # ── BUYER FORGOT/RESET PASSWORD VIA EMAIL ────────────────────────────────────
@@ -208,7 +208,7 @@ class BuyerResetPasswordEmailRequest(BaseModel):
     """Reset password via email OTP verification."""
     email: str = Field(..., max_length=100)
     otp: str = Field(..., max_length=10)
-    new_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=8)
 
 
 # ── WA DEEP LINK OTP SCHEMAS ────────────────────────────────────────────────

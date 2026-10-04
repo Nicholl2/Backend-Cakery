@@ -40,5 +40,11 @@ class TTLCache:
         self._store.clear()
 
 
-# Singleton global cache instance
+# Singleton global cache instance.
+# NOTE: This cache is PROCESS-LOCAL. In a multi-worker deployment (e.g.
+# gunicorn with multiple workers), each worker process has its own independent
+# cache. Security state stored here (login lockout counters, JWT blacklist)
+# is NOT shared across workers. For strict global enforcement, replace with
+# a shared store such as Redis. For single-worker deployments (uvicorn) or
+# low-traffic apps, in-memory is sufficient.
 app_cache = TTLCache(default_ttl=300)

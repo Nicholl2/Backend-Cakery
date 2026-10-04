@@ -30,7 +30,9 @@ router = APIRouter(
 
 
 @router.post("/bootstrap", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+@limiter.limit(RATE_AUTH_LOGIN)
 async def bootstrap(
+    request: Request,
     data: UserBootstrap,
     db: AsyncSession = Depends(get_db)
 ) -> UserOut:

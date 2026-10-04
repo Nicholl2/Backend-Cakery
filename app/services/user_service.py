@@ -103,6 +103,12 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
         )
 
     # 5. Hash password & Insert
+    from app.core.security import validate_password_strength
+    try:
+        validate_password_strength(data.password)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
     hashed_pwd = hash_password(data.password)
     
     new_user = User(
@@ -153,7 +159,13 @@ async def bootstrap_owner(db: AsyncSession, data: UserBootstrap) -> User:
             detail="Tabel users tidak kosong. Bootstrap hanya diizinkan untuk setup pertama kali."
         )
         
-    # Hash password
+    # Validate and hash password
+    from app.core.security import validate_password_strength
+    try:
+        validate_password_strength(data.password)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
     hashed_pwd = hash_password(data.password)
     
     owner_user = User(
@@ -260,6 +272,12 @@ async def change_user_password(db: AsyncSession, user_id: int, data: ChangePassw
             detail="Password lama tidak sesuai"
         )
 
+    from app.core.security import validate_password_strength
+    try:
+        validate_password_strength(data.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
     user.password_hash = hash_password(data.new_password)
     await db.commit()
 
@@ -351,6 +369,11 @@ async def admin_update_user(
         user.is_active = data.is_active
 
     if data.password:
+        from app.core.security import validate_password_strength
+        try:
+            validate_password_strength(data.password)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         user.password_hash = hash_password(data.password)
 
     await db.commit()

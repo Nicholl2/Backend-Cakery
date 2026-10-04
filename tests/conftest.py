@@ -1,3 +1,11 @@
+"""
+Shared test fixtures for Toti Cakery Backend tests.
+
+Tests are designed to run without a live database by mocking
+the async session and repositories where needed.
+"""
+
+import pytest
 import sys
 import os
 

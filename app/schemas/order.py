@@ -32,16 +32,8 @@ class OrderCreate(BaseModel):
     @field_validator("fulfillment_date", mode="after")
     @classmethod
     def validate_fulfillment_date(cls, v):
-        from datetime import timezone, timedelta
-        now = datetime.now(timezone.utc)
-        # fulfillment_date must be at least H+1 (tomorrow)
-        min_date = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        if v.tzinfo is None:
-            from datetime import timezone as tz
-            v = v.replace(tzinfo=tz.utc)
-        if v < min_date:
-            raise ValueError("Pemesanan kue minimal H-1 sebelum tanggal pengambilan/pengiriman.")
-        return v
+        from app.utils.business_date import validate_fulfillment_date as _validate
+        return _validate(v)
 
     @field_validator("notes", mode="before")
     @classmethod
@@ -63,16 +55,8 @@ class BuyerOrderCreate(BaseModel):
     @field_validator("fulfillment_date", mode="after")
     @classmethod
     def validate_fulfillment_date(cls, v):
-        from datetime import timezone, timedelta
-        now = datetime.now(timezone.utc)
-        # fulfillment_date must be at least H+1 (tomorrow)
-        min_date = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        if v.tzinfo is None:
-            from datetime import timezone as tz
-            v = v.replace(tzinfo=tz.utc)
-        if v < min_date:
-            raise ValueError("Pemesanan kue minimal H-1 sebelum tanggal pengambilan/pengiriman.")
-        return v
+        from app.utils.business_date import validate_fulfillment_date as _validate
+        return _validate(v)
 
     @field_validator("notes", mode="before")
     @classmethod
@@ -109,6 +93,14 @@ class CustomOrderCreate(BaseModel):
     @classmethod
     def sanitize_name(cls, v):
         return sanitize_text(v)
+
+    @field_validator("fulfillment_date", mode="after")
+    @classmethod
+    def validate_fulfillment_date(cls, v):
+        if v is None:
+            return v
+        from app.utils.business_date import validate_fulfillment_date as _validate
+        return _validate(v)
 
     @field_validator("notes", "customer_address", mode="before")
     @classmethod
@@ -253,6 +245,14 @@ class OrderOut(BaseModel):
     amount_paid: Optional[Decimal] = None
     amount_due: Optional[Decimal] = None
 
+    @field_validator("fulfillment_date", "settlement_due_date", "due_date", "created_at", "updated_at", mode="after")
+    @classmethod
+    def ensure_utc_timezone(cls, v):
+        from datetime import timezone as tz
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=tz.utc)
+        return v
+
     @field_validator("created_via", mode="before")
     @classmethod
     def sanitize_created_via(cls, v):
@@ -300,6 +300,16 @@ from app.models.order import OrderStatusEnum
 
 class OrderStatusUpdate(BaseModel):
     status: OrderStatusEnum
+
+
+class OrderDateUpdate(BaseModel):
+    fulfillment_date: datetime
+
+    @field_validator("fulfillment_date", mode="after")
+    @classmethod
+    def validate_fulfillment_date(cls, v):
+        from app.utils.business_date import validate_fulfillment_date as _validate
+        return _validate(v)
 
 
 class OrderStatsOut(BaseModel):

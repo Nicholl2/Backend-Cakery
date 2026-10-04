@@ -24,6 +24,7 @@ from app.schemas.order import (
     CustomOrderCreate,
     OrderOut,
     OrderStatusUpdate,
+    OrderDateUpdate,
     RefundRequest,
     RefundResponse,
     OrderStatsOut,
@@ -273,6 +274,23 @@ async def update_order_status(
     Jika status diubah menjadi 'cancelled', stok bahan baku pesanan biasa akan dikembalikan secara otomatis.
     """
     order = await order_service.update_order_status(db, order_id, data.status.value)
+    return OrderOut.model_validate(order)
+
+
+@router.patch("/{order_id}/fulfillment-date", response_model=OrderOut,
+              dependencies=[Depends(require_internal_user)],
+              summary="Update tanggal fulfillment/pickup pesanan oleh seller")
+async def update_order_fulfillment_date(
+    order_id: int,
+    data: OrderDateUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> OrderOut:
+    """
+    Update tanggal fulfillment/pickup pesanan oleh Seller (Staff/Admin/Owner).
+    Aturan H-1 dan H+30 hari kalender tetap divalidasi.
+    Pesanan yang sudah dalam status terminal atau selesai/batal tidak dapat diubah tanggalnya.
+    """
+    order = await order_service.update_order_fulfillment_date(db, order_id, data.fulfillment_date)
     return OrderOut.model_validate(order)
 
 

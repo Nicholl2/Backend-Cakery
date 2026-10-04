@@ -50,6 +50,17 @@ async def create_new_order(
                 detail="Customer masih memiliki tagihan aktif yang belum lunas.",
             )
 
+        # ── 1b. Validasi tanggal fulfillment (defense-in-depth) ──────────────
+        if fulfillment_date is not None:
+            from app.utils.business_date import validate_fulfillment_date as _validate_date
+            try:
+                _validate_date(fulfillment_date)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(e),
+                )
+
         # ── 2. Validasi & kalkulasi item ─────────────────────────────────────
         total_harga_pesanan = Decimal("0.00")
         item_data_list: list[dict] = []
@@ -279,6 +290,18 @@ async def create_custom_order(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Customer masih memiliki tagihan aktif yang belum lunas.",
                 )
+
+            # Validasi tanggal fulfillment (defense-in-depth)
+            fulfillment = getattr(data, 'fulfillment_date', None)
+            if fulfillment is not None:
+                from app.utils.business_date import validate_fulfillment_date as _validate_date
+                try:
+                    _validate_date(fulfillment)
+                except ValueError as e:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=str(e),
+                    )
 
             # Kalkulasi item & total
             total_harga_pesanan = Decimal("0.00")
@@ -846,3 +869,51 @@ async def get_order_stats(
             pass
 
     return await order_repo.get_order_stats(db, start_dt, end_dt)
+
+
+async def update_order_fulfillment_date(
+    db: AsyncSession,
+    order_id: int,
+    new_fulfillment_date: datetime,
+) -> Order:
+    """
+    Update tanggal fulfillment/pickup pesanan dengan memvalidasi aturan H+1 s/d H+30.
+    Menolak pembaruan jika pesanan sudah dalam status terminal atau selesai/batal.
+    """
+    from app.utils.business_date import validate_fulfillment_date as _validate_date
+    from app.core.state_machine import is_order_terminal
+
+    # 1. Validasi aturan bisnis tanggal H+1 s/d H+30
+    try:
+        _validate_date(new_fulfillment_date)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    order = await order_repo.get_order_with_details(db, order_id)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order tidak ditemukan",
+        )
+
+    # 2. Validasi status order: tidak boleh diubah jika terminal / selesai / dibatalkan
+    if is_order_terminal(order.status) or order.status in [
+        OrderStatusEnum.completed,
+        OrderStatusEnum.cancelled,
+        OrderStatusEnum.refunded,
+        OrderStatusEnum.picked_up,
+        OrderStatusEnum.delivered,
+    ]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Tanggal pesanan tidak dapat diubah karena pesanan sudah berstatus '{order.status.value}'.",
+        )
+
+    order.fulfillment_date = new_fulfillment_date
+    await db.commit()
+
+    order_refetched = await order_repo.get_order_with_details(db, order_id)
+    return await _attach_payment_amounts(db, order_refetched)

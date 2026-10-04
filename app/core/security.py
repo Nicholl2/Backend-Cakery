@@ -10,6 +10,20 @@ from app.core.config import settings
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes  # 60 minutes (1 hour)
 
+# Password policy
+MIN_PASSWORD_LENGTH = 8
+
+
+def validate_password_strength(password: str) -> None:
+    """
+    Validate password meets minimum security requirements.
+    Raises ValueError if password is too short.
+    """
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(
+            f"Password harus minimal {MIN_PASSWORD_LENGTH} karakter."
+        )
+
 
 def hash_password(password: str) -> str:
     """Hash password using bcrypt"""

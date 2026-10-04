@@ -26,7 +26,7 @@ class UserCreate(BaseModel):
     role: Optional[str] = Field(None, description="Nama role (admin, staff, owner) jika tidak menggunakan role_id")
     
     username: str = Field(..., min_length=3, max_length=25, pattern=USERNAME_PATTERN)
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=8)
     role_id: Optional[int] = Field(None, validation_alias=AliasChoices("role_id", "roleId"))
     
     nomor_wa_admin: Optional[str] = Field(None, validation_alias=AliasChoices("nomor_wa_admin", "nomor_wa"))
@@ -92,7 +92,7 @@ class UserProfileUpdate(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     old_password: str = Field(..., min_length=1, description="Password lama saat ini")
-    new_password: str = Field(..., min_length=6, description="Password baru minimal 6 karakter")
+    new_password: str = Field(..., min_length=8, description="Password baru minimal 8 karakter")
 
 
 class UserAdminUpdate(BaseModel):
@@ -106,7 +106,7 @@ class UserAdminUpdate(BaseModel):
     role: Optional[str] = Field(None, description="Role name (owner, admin, staff)")
     handles_takeover: Optional[bool] = None
     is_active: Optional[bool] = None
-    password: Optional[str] = Field(None, min_length=6, description="Reset password baru oleh Owner")
+    password: Optional[str] = Field(None, min_length=8, description="Reset password baru oleh Owner")
 
     @field_validator("nomor_wa_admin", mode="before")
     @classmethod
@@ -126,7 +126,7 @@ class UserAdminUpdate(BaseModel):
 
 class UserBootstrap(BaseModel):
     username: str = Field(..., min_length=3, max_length=25, pattern=USERNAME_PATTERN)
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=8)
     nomor_wa_admin: Optional[str] = None
     email: Optional[str] = Field(None, max_length=100)
     phone_number: Optional[str] = Field(None, max_length=16)
