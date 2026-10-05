@@ -1,7 +1,7 @@
 from app.core.database import Base
 from .product import Product, ProductImage, Category
 from .recipe import Recipe
-from .stock_item import StockItem
+from .stock_item import StockItem, StockMovement
 from .price_history import PriceHistory
 from .purchasing import Supplier, Purchase, PurchaseItem
 from .role import Role
@@ -23,6 +23,7 @@ __all__ = [
     "Category",
     "Recipe",
     "StockItem",
+    "StockMovement",
     "PriceHistory",
     "Supplier",
     "Purchase",

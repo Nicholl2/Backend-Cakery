@@ -2,6 +2,19 @@
 
 Dokumentasi lengkap logika bisnis, aturan validasi, dan otomasi alur kerja Backend Toti Cakery.
 
+## Inventory, Material Master, dan Purchase Audit
+
+- `StockItem` adalah master material tunggal berdasarkan nama material; recipe menunjuk ke `stock_item_id` sehingga supplier tidak pernah menjadi bagian dari identitas bahan.
+- `Purchase.supplier_id` menyimpan supplier transaksi, sementara `PurchaseItem` menyimpan material, jumlah, dan harga beli saat transaksi. Membuat Purchase tidak mengubah stok; penerimaan (`PUT /purchases/purchases/{id}` dengan `is_received=true`) adalah satu-satunya alur normal untuk restock.
+- Penerimaan mengunci Purchase dan StockItem, lalu dalam transaksi database yang sama memperbarui stok, menghitung weighted average cost dengan `Decimal`, membuat movement `PURCHASE`, dan menandai Purchase received. Status received tidak dapat dibalik, sehingga penerimaan kedua tidak menggandakan stok.
+- `stock_items.stok_tersedia` dan `harga_per_satuan` adalah saldo/cost berjalan untuk query operasional. `stock_movements` adalah ledger perubahan signed quantity beserta jenis, biaya unit, referensi, alasan, actor, dan waktu.
+- Saldo saat material dibuat dicatat sebagai `OPENING_BALANCE`. Saat upgrade, saldo legacy saat migrasi menjadi opening balance baseline; sistem tidak mengarang histori sebelumnya.
+- Koreksi dilakukan melalui `POST /stock/{id}/adjustments`, wajib menyertakan perbedaan kuantitas dan alasan. Adjustment out yang menghasilkan saldo negatif ditolak; adjustment in memakai unit cost yang diberikan untuk memperbarui weighted average cost.
+- Order menulis movement `ORDER` pada transaksi yang sama dengan pengurangan stok optimistic-locked. Pembatalan/refund menulis movement `REVERSAL` bersama pemulihan stok. Status terminal dan lock order yang ada mencegah pemulihan berulang.
+- Perubahan biaya berjalan menghitung ulang HPP produk untuk order berikutnya. `order_items.hpp_snapshot` tetap menjadi snapshot historis dan tidak diubah.
+- Master item hanya dapat dibuat sekali per nama (case-insensitive dan trim) melalui validasi aplikasi. API update StockItem hanya mengubah atribut master/alert; stok dan biaya hanya berubah melalui transaksi ledger.
+- Legacy `stock_items.supplier_id` fisik dipertahankan sementara demi menjaga data lama yang tidak memiliki jumlah/harga/tanggal pembelian yang dapat direkonstruksi. ORM/API tidak lagi menggunakannya; supplier aktif hanya direferensikan oleh Purchase.
+
 ---
 
 ## 1. Pembuatan Order, Reservasi Stok & Optimistic Concurrency Control

@@ -235,10 +235,9 @@ async def ensure_stock_item(
     harga_per_satuan: Decimal,
     stok_tersedia: Decimal,
     alert_min_stok: Decimal,
-    supplier_id: int,
     user_id: int,
 ):
-    from app.models.stock_item import StockItem
+    from app.models.stock_item import StockItem, StockMovement
     result = await db.execute(select(StockItem).where(StockItem.nama_item == nama_item))
     item = result.scalars().first()
     if item:
@@ -251,11 +250,15 @@ async def ensure_stock_item(
         harga_per_satuan=harga_per_satuan,
         stok_tersedia=stok_tersedia,
         alert_min_stok=alert_min_stok,
-        supplier_id=supplier_id,
         last_updated_by=user_id,
     )
     db.add(item)
     await db.flush()
+    if stok_tersedia > 0:
+        db.add(StockMovement(stock_item_id=item.id, movement_type="OPENING_BALANCE",
+                             quantity=stok_tersedia, unit_cost=harga_per_satuan,
+                             reference_type="stock_item", reference_id=item.id,
+                             created_by=user_id, reason="Saldo awal data bawaan"))
     return item
 
 
@@ -428,7 +431,6 @@ async def seed_initial_data(db: AsyncSession) -> None:
         harga_per_satuan=Decimal("15.0000"),
         stok_tersedia=Decimal("50000.00"),
         alert_min_stok=Decimal("5000.00"),
-        supplier_id=sup_bahan.id,
         user_id=admin_user.id,
     )
     gula = await ensure_stock_item(
@@ -439,7 +441,6 @@ async def seed_initial_data(db: AsyncSession) -> None:
         harga_per_satuan=Decimal("18.0000"),
         stok_tersedia=Decimal("30000.00"),
         alert_min_stok=Decimal("3000.00"),
-        supplier_id=sup_bahan.id,
         user_id=admin_user.id,
     )
     butter = await ensure_stock_item(
@@ -450,7 +451,6 @@ async def seed_initial_data(db: AsyncSession) -> None:
         harga_per_satuan=Decimal("120.0000"),
         stok_tersedia=Decimal("10000.00"),
         alert_min_stok=Decimal("1000.00"),
-        supplier_id=sup_bahan.id,
         user_id=admin_user.id,
     )
     telur = await ensure_stock_item(
@@ -461,7 +461,6 @@ async def seed_initial_data(db: AsyncSession) -> None:
         harga_per_satuan=Decimal("2000.0000"),
         stok_tersedia=Decimal("500.00"),
         alert_min_stok=Decimal("50.00"),
-        supplier_id=sup_bahan.id,
         user_id=admin_user.id,
     )
     box_kue = await ensure_stock_item(
@@ -472,7 +471,6 @@ async def seed_initial_data(db: AsyncSession) -> None:
         harga_per_satuan=Decimal("5000.0000"),
         stok_tersedia=Decimal("200.00"),
         alert_min_stok=Decimal("20.00"),
-        supplier_id=sup_kemasan.id,
         user_id=admin_user.id,
     )
 

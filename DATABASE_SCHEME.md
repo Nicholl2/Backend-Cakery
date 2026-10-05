@@ -96,7 +96,6 @@ Table stock_items {
   harga_per_satuan decimal(10,4) [not null]
   stok_tersedia decimal(10,2) [not null]
   alert_min_stok decimal(10,2) [default: 0, not null]
-  supplier_id int [ref: > suppliers.id, null]
   version int [default: 0, not null, note: 'Optimistic Locking Version']
   last_updated_at timestamp
   last_updated_by int [ref: > users.id, null]
@@ -127,6 +126,25 @@ Table purchase_items {
   harga_total decimal(15,2) [not null]
   created_at timestamp [default: `now()`]
 }
+
+Table stock_movements {
+  id int [pk, increment]
+  stock_item_id int [ref: > stock_items.id, not null]
+  movement_type varchar(32) [not null, note: 'OPENING_BALANCE, PURCHASE, ORDER, REVERSAL, ADJUSTMENT_IN, ADJUSTMENT_OUT']
+  quantity decimal(10,4) [not null, note: 'signed quantity delta']
+  unit_cost decimal(10,4) [not null, default: 0]
+  reference_type varchar(32) [null]
+  reference_id int [null]
+  created_by int [ref: > users.id, null]
+  reason varchar(500) [null]
+  created_at timestamp [default: `now()`]
+}
+
+// StockItem is the unique material master used by recipes. Purchase supplier and
+// purchase-time quantity/price belong to Purchase and PurchaseItem. The current
+// stock/cost fields are cached operational balances; stock_movements is the audit ledger.
+// Existing legacy stock_items.supplier_id values are retained in the physical database
+// during this safe migration because they cannot be converted into purchase history.
 
 // 3. PRODUCTS, RECIPES & PRICING
 Table categories {
@@ -343,4 +361,3 @@ CREATE INDEX IF NOT EXISTS ix_suppliers_nama_supplier_trgm ON suppliers USING gi
 Manajemen skema database terkelola via Alembic (`alembic.ini` dan `alembic/versions/`):
 - `alembic/versions/20260919_01_pg_trgm_and_schema_optimization.py`: Mengaktifkan `pg_trgm`, GIN Trigram indexes, konversi kolom `TEXT`, presisi `Numeric(3, 2)` pada rating produk, dan constraint `NOT NULL` pada status boolean.
 - Pipeline aplikasi otomatis menjalankan DDL idempotent di `app/core/migrations.py` saat startup.
-

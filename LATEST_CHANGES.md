@@ -6,6 +6,16 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### Inventory & Purchase Refactor — 2026-10-05
+- Memisahkan StockItem sebagai master material dari supplier dan harga tiap Purchase.
+- Menambahkan stock movement ledger dengan baseline saldo awal serta movement purchase, order, reversal, dan adjustment.
+- Penerimaan Purchase kini memperbarui saldo dan weighted average cost secara transaksional dan hanya sekali.
+- Perubahan stok langsung melalui master update ditutup; koreksi menggunakan adjustment dengan alasan.
+- Recipe tetap merujuk satu stock item; `hpp_snapshot` order lama tetap utuh.
+- Kontrak frontend: Create Stock Item membuat master material; restock dibuat sebagai Purchase, pilih supplier/material/jumlah/harga, lalu receive.
+- Supplier lama pada `stock_items.supplier_id` tidak dihapus fisik karena tidak cukup data untuk membangun histori purchase; tidak lagi dipakai oleh model/API.
+- Migrasi membuat baseline opening movement dari saldo current saat upgrade. Tes ledger, purchase, dan regression order ditambahkan/diperbarui.
+
 ### 001ag. Perbaikan Logika Availability Produk, Aturan H-1 Pre-Order & Skema Pembayaran DP 50%
 - **Perbaikan Bug: Logika Availability Produk (`app/models/product.py`, `app/schemas/product.py`)**:
   - Menambahkan properti `has_recipe` dan `computed_availability` pada model SQLAlchemy `Product`.
@@ -1244,5 +1254,4 @@ venv/bin/pytest tests/test_seller_orders.py tests/test_financial_report.py -v
 venv/bin/pytest tests/ -v
 # 54 passed, 1 warning in 10.54s (100% PASSED)
 ```
-
 

@@ -92,11 +92,13 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/stock/` | Internal | Tambah bahan baku atau kemasan baru |
+| `POST` | `/stock/` | Internal | Buat satu master material, opsional dengan saldo awal yang menghasilkan `OPENING_BALANCE`. Supplier pembelian dipilih pada Purchase; endpoint ini tidak membuat item untuk restock. |
 | `GET` | `/stock/` | Internal | List semua item stok (Filter: `bahan_baku` / `kemasan`) |
-| `GET` | `/stock/{stock_id}` | Internal | Detail item stok (stok tersedia, harga per satuan, supplier, alert min stok) |
-| `PUT` | `/stock/{stock_id}` | Internal | Update data bahan baku / kemasan |
-| `DELETE` | `/stock/{stock_id}` | Internal | Hapus bahan (dicegah jika masih digunakan pada resep produk) |
+| `GET` | `/stock/{stock_id}` | Internal | Detail master bahan (stok terkini, average cost, alert minimum) |
+| `PUT` | `/stock/{stock_id}` | Internal | Update atribut master/alert. Saldo dan harga tidak dapat diedit langsung. |
+| `POST` | `/stock/{stock_id}/adjustments` | Admin / Owner | Koreksi stok dengan `quantity_difference`, `reason` wajib, dan `unit_cost` opsional untuk penambahan. Membuat ledger movement. |
+| `GET` | `/stock/{stock_id}/movements` | Internal | Histori stock movement untuk audit. |
+| `DELETE` | `/stock/{stock_id}` | Admin / Owner | Hapus hanya jika tidak punya saldo, recipe, atau histori movement. |
 
 ---
 
@@ -112,7 +114,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `POST` | `/purchases/purchases` | Authenticated User | Buat Purchase Order (PO) baru beserta item bahan yang dibeli |
 | `GET` | `/purchases/purchases` | Internal | List PO (Filter: `only_received`, `supplier_id`) |
 | `GET` | `/purchases/purchases/{purchase_id}` | Internal | Detail PO beserta daftar item pemesanan |
-| `PUT` | `/purchases/purchases/{purchase_id}` | Internal | Update status PO. Saat `is_received = True`, sistem otomatis menambah `stok_tersedia` pada model `StockItem`, memperbarui `harga_per_satuan` menggunakan formula Weighted Average Costing, dan memicu kalkulasi ulang HPP/harga jual produk resep terkait. Dicegah membatalkan (un-receive) status PO yang sudah diterima (HTTP 409). |
+| `PUT` | `/purchases/purchases/{purchase_id}` | Internal | Saat `is_received = True`, dalam satu transaksi menambah stok, weighted average cost, membuat movement `PURCHASE`, serta menghitung ulang HPP produk untuk pesanan berikutnya. Tidak dapat menerima ulang atau membatalkan status diterima. |
 | `DELETE` | `/purchases/purchases/{purchase_id}` | Internal | Hapus PO (dicegah jika PO sudah berstatus diterima) |
 
 ---
@@ -326,4 +328,3 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/public/kontak-toko` | Public (Tanpa login) | Mengambil nomor WhatsApp aktif toko/chatbot (`{"whatsapp": "..."}`) dengan in-memory caching ±60 detik (fallback ke config jika offline) |
-

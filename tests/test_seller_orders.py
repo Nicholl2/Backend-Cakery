@@ -15,7 +15,7 @@ from app.models.role import Role
 from app.models.user import User
 from app.models.buyer import Buyer
 from app.models.product import Product
-from app.models.stock_item import StockItem, SatuanEnum, KategoriEnum
+from app.models.stock_item import StockItem, StockMovement, SatuanEnum, KategoriEnum
 from app.models.recipe import Recipe
 
 
@@ -264,6 +264,11 @@ async def run_seller_order_tests():
             assert s_telur.stok_tersedia == Decimal("42.00"), f"Expected 42.00, got {s_telur.stok_tersedia}"
             assert s_tepung.version == 1
             assert s_telur.version == 1
+            order_movements = (await db.execute(select(StockMovement).where(
+                StockMovement.reference_type == "order", StockMovement.reference_id == buyer_order_id
+            ))).scalars().all()
+            assert len(order_movements) == 2
+            assert all(m.movement_type == "ORDER" and m.quantity < 0 for m in order_movements)
         print("✓ Stock deduction and optimistic locking version increment verified!")
 
         # ── Test 5: Update Order Status (PATCH /orders/{order_id}/status) ──
@@ -297,6 +302,10 @@ async def run_seller_order_tests():
             assert s_telur.stok_tersedia == Decimal("50.00"), f"Expected 50.00, got {s_telur.stok_tersedia}"
             assert s_tepung.version == 2
             assert s_telur.version == 2
+            movements = (await db.execute(select(StockMovement).where(
+                StockMovement.reference_type == "order", StockMovement.reference_id == buyer_order_id
+            ))).scalars().all()
+            assert sorted(m.movement_type for m in movements) == ["ORDER", "ORDER", "REVERSAL", "REVERSAL"]
         # ── Test 6: GET /orders Resilience against Legacy NULL Data ──
         print("\n6. Testing GET /orders resilience with legacy null fields (total_tagihan, hpp, decoration)...")
         async with TestSessionLocal() as db:

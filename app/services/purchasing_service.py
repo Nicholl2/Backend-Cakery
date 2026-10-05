@@ -90,7 +90,9 @@ async def create_purchase(
     data: PurchaseCreate,
     created_by_user_id: int,
 ) -> Purchase:
-    await get_supplier_or_404(db, data.supplier_id)
+    supplier = await get_supplier_or_404(db, data.supplier_id)
+    if not supplier.is_active:
+        raise HTTPException(422, "Supplier tidak aktif.")
 
     purchase = Purchase(
         supplier_id=data.supplier_id,
@@ -103,7 +105,6 @@ async def create_purchase(
     await db.flush()
 
     total_harga = Decimal("0")
-    affected_stock_ids: set[int] = set()
 
     for item_data in data.items:
         result = await db.execute(select(StockItem).where(StockItem.id == item_data.stock_item_id))
@@ -124,22 +125,10 @@ async def create_purchase(
             harga_total=harga_total,
         ))
         total_harga += harga_total
-        affected_stock_ids.add(item_data.stock_item_id)
 
     purchase.total_harga = total_harga
     await db.commit()
     await db.refresh(purchase)
-
-    # ── TRIGGER: recalculate HPP semua produk yang pakai bahan yang dibeli ──
-    for stock_id in affected_stock_ids:
-        rows = await db.execute(
-            select(Recipe.product_id)
-            .where(Recipe.stock_item_id == stock_id)
-            .distinct()
-        )
-        for (pid,) in rows.all():
-            await product_repo.calculate_and_update_product_price(db, pid)
-    # ─────────────────────────────────────────────────────────────────────────
 
     return purchase
 
@@ -181,7 +170,12 @@ async def get_purchase_or_404(db: AsyncSession, purchase_id: int) -> Purchase:
 async def update_purchase(
     db: AsyncSession, purchase_id: int, data: PurchaseUpdate
 ) -> Purchase:
-    purchase = await get_purchase_or_404(db, purchase_id)
+    result = await db.execute(select(Purchase).where(Purchase.id == purchase_id).with_for_update().options(
+        selectinload(Purchase.purchase_items), selectinload(Purchase.supplier),
+        selectinload(Purchase.created_by_user)))
+    purchase = result.scalars().first()
+    if not purchase:
+        raise HTTPException(404, "Pemesanan tidak ditemukan.")
 
     if purchase.is_received and data.is_received is False:
         raise HTTPException(
@@ -196,18 +190,25 @@ async def update_purchase(
         setattr(purchase, field, value)
 
     if is_becoming_received:
+        if not purchase.purchase_items:
+            raise HTTPException(status_code=422, detail="Purchase tanpa item tidak dapat diterima.")
         if not purchase.tanggal_diterima:
             purchase.tanggal_diterima = datetime.now(timezone.utc)
 
         affected_stock_ids: set[int] = set()
         for item in purchase.purchase_items:
-            await stock_repo.update_average_cost(
+            updated_item = await stock_repo.update_average_cost(
                 db=db,
                 stock_id=item.stock_item_id,
                 qty_masuk=item.jumlah,
                 harga_beli_total=item.harga_total,
+                reference_type="purchase",
+                reference_id=purchase.id,
+                created_by=purchase.created_by,
                 commit=False,
             )
+            if not updated_item:
+                raise HTTPException(status_code=422, detail=f"Stock item {item.stock_item_id} tidak ditemukan.")
             affected_stock_ids.add(item.stock_item_id)
 
         # Recalculate HPP produk resep yang menggunakan bahan baku tersebut
@@ -218,7 +219,7 @@ async def update_purchase(
                 .distinct()
             )
             for (pid,) in rows.all():
-                await product_repo.calculate_and_update_product_price(db, pid)
+                await product_repo.calculate_and_update_product_price(db, pid, commit=False)
 
     await db.commit()
     await db.refresh(purchase)

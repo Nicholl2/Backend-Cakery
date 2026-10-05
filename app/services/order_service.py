@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 from app.models.order import Order, OrderItem, Invoice, MetodePengirimanEnum, OrderStatusEnum, InvoiceStatusEnum
 from app.models.product import Product
 from app.models.payment import Payment, PaymentStatusEnum
-from app.models.stock_item import StockItem
+from app.models.stock_item import StockItem, StockMovement
 from app.models.recipe import Recipe
 from app.repositories import order_repo
 from app.utils.phone import normalize_phone
@@ -215,6 +215,12 @@ async def create_new_order(
             payment_method_preference=payment_method_preference,
         )
         await order_repo.create_order(db, order_obj)  # flush → dapat order.id
+
+        for stock_id, req in stock_item_requirements.items():
+            db.add(StockMovement(stock_item_id=stock_id, movement_type="ORDER",
+                                 quantity=-req["total_needed"], unit_cost=Decimal(str(req["stock_item_obj"].harga_per_satuan or 0)),
+                                 reference_type="order", reference_id=order_obj.id,
+                                 reason="Pemakaian bahan untuk pesanan"))
 
         # ── 5. Buat OrderItems ───────────────────────────────────────────────
         for d in item_data_list:
@@ -605,6 +611,10 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Terjadi kegagalan pemulihan stok karena transaksi bersamaan. Silakan coba lagi.",
                 )
+            db.add(StockMovement(stock_item_id=stock_id, movement_type="REVERSAL",
+                                 quantity=qty_return, unit_cost=Decimal(str(stock_item.harga_per_satuan or 0)),
+                                 reference_type="order", reference_id=order.id,
+                                 reason="Pemulihan bahan karena pembatalan pesanan"))
 
         order.status = OrderStatusEnum.cancelled
         await db.commit()
@@ -736,6 +746,10 @@ async def _rollback_order_stock(db: AsyncSession, order: Order) -> None:
             )
             res = await db.execute(stmt)
             if res.rowcount > 0:
+                db.add(StockMovement(stock_item_id=stock_id, movement_type="REVERSAL",
+                                     quantity=qty_return, unit_cost=Decimal(str(stock_item.harga_per_satuan or 0)),
+                                     reference_type="order", reference_id=order.id,
+                                     reason="Pemulihan bahan karena pembatalan/refund"))
                 break
 
             if attempt == MAX_STOCK_RETRY:

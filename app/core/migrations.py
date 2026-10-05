@@ -59,15 +59,38 @@ async def ensure_buyer_columns(conn: AsyncConnection):
 
 async def ensure_stock_item_columns(conn: AsyncConnection):
     """
-    Ensure alert_min_stok and supplier_id columns are present in the 'stock_items' table on PostgreSQL database.
+    Ensure alert_min_stok is present on PostgreSQL database.
     """
     if conn.dialect.name != "postgresql":
         return
 
     await conn.execute(text("ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS alert_min_stok NUMERIC(10, 2) DEFAULT 0;"))
-    await conn.execute(text("ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES suppliers(id);"))
     await conn.execute(text("UPDATE stock_items SET alert_min_stok = COALESCE(alert_min_stok, 0) WHERE alert_min_stok IS NULL;"))
     await conn.execute(text("ALTER TABLE stock_items ALTER COLUMN alert_min_stok SET NOT NULL;"))
+
+
+async def ensure_stock_master_name_constraint(conn: AsyncConnection):
+    """Create case-insensitive material uniqueness after checking legacy duplicates."""
+    duplicates = (await conn.execute(text(
+        "SELECT lower(trim(nama_item)) AS normalized_name, count(*) AS row_count "
+        "FROM stock_items GROUP BY lower(trim(nama_item)) HAVING count(*) > 1"
+    ))).all()
+    if duplicates:
+        names = ", ".join(row.normalized_name for row in duplicates)
+        raise RuntimeError(f"Duplicate stock master names need reconciliation: {names}")
+    await conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_items_normalized_name "
+        "ON stock_items (lower(trim(nama_item)))"
+    ))
+    await conn.execute(text("""
+        INSERT INTO stock_movements
+            (stock_item_id, movement_type, quantity, unit_cost, reference_type, reference_id, reason)
+        SELECT s.id, 'OPENING_BALANCE', s.stok_tersedia, s.harga_per_satuan, 'migration', s.id,
+               'Saldo awal saat ledger inventory diaktifkan'
+        FROM stock_items s
+        WHERE COALESCE(s.stok_tersedia, 0) > 0
+          AND NOT EXISTS (SELECT 1 FROM stock_movements m WHERE m.stock_item_id = s.id)
+    """))
 
 
 async def ensure_recipe_columns(conn: AsyncConnection):
@@ -396,6 +419,7 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_product_columns(conn)
     await ensure_buyer_columns(conn)
     await ensure_stock_item_columns(conn)
+    await ensure_stock_master_name_constraint(conn)
     await ensure_recipe_columns(conn)
     await ensure_otp_columns(conn)
     await ensure_user_columns(conn)
@@ -407,5 +431,3 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_product_images_table(conn)
     await ensure_notification_table(conn)
     await ensure_review_images_table(conn)
-
-

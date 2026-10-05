@@ -28,7 +28,6 @@ class StockItem(Base):
     harga_per_satuan = Column(Numeric(10, 4), nullable=False)
     stok_tersedia = Column(Numeric(10, 2), nullable=False)
     alert_min_stok = Column(Numeric(10, 2), nullable=False, default=0)
-    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     version = Column(Integer, default=0, nullable=False)
     
     last_updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -40,4 +39,21 @@ class StockItem(Base):
     # Relationships
     recipes = relationship("Recipe", back_populates="stock_item", lazy="selectin")
     last_updated_by_user = relationship("User", back_populates="stock_items_updated", lazy="selectin")
-    supplier = relationship("Supplier", lazy="selectin")
+    movements = relationship("StockMovement", back_populates="stock_item", lazy="selectin")
+
+
+class StockMovement(Base):
+    __tablename__ = "stock_movements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    stock_item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False, index=True)
+    movement_type = Column(String(32), nullable=False)
+    quantity = Column(Numeric(10, 4), nullable=False)
+    unit_cost = Column(Numeric(10, 4), nullable=False, default=0)
+    reference_type = Column(String(32), nullable=True)
+    reference_id = Column(Integer, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reason = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    stock_item = relationship("StockItem", back_populates="movements")

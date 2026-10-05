@@ -123,6 +123,7 @@ async def get_price_history(db: AsyncSession, product_id: int) -> list[PriceHist
 async def calculate_and_update_product_price(
     db: AsyncSession,
     product_id: int,
+    commit: bool = True,
 ) -> Optional[Product]:
     """
     Hitung ulang HPP + harga_jual lalu simpan ke DB.
@@ -155,8 +156,11 @@ async def calculate_and_update_product_price(
     # 4. Update & commit
     product.hpp_total = hpp_total
     product.harga_jual = harga_jual
-    await db.commit()
-    await db.refresh(product)
+    if commit:
+        await db.commit()
+        await db.refresh(product)
+    else:
+        await db.flush()
     return product
 
 

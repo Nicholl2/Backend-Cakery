@@ -13,6 +13,8 @@ from app.models.recipe import Recipe
 from app.models.user import User
 from app.schemas.purchasing import PurchaseCreate, PurchaseItemCreate, PurchaseUpdate
 from app.services import purchasing_service
+from app.schemas.stock import StockCreate, StockAdjustmentCreate
+from app.services import stock_service
 
 
 @pytest.fixture
@@ -66,7 +68,6 @@ async def test_purchase_received_updates_stock_and_weighted_average_cost(db_sess
         kategori=KategoriEnum.bahan_baku,
         stok_tersedia=Decimal("50.00"),
         harga_per_satuan=Decimal("10000.0000"),
-        supplier_id=supplier.id,
         version=1,
     )
     db_session.add(stock_item)
@@ -130,7 +131,6 @@ async def test_purchase_receive_protections(db_session: AsyncSession):
         kategori=KategoriEnum.bahan_baku,
         stok_tersedia=Decimal("10.00"),
         harga_per_satuan=Decimal("50000.0000"),
-        supplier_id=supplier.id,
         version=1,
     )
     db_session.add(stock_item)
@@ -156,6 +156,9 @@ async def test_purchase_receive_protections(db_session: AsyncSession):
     assert stock_item.stok_tersedia == Decimal("20.00")
     assert stock_item.harga_per_satuan == Decimal("55000.0000")
 
+    movements = await stock_service.get_stock_movements(db_session, stock_item.id)
+    assert [m.movement_type for m in movements].count("PURCHASE") == 1
+
     # 1. Attempt to set is_received = False -> must raise HTTP 409
     with pytest.raises(HTTPException) as exc_info:
         await purchasing_service.update_purchase(
@@ -178,6 +181,48 @@ async def test_purchase_receive_protections(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_single_material_restocked_from_multiple_suppliers(db_session: AsyncSession):
+    supplier_a = Supplier(id=10, nama_supplier="Supplier A")
+    supplier_b = Supplier(id=11, nama_supplier="Supplier B")
+    db_session.add_all([supplier_a, supplier_b])
+    await db_session.commit()
+    item = await stock_service.create_stock(db_session, StockCreate(
+        nama_item="Tepung Terigu", satuan="kg", kategori="bahan_baku",
+        harga_per_satuan=Decimal("10000"), stok_tersedia=Decimal("100"),
+        alert_min_stok=Decimal("1")))
+    assert len(await stock_service.get_stock_movements(db_session, item.id)) == 1
+    for supplier, qty, price in [(supplier_a, "50", "10000"), (supplier_b, "50", "12000")]:
+        po = await purchasing_service.create_purchase(db_session, PurchaseCreate(
+            supplier_id=supplier.id, items=[PurchaseItemCreate(stock_item_id=item.id,
+                jumlah=Decimal(qty), harga_satuan=Decimal(price))]), created_by_user_id=1)
+        await purchasing_service.update_purchase(db_session, po.id, PurchaseUpdate(is_received=True))
+    await db_session.refresh(item)
+    assert item.stok_tersedia == Decimal("200.00")
+    assert item.harga_per_satuan == Decimal("10500.0000")
+    count = (await db_session.execute(select(StockItem))).scalars().all()
+    assert len(count) == 1
+    movements = await stock_service.get_stock_movements(db_session, item.id)
+    assert [m.movement_type for m in movements].count("PURCHASE") == 2
+
+
+@pytest.mark.asyncio
+async def test_stock_adjustment_records_reason_actor_and_delta(db_session: AsyncSession):
+    item = StockItem(id=30, nama_item="Gula untuk opname", satuan=SatuanEnum.kg,
+                     kategori=KategoriEnum.bahan_baku, stok_tersedia=Decimal("10"),
+                     harga_per_satuan=Decimal("5000"), version=0)
+    db_session.add(item)
+    await db_session.commit()
+    adjusted = await stock_service.adjust_stock(db_session, item.id,
+        StockAdjustmentCreate(quantity_difference=Decimal("-2"), reason="Bahan rusak"), user_id=7)
+    assert adjusted.stok_tersedia == Decimal("8.00")
+    movement = (await stock_service.get_stock_movements(db_session, item.id))[0]
+    assert movement.movement_type == "ADJUSTMENT_OUT"
+    assert movement.quantity == Decimal("-2")
+    assert movement.reason == "Bahan rusak"
+    assert movement.created_by == 7
+
+
+@pytest.mark.asyncio
 async def test_product_hpp_recalculation_on_purchase_received(db_session: AsyncSession):
     """
     Test that when a purchase is received, product HPP total for recipe products is recalculated.
@@ -192,7 +237,6 @@ async def test_product_hpp_recalculation_on_purchase_received(db_session: AsyncS
         kategori=KategoriEnum.bahan_baku,
         stok_tersedia=Decimal("1000.00"),
         harga_per_satuan=Decimal("100.0000"),  
-        supplier_id=supplier.id,
         version=1,
     )
     db_session.add(stock_item)

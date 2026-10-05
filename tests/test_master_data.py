@@ -63,16 +63,18 @@ async def run_tests():
                 await db.delete(existing_prod)
                 await db.commit()
 
-            # 2. Clean up supplier and its stock items
+            # 2. Clean up the material fixture and supplier fixture
             existing_sup_res = await db.execute(select(Supplier).where(Supplier.nama_supplier == "Test Supplier Master"))
             existing_sup = existing_sup_res.scalars().first()
+            stock_items_res = await db.execute(select(StockItem).where(StockItem.nama_item == "Bahan Kue Master"))
+            stock_items = stock_items_res.scalars().all()
+            for item in stock_items:
+                for movement in await stock_repo.get_movements(db, item.id):
+                    await db.delete(movement)
+                await db.delete(item)
             if existing_sup:
-                stock_items_res = await db.execute(select(StockItem).where(StockItem.supplier_id == existing_sup.id))
-                stock_items = stock_items_res.scalars().all()
-                for item in stock_items:
-                    await db.delete(item)
                 await db.delete(existing_sup)
-                await db.commit()
+            await db.commit()
             print("✓ Leftover test data cleaned up successfully")
 
             # --- 2.1 Test Supplier CRUD ---
@@ -112,17 +114,15 @@ async def run_tests():
                 harga_per_satuan=Decimal("50.00"),
                 stok_tersedia=Decimal("1000.00"),
                 alert_min_stok=Decimal("100.00"),
-                supplier_id=supplier.id
             )
             # Create
             stock_item = await stock_service.create_stock(db, stock_data)
             stock_item_id = stock_item.id
-            print(f"✓ Stock item created: ID={stock_item_id}, Name={stock_item.nama_item}, Min Alert={stock_item.alert_min_stok}, Supplier ID={stock_item.supplier_id}")
+            print(f"✓ Stock item created: ID={stock_item_id}, Name={stock_item.nama_item}, Min Alert={stock_item.alert_min_stok}")
             assert stock_item_id is not None
             assert stock_item.alert_min_stok == Decimal("100.00")
-            assert stock_item.supplier_id == supplier_id
-            assert stock_item.supplier is not None
-            assert stock_item.supplier.nama_supplier == "Test Supplier Master"
+            movements = await stock_service.get_stock_movements(db, stock_item.id)
+            assert movements[0].movement_type == "OPENING_BALANCE"
 
             # Read
             retrieved_stock = await stock_service.get_stock_or_404(db, stock_item.id)
@@ -348,6 +348,9 @@ async def run_tests():
 
             stock_item = await stock_repo.get_by_id(db, stock_item_id)
             if stock_item:
+                for movement in await stock_repo.get_movements(db, stock_item_id):
+                    await db.delete(movement)
+                await db.flush()
                 await stock_repo.delete(db, stock_item)
                 print("Deleted stock item")
 

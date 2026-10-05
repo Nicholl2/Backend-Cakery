@@ -2,14 +2,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from decimal import Decimal, ROUND_HALF_UP
-from app.models.stock_item import StockItem
+from app.models.stock_item import StockItem, StockMovement
 from app.schemas.stock import StockCreate, StockUpdate
 from typing import Optional
 
 
-async def create(db: AsyncSession, data: StockCreate) -> StockItem:
-    item = StockItem(**data.model_dump())
+async def create(db: AsyncSession, data: StockCreate, user_id: int | None = None) -> StockItem:
+    payload = data.model_dump()
+    opening_qty = payload.pop("stok_tersedia")
+    opening_cost = payload.pop("harga_per_satuan")
+    item = StockItem(**payload, stok_tersedia=opening_qty, harga_per_satuan=opening_cost)
     db.add(item)
+    await db.flush()
+    if opening_qty > 0:
+        db.add(StockMovement(stock_item_id=item.id, movement_type="OPENING_BALANCE", quantity=opening_qty,
+                             unit_cost=opening_cost, reference_type="stock_item", reference_id=item.id,
+                             created_by=user_id, reason="Saldo awal saat material dibuat"))
     await db.commit()
     await db.refresh(item)
     return item
@@ -40,6 +48,11 @@ async def update(db: AsyncSession, item: StockItem, data: StockUpdate) -> StockI
     return item
 
 
+async def get_movements(db: AsyncSession, stock_id: int) -> list[StockMovement]:
+    result = await db.execute(select(StockMovement).where(StockMovement.stock_item_id == stock_id).order_by(StockMovement.created_at, StockMovement.id))
+    return list(result.scalars().all())
+
+
 async def delete(db: AsyncSession, item: StockItem) -> bool:
     await db.delete(item)
     await db.commit()
@@ -51,6 +64,9 @@ async def update_average_cost(
     stock_id: int,
     qty_masuk: Decimal | float,
     harga_beli_total: Decimal | float,
+    reference_type: str,
+    reference_id: int,
+    created_by: int | None = None,
     commit: bool = True,
 ) -> Optional[StockItem]:
     """
@@ -90,6 +106,10 @@ async def update_average_cost(
     item.harga_per_satuan = harga_rata_rata.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     item.stok_tersedia = new_stok.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     item.version += 1
+    db.add(StockMovement(stock_item_id=item.id, movement_type="PURCHASE", quantity=qty_in,
+                         unit_cost=harga_satuan_baru, reference_type=reference_type,
+                         reference_id=reference_id, created_by=created_by,
+                         reason=f"Penerimaan purchase {reference_id}"))
 
     if commit:
         await db.commit()
