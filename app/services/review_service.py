@@ -19,7 +19,11 @@ def _is_matching_phone(phone1: Optional[str], phone2: Optional[str]) -> bool:
 
 
 
-async def get_or_create_customer_from_buyer(db: AsyncSession, buyer_id: int):
+async def get_or_create_customer_from_buyer(
+    db: AsyncSession,
+    buyer_id: int,
+    commit: bool = True,
+):
     """Retrieve or create Customer based on the Buyer's phone number."""
     buyer = await buyer_repo.get_buyer_by_id(db, buyer_id)
     if not buyer:
@@ -37,7 +41,8 @@ async def get_or_create_customer_from_buyer(db: AsyncSession, buyer_id: int):
             nama=buyer.name,
             alamat=None
         )
-        await db.commit()
+        if commit:
+            await db.commit()
         await db.refresh(customer)
     return customer
 
@@ -49,69 +54,74 @@ async def create_review(
     files: Optional[list[UploadFile]] = None
 ) -> Review:
     """Create a new review for a product with order completion and eligibility checks."""
-    # 1. Verify product exists
-    product = await product_repo.get_by_id(db, data.product_id)
-    if not product:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Produk tidak ditemukan."
-        )
+    try:
+        # 1. Verify product exists
+        product = await product_repo.get_by_id(db, data.product_id)
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Produk tidak ditemukan."
+            )
 
-    # 2. Get or create customer mapping
-    customer = await get_or_create_customer_from_buyer(db, buyer_id)
+        # 2. Get or create customer mapping without committing this operation.
+        customer = await get_or_create_customer_from_buyer(db, buyer_id, commit=False)
 
-    # 3. Verify order exists and belongs to this customer
-    order = await order_repo.get_order_by_id(db, data.order_id)
-    if not order or order.customer_id != customer.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Hanya pesanan yang sudah selesai yang dapat diulas."
-        )
+        # 3. Verify order exists and belongs to this customer
+        order = await order_repo.get_order_by_id(db, data.order_id)
+        if not order or order.customer_id != customer.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Hanya pesanan yang sudah selesai yang dapat diulas."
+            )
 
-    # Check order status is completed
-    completed_statuses = {
-        OrderStatusEnum.completed,
-        OrderStatusEnum.delivered,
-        OrderStatusEnum.picked_up,
-    }
-    if order.status not in completed_statuses:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Hanya pesanan yang sudah selesai yang dapat diulas."
-        )
+        # Check order status is completed
+        completed_statuses = {
+            OrderStatusEnum.completed,
+            OrderStatusEnum.delivered,
+            OrderStatusEnum.picked_up,
+        }
+        if order.status not in completed_statuses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Hanya pesanan yang sudah selesai yang dapat diulas."
+            )
 
-    # 4. Verify product exists in order_items
-    order_product_ids = [item.product_id for item in order.order_items if item.product_id is not None]
-    if data.product_id not in order_product_ids:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Produk tidak terdapat dalam pesanan ini."
-        )
+        # 4. Verify product exists in order_items
+        order_product_ids = [item.product_id for item in order.order_items if item.product_id is not None]
+        if data.product_id not in order_product_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Produk tidak terdapat dalam pesanan ini."
+            )
 
-    # 5. Check duplicate review for (order_id, product_id)
-    existing_review = await review_repo.get_by_order_and_product(db, data.order_id, data.product_id)
-    if existing_review:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Anda sudah memberikan ulasan untuk produk pada pesanan ini."
-        )
+        # 5. Check duplicate review for (order_id, product_id)
+        existing_review = await review_repo.get_by_order_and_product(db, data.order_id, data.product_id)
+        if existing_review:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Anda sudah memberikan ulasan untuk produk pada pesanan ini."
+            )
 
-    # 6. Create review
-    review = await review_repo.create(db, customer.id, data)
+        # 6. Create review
+        review = await review_repo.create(db, customer.id, data)
 
-    # 7. Upload multiple images if provided
-    valid_files = [f for f in (files or []) if f and getattr(f, "filename", None)]
-    if valid_files:
-        upload_tasks = [
-            upload_image_to_cloudinary(f, folder="toti-cakery/reviews")
-            for f in valid_files
-        ]
-        secure_urls = await asyncio.gather(*upload_tasks)
-        await review_repo.add_review_images(db, review.id, secure_urls)
-        # Re-fetch review with eager-loaded images
-        review = await review_repo.get_by_id(db, review.id)
+        # 7. Upload multiple images if provided
+        valid_files = [f for f in (files or []) if f and getattr(f, "filename", None)]
+        if valid_files:
+            upload_tasks = [
+                upload_image_to_cloudinary(f, folder="toti-cakery/reviews")
+                for f in valid_files
+            ]
+            secure_urls = await asyncio.gather(*upload_tasks)
+            await review_repo.add_review_images(db, review.id, secure_urls, commit=False)
+            # Re-fetch review with eager-loaded images
+            review = await review_repo.get_by_id(db, review.id)
 
-    return review
+        await db.commit()
+        return review
+    except Exception:
+        await db.rollback()
+        raise
 
 
 
@@ -259,4 +269,3 @@ async def delete_review(
                 await delete_image_from_cloudinary(img.image_url)
             
     return await review_repo.delete(db, review)
-

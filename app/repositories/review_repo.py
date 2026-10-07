@@ -113,11 +113,9 @@ async def create(db: AsyncSession, customer_id: int, data: ReviewCreate) -> Revi
     )
     db.add(review)
     await db.flush()
-    await db.commit()
-    await db.refresh(review)
     
     # Recalculate product rating
-    await recalculate_product_rating(db, data.product_id)
+    await recalculate_product_rating(db, data.product_id, commit=False)
     
     # Re-query to preload relationships
     return await get_by_id(db, review.id)
@@ -156,7 +154,11 @@ async def delete(db: AsyncSession, review: Review) -> bool:
     return True
 
 
-async def recalculate_product_rating(db: AsyncSession, product_id: int) -> None:
+async def recalculate_product_rating(
+    db: AsyncSession,
+    product_id: int,
+    commit: bool = True,
+) -> None:
     """Helper to recalculate Product.rating and Product.review_count."""
     stmt = select(
         func.count(Review.id).label("count"),
@@ -176,7 +178,8 @@ async def recalculate_product_rating(db: AsyncSession, product_id: int) -> None:
         .where(Product.id == product_id)
         .values(rating=avg_rating, review_count=count)
     )
-    await db.commit()
+    if commit:
+        await db.commit()
 
 
 # ── REVIEW IMAGES OPERATIONS ─────────────────────────────────────────────────
@@ -185,6 +188,7 @@ async def add_review_images(
     db: AsyncSession,
     review_id: int,
     image_urls: list[str],
+    commit: bool = True,
 ) -> list[ReviewImage]:
     """Add multiple image URLs to a review."""
     new_images: list[ReviewImage] = []
@@ -195,7 +199,9 @@ async def add_review_images(
         )
         db.add(img)
         new_images.append(img)
-    await db.commit()
+    await db.flush()
+    if commit:
+        await db.commit()
     for img in new_images:
         await db.refresh(img)
     return new_images
@@ -233,4 +239,3 @@ async def delete_review_image(
     await db.delete(img)
     await db.commit()
     return deleted_url
-

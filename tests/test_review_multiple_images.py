@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import patch
 import pytest
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.pool import StaticPool
 
@@ -113,6 +114,7 @@ async def review_env_fixture():
         "buyer2_id": 20,
         "product_id": 100,
         "order_id": 500,
+        "session_factory": TestSessionLocal,
     }
 
     app.dependency_overrides.clear()
@@ -212,6 +214,43 @@ async def test_create_review_with_images_multipart(review_env):
             detail_res = await client.get(f"/reviews/{review_id}")
             assert detail_res.status_code == 200
             assert len(detail_res.json()["images"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_create_review_rolls_back_when_image_records_fail(review_env):
+    async def mock_upload(file, folder="toti-cakery/reviews", max_size=None):
+        return f"https://res.cloudinary.com/toti/{file.filename}"
+
+    async def fail_add_images(*args, **kwargs):
+        raise RuntimeError("database image insert failed")
+
+    token = create_access_token(user_id=review_env["buyer1_id"], role_level=0, username="alice@example.com", role="buyer")
+
+    with patch("app.services.review_service.upload_image_to_cloudinary", side_effect=mock_upload), \
+         patch("app.services.review_service.review_repo.add_review_images", side_effect=fail_add_images):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as client:
+            response = await client.post(
+                "/reviews/",
+                headers={"Authorization": f"Bearer {token}"},
+                data={
+                    "order_id": str(review_env["order_id"]),
+                    "product_id": str(review_env["product_id"]),
+                    "rating": "5",
+                    "comment": "Looks delicious",
+                },
+                files={"images": ("cake.png", io.BytesIO(b"image"), "image/png")},
+            )
+        assert response.status_code == 500
+
+    async with review_env["session_factory"]() as db:
+        reviews = await db.execute(select(Review).where(Review.order_id == review_env["order_id"]))
+        assert reviews.scalars().first() is None
+        product = await db.get(Product, review_env["product_id"])
+        assert product.review_count == 0
+        assert product.rating == 0.0
 
 
 @pytest.mark.asyncio
