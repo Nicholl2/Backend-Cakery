@@ -8,7 +8,7 @@ import httpx
 import secrets
 import time
 from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy import select, func
 
 from app.core.config import settings
@@ -732,47 +732,64 @@ async def check_expired_settlements(db: AsyncSession) -> int:
     
     # Find orders with partial payment that have passed settlement_due_date
     result = await db.execute(
-        select(Order)
+        select(Order.id)
         .where(
             Order.settlement_due_date != None,
             Order.settlement_due_date < now,
             Order.status.in_([OrderStatusEnum.pending, OrderStatusEnum.in_process]),
         )
-        .options(
-            selectinload(Order.invoice),
-            selectinload(Order.order_items)
-            .selectinload(OrderItem.product)
-            .selectinload(Product.recipes)
-            .selectinload(Recipe.stock_item)
-        )
     )
-    orders = result.scalars().all()
+    order_ids = result.scalars().all()
+
+    # End the candidate-selection transaction before processing orders in isolated sessions.
+    await db.rollback()
+
+    session_factory = async_sessionmaker(
+        bind=db.bind,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
     
     cancelled_count = 0
-    for order in orders:
-        if not order.invoice:
-            continue
-        # Only cancel if invoice is partial (DP paid, remaining not paid)
-        if order.invoice.status != InvoiceStatusEnum.partial:
-            continue
-            
-        # Cancel the order
+    for order_id in order_ids:
         from app.services.order_service import _rollback_order_stock
         try:
-            await _rollback_order_stock(db, order)
+            async with session_factory() as order_db:
+                async with order_db.begin():
+                    order_result = await order_db.execute(
+                        select(Order)
+                        .where(
+                            Order.id == order_id,
+                            Order.settlement_due_date != None,
+                            Order.settlement_due_date < now,
+                            Order.status.in_([OrderStatusEnum.pending, OrderStatusEnum.in_process]),
+                        )
+                        .options(
+                            selectinload(Order.invoice),
+                            selectinload(Order.order_items)
+                            .selectinload(OrderItem.product)
+                            .selectinload(Product.recipes)
+                            .selectinload(Recipe.stock_item)
+                        )
+                    )
+                    order = order_result.scalars().first()
+                    if not order or not order.invoice:
+                        continue
+                    # Only cancel if invoice is partial (DP paid, remaining not paid)
+                    if order.invoice.status != InvoiceStatusEnum.partial:
+                        continue
+
+                    await _rollback_order_stock(order_db, order)
+                    order.status = OrderStatusEnum.cancelled_settlement_expired
         except Exception as e:
-            logger.error(f"Failed to rollback stock for order {order.id}: {e}")
+            logger.error(f"Failed to process expired settlement for order {order_id}: {e}", exc_info=True)
             continue
-            
-        order.status = OrderStatusEnum.cancelled_settlement_expired
+
         cancelled_count += 1
         logger.info(
             "[SETTLEMENT_AUDIT] order_cancelled_expired | order_id=%s | "
             "settlement_due_date=%s",
-            order.id, order.settlement_due_date,
+            order_id, order.settlement_due_date,
         )
-    
-    if cancelled_count > 0:
-        await db.commit()
     
     return cancelled_count
