@@ -114,7 +114,8 @@ async def create_new_order(
                     detail=f"Jumlah pesanan ({jumlah}) melebihi stok yang tersedia ({product.stock_quantity}) untuk produk '{product.nama_produk}'.",
                 )
 
-            subtotal = Decimal(str(product.harga_jual)) * jumlah
+            decoration_charge = Decimal(str(item.get("custom_decoration_charge", "0.00")))
+            subtotal = (Decimal(str(product.harga_jual)) * jumlah) + decoration_charge
             total_harga_pesanan += subtotal
 
             item_data_list.append({
@@ -122,7 +123,7 @@ async def create_new_order(
                 "jumlah": jumlah,
                 "hpp_snapshot": Decimal(str(product.hpp_total or 0)),
                 "subtotal": subtotal,
-                "custom_decoration_charge": Decimal(str(item.get("custom_decoration_charge", "0.00"))),
+                "custom_decoration_charge": decoration_charge,
             })
 
             # Kumpulkan kebutuhan bahan baku untuk product ini

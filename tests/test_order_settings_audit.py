@@ -3,6 +3,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
 from decimal import Decimal
+from decimal import Decimal
 from unittest.mock import patch
 import httpx
 import pytest
@@ -209,8 +210,8 @@ async def run_audit_tests():
             "items": [
                 {
                     "product_id": 1,
-                    "jumlah": 2,
-                    "custom_decoration_charge": "10000.00"
+                    "jumlah": 1,
+                    "custom_decoration_charge": "25000.00"
                 }
             ],
             "notes": "Pesanan catalog buyer",
@@ -220,6 +221,9 @@ async def run_audit_tests():
         assert res.status_code == 201, f"Buyer order failed: {res.text}"
         catalog_order = res.json()
         catalog_order_id = catalog_order["id"]
+        assert Decimal(catalog_order["total_harga_pesanan"]) == Decimal("175000.00")
+        assert Decimal(catalog_order["invoice"]["total_tagihan"]) == Decimal("175000.00")
+        assert Decimal(catalog_order["items"][0]["subtotal"]) == Decimal("175000.00")
 
         # Check detail via Staff GET /orders/{id}
         res = await client.get(f"/orders/{catalog_order_id}", headers={"Authorization": f"Bearer {token_staff}"})

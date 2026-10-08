@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hmac
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -31,8 +32,11 @@ async def create_midtrans_charge(
     payment_type: str,
     amount: Decimal
 ) -> dict:
-    # 1. Ambil data order dan invoice terkait
-    order = await order_repo.get_order_by_id(db, order_id)
+    # Lock the order so concurrent charge requests cannot spend the same outstanding balance.
+    order_result = await db.execute(
+        select(Order).where(Order.id == order_id).with_for_update()
+    )
+    order = order_result.scalars().first()
     if not order:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -44,47 +48,49 @@ async def create_midtrans_charge(
             detail="Invoice tidak ditemukan"
         )
 
-    # Validasi Nominal Payment (Anti-Tampering)
     from decimal import ROUND_HALF_UP
-    if payment_type == "full":
-        valid_amount = order.total_harga_pesanan
-    elif payment_type == "dp":
-        valid_amount = order.total_harga_pesanan * Decimal("0.5")
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid payment type. Must be 'full' or 'dp'."
+    invoice = order.invoice
+    if not invoice:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice tidak ditemukan")
+
+    paid_res = await db.execute(
+        select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
+            Payment.invoice_id == invoice.id,
+            Payment.payment_status == PaymentStatusEnum.success,
         )
+    )
+    refunded_res = await db.execute(
+        select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
+            Payment.invoice_id == invoice.id,
+            Payment.payment_status == PaymentStatusEnum.refunded,
+        )
+    )
+    net_paid = Decimal(str(paid_res.scalar() or 0)) - Decimal(str(refunded_res.scalar() or 0))
+    remaining = Decimal(str(invoice.total_tagihan)) - net_paid
+    if remaining <= 0:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invoice sudah lunas")
+
+    if payment_type == "full":
+        valid_amount = remaining
+    elif payment_type == "dp":
+        valid_amount = Decimal(str(invoice.total_tagihan)) * Decimal("0.5")
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payment type. Must be 'full' or 'dp'.")
 
     valid_amount_rounded = valid_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     amount_rounded = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if amount_rounded <= 0 or amount_rounded != valid_amount_rounded or amount_rounded > remaining:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payment amount. Amount exceeds outstanding balance or does not match payment type.")
 
-    if amount_rounded != valid_amount_rounded:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid payment amount. Amount does not match order calculation."
-        )
-        
-    invoice = order.invoice
-    
     # 2a. Cek apakah sudah ada payment Pending yang aktif untuk order ini
     existing_payments = await payment_repo.get_payments_by_order_id(db, order_id)
     for ep in existing_payments:
         if ep.payment_status == PaymentStatusEnum.pending:
-            logger.info(
-                "[PAYMENT_AUDIT] existing_pending | payment_id=%s | order_id=%s",
-                ep.id, order_id,
-            )
-            return {
-                "payment_id": ep.id,
-                "pg_transaction_id": ep.pg_transaction_id,
-                "va_number": ep.va_number,
-                "qris_url": ep.qris_url,
-                "status": ep.payment_status,
-                "midtrans_response": None,
-                "message": "Tagihan pembayaran sudah ada dan masih aktif.",
-            }
-    
+            logger.info("[PAYMENT_AUDIT] existing_pending | payment_id=%s | order_id=%s", ep.id, order_id)
+            return {"payment_id": ep.id, "pg_transaction_id": ep.pg_transaction_id, "va_number": ep.va_number,
+                    "qris_url": ep.qris_url, "status": ep.payment_status, "midtrans_response": None,
+                    "message": "Tagihan pembayaran sudah ada dan masih aktif."}
+
     # 2b. Buat request payload HTTP POST ke Midtrans API Charge (/charge)
     # Order ID di Midtrans dikombinasikan dengan suffix agar unik
     order_id_midtrans = f"{invoice.nomor_invoice}-PAY-{int(time.time() * 1000)}-{secrets.token_hex(2).upper()}"
@@ -93,7 +99,7 @@ async def create_midtrans_charge(
         "payment_type": payment_method,
         "transaction_details": {
             "order_id": order_id_midtrans,
-            "gross_amount": int(amount)
+            "gross_amount": int(amount_rounded)
         }
     }
     
@@ -159,7 +165,7 @@ async def create_midtrans_charge(
     payment_obj = Payment(
         invoice_id=invoice.id,
         pg_transaction_id=pg_transaction_id,
-        jumlah_bayar=amount,
+        jumlah_bayar=amount_rounded,
         payment_method=payment_method,
         payment_status=PaymentStatusEnum.pending,
         payment_type=model_payment_type,
@@ -347,6 +353,35 @@ async def _apply_transaction_status(
 
             events_to_notify.append((invoice.order_id, "refunded"))
 
+    elif new_status == PaymentStatusEnum.failed:
+        invoice_res = await db.execute(select(Invoice).where(Invoice.id == payment.invoice_id))
+        invoice = invoice_res.scalars().first()
+        if invoice:
+            successful_res = await db.execute(
+                select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
+                    Payment.invoice_id == invoice.id,
+                    Payment.payment_status == PaymentStatusEnum.success,
+                )
+            )
+            if Decimal(str(successful_res.scalar() or 0)) <= 0:
+                from sqlalchemy.orm import selectinload
+                from app.models.order import OrderItem
+                from app.models.product import Product
+                from app.models.recipe import Recipe
+                order_res = await db.execute(
+                    select(Order).where(Order.id == invoice.order_id)
+                    .options(selectinload(Order.order_items).selectinload(OrderItem.product)
+                             .selectinload(Product.recipes).selectinload(Recipe.stock_item))
+                    .with_for_update()
+                )
+                order = order_res.scalars().first()
+                if order and order.status == OrderStatusEnum.pending:
+                    from app.services.order_service import _rollback_order_stock
+                    await _rollback_order_stock(db, order)
+                    order.status = OrderStatusEnum.cancelled
+                    invoice.status = InvoiceStatusEnum.unpaid
+                    events_to_notify.append((order.id, "cancelled"))
+
     # Jika commit diminta, commit transaksi database TERLEBIH DAHULU,
     # baru kemudian eksekusi panggilan webhook keluar ke Chatbot.
     if commit:
@@ -394,19 +429,16 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
         txn_status = str(transaction_status or "").strip()
         pg_txn_id = str(pg_transaction_id or "").strip() if pg_transaction_id else None
 
-        # 1. Validasi integritas request menggunakan SHA512 Signature Key jika signature disertakan
-        if signature_str:
-            server_key = str(settings.midtrans_server_key or "")
-            raw_string = f"{order_id_str}{status_code_str}{gross_amount_str}{server_key}"
-            calculated_signature = hashlib.sha512(raw_string.encode('utf-8')).hexdigest()
-
-            if calculated_signature.lower() != signature_str.lower():
-                logger.warning(
-                    "[PAYMENT_AUDIT] invalid_signature | midtrans_order_id=%s | "
-                    "status_code=%s | gross_amount=%s",
-                    order_id_str, status_code_str, gross_amount_str,
-                )
-                return {"status": "error_handled", "message": "Invalid signature ignored"}
+        # Reject missing or invalid signatures before any database lookup or mutation.
+        if not signature_str:
+            logger.warning("[PAYMENT_AUDIT] missing_signature | midtrans_order_id=%s", order_id_str)
+            return {"status": "error_handled", "message": "Missing signature"}
+        server_key = str(settings.midtrans_server_key or "")
+        raw_string = f"{order_id_str}{status_code_str}{gross_amount_str}{server_key}"
+        calculated_signature = hashlib.sha512(raw_string.encode("utf-8")).hexdigest()
+        if not server_key or not hmac.compare_digest(calculated_signature.lower(), signature_str.lower()):
+            logger.warning("[PAYMENT_AUDIT] invalid_signature | midtrans_order_id=%s", order_id_str)
+            return {"status": "error_handled", "message": "Invalid signature ignored"}
 
         # 2. Cari data payment dengan ROW-LEVEL LOCK (FOR UPDATE)
         #    mencegah dua webhook simultan memproses Payment row yang sama
@@ -448,6 +480,24 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
                 pg_txn_id, order_id_str,
             )
             return {"status": "ok", "message": "Test notification received, dummy order ignored"}
+
+        # Reconcile the Midtrans reference and amount against backend records.
+        invoice_res = await db.execute(select(Invoice).where(Invoice.id == payment.invoice_id))
+        invoice = invoice_res.scalars().first()
+        expected_prefix = f"{invoice.nomor_invoice}-PAY-" if invoice else ""
+        if not invoice or not order_id_str.startswith(expected_prefix):
+            await db.rollback()
+            return {"status": "error_handled", "message": "Payment reference mismatch"}
+        try:
+            webhook_amount = Decimal(gross_amount_str).quantize(Decimal("0.01"))
+            expected_amount = Decimal(str(payment.jumlah_bayar)).quantize(Decimal("0.01"))
+        except Exception:
+            await db.rollback()
+            return {"status": "error_handled", "message": "Invalid gross_amount"}
+        if webhook_amount != expected_amount:
+            logger.warning("[PAYMENT_AUDIT] gross_amount_mismatch | payment_id=%s", payment.id)
+            await db.rollback()
+            return {"status": "error_handled", "message": "Payment amount mismatch"}
 
         # 3. IDEMPOTENCY GUARD — skip jika payment sudah di terminal state
         # Pengecualian: webhook 'refund' atau 'partial_refund' boleh diproses dari state 'success'
@@ -641,7 +691,8 @@ async def process_manual_payment(
     4. Status order tetap 'pending' agar konsisten dengan alur online payment & dapat dibatalkan jika diperlukan.
     5. Commit ke database & kirim notifikasi chatbot.
     """
-    order = await order_repo.get_order_by_id(db, order_id)
+    order_result = await db.execute(select(Order).where(Order.id == order_id).with_for_update())
+    order = order_result.scalars().first()
     if not order:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -663,6 +714,22 @@ async def process_manual_payment(
         )
         db.add(invoice)
         await db.flush()
+
+    paid_res = await db.execute(
+        select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
+            Payment.invoice_id == invoice.id, Payment.payment_status == PaymentStatusEnum.success
+        )
+    )
+    refunded_res = await db.execute(
+        select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
+            Payment.invoice_id == invoice.id, Payment.payment_status == PaymentStatusEnum.refunded
+        )
+    )
+    remaining = Decimal(str(invoice.total_tagihan)) - Decimal(str(paid_res.scalar() or 0)) + Decimal(str(refunded_res.scalar() or 0))
+    amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+    if amount <= 0 or amount > remaining:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pembayaran melebihi sisa tagihan")
 
     # Buat record transaksi pembayaran baru di database
     pg_txn_id = f"MANUAL-{order.id}-{int(time.time() * 1000)}-{secrets.token_hex(2).upper()}"
