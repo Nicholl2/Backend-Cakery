@@ -150,15 +150,19 @@ async def ensure_roles_exist(db: AsyncSession) -> None:
 async def bootstrap_owner(db: AsyncSession, data: UserBootstrap) -> User:
     # Ensure default roles exist
     await ensure_roles_exist(db)
-    
+
     # Check if user list is empty
+    # Note: This check + insert is not atomic without DB-level advisory locks.
+    # A concurrent request can pass this check simultaneously. We guard with
+    # a try/except on commit to detect IntegrityError from a UNIQUE constraint
+    # on username — and re-raise as a clear 400.
     users_result = await db.execute(select(User))
     if users_result.scalars().first() is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Tabel users tidak kosong. Bootstrap hanya diizinkan untuk setup pertama kali."
         )
-        
+
     # Validate and hash password
     from app.core.security import validate_password_strength
     try:
@@ -167,7 +171,7 @@ async def bootstrap_owner(db: AsyncSession, data: UserBootstrap) -> User:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     hashed_pwd = hash_password(data.password)
-    
+
     owner_user = User(
         username=data.username,
         password_hash=hashed_pwd,
@@ -179,10 +183,24 @@ async def bootstrap_owner(db: AsyncSession, data: UserBootstrap) -> User:
         phone_number=getattr(data, "phone_number", None),
     )
     db.add(owner_user)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        # Re-check: if another concurrent bootstrap committed first, raise 400
+        users_result2 = await db.execute(select(User))
+        if users_result2.scalars().first() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Bootstrap sudah dilakukan oleh request lain. Hanya satu Owner yang diizinkan."
+            )
+        raise
+
     stmt = select(User).options(selectinload(User.role)).where(User.id == owner_user.id)
     result = await db.execute(stmt)
     return result.scalars().first() or owner_user
+
+
 
 
 async def upload_user_avatar(db: AsyncSession, user_id: int, file: UploadFile) -> User:

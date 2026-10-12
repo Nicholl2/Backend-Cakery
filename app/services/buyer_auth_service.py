@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.utils.phone import normalize_phone
 from app.utils.cloudinary_helper import upload_image_to_cloudinary
 from app.services.chatbot_notify import fetch_whatsapp_number
+from app.utils.email_helper import send_otp_email  # top-level for testability
 
 # ── BUYER LOGIN ATTEMPT TRACKING ─────────────────────────────────────────────
 _MAX_BUYER_LOGIN_ATTEMPTS = 5
@@ -55,7 +56,13 @@ def _clear_buyer_login_attempts(identifier: str) -> None:
 # ── GENERAL OTP HELPERS ───────────────────────────────────────────────────────
 
 async def send_otp(db: AsyncSession, target: str, channel: str, purpose: str) -> dict:
-    """Generate and store OTP in database, returning OTP ID and expiration"""
+    """
+    Generate, store, and deliver an OTP.
+
+    Stores OTP in DB first, then sends it via the configured channel.
+    Raises HTTPException 503 if the email provider fails so callers can
+    surface the error instead of silently pretending the OTP was sent.
+    """
     code = "".join(secrets.choice(string.digits) for _ in range(6))
     otp_id = str(uuid.uuid4())
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
@@ -71,6 +78,15 @@ async def send_otp(db: AsyncSession, target: str, channel: str, purpose: str) ->
         expires_at=expires_at
     )
 
+    if channel == "email":
+        sent = await send_otp_email(target, code)
+        if not sent:
+            # OTP saved; caller may retry — do not expose the code
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Gagal mengirim kode OTP ke email. Coba lagi dalam beberapa saat."
+            )
+
     return {
         "otp_id": otp_id,
         "expires_in": 300
@@ -81,8 +97,22 @@ _MAX_OTP_VERIFY_ATTEMPTS = 5
 
 
 async def verify_otp(db: AsyncSession, otp_id: str, code: str) -> dict:
-    """Verify OTP code from database and issue a single-use DB verify_token"""
-    otp = await otp_repo.get_otp_by_id(db, otp_id)
+    """Verify OTP code from database and issue a single-use DB verify_token.
+    
+    Uses WITH FOR UPDATE to prevent concurrent requests from both passing the
+    is_used check and both receiving a verify_token for the same OTP.
+
+    NOTE: WITH FOR UPDATE works on PostgreSQL. SQLite (used in tests) silently
+    degrades — concurrent safety is only guaranteed on PostgreSQL.
+    """
+    stmt = (
+        select(OTPCode)
+        .where(OTPCode.id == otp_id)
+        .with_for_update()
+    )
+    res = await db.execute(stmt)
+    otp = res.scalars().first()
+
     if not otp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -144,49 +174,75 @@ async def verify_otp(db: AsyncSession, otp_id: str, code: str) -> dict:
 # ── DB VERIFICATION TOKENS ────────────────────────────────────────────────────
 
 async def validate_and_consume_db_verify_token(db: AsyncSession, verify_token: str, phone_number: str):
-    stmt = select(OTPCode).where(OTPCode.verify_token == verify_token)
+    """
+    Validate and atomically consume a DB-backed verify_token.
+
+    Security properties:
+    - WITH FOR UPDATE prevents concurrent requests from both passing the is_used check.
+    - is_verified is checked to ensure only fully confirmed WA tokens are accepted.
+    - Token is bound to the phone_number that initiated the OTP flow.
+    - Token must not be expired.
+
+    NOTE: WITH FOR UPDATE works on PostgreSQL. SQLite (used in tests) does not
+    support it but silently degrades — concurrent safety in tests is not guaranteed.
+    """
+    from sqlalchemy.dialects import postgresql  # noqa: F401 — for awareness
+
+    stmt = (
+        select(OTPCode)
+        .where(OTPCode.verify_token == verify_token)
+        .with_for_update()
+    )
     res = await db.execute(stmt)
     otp = res.scalars().first()
-    
+
     if not otp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Token verifikasi tidak valid atau tidak ditemukan."
         )
-        
+
     if otp.is_used:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Token verifikasi sudah digunakan."
         )
-        
+
+    if not otp.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token verifikasi belum dikonfirmasi."
+        )
+
     try:
         cleaned_phone = normalize_phone(phone_number)
         cleaned_otp_phone = normalize_phone(otp.phone_number) if otp.phone_number else ""
     except HTTPException:
         cleaned_phone = phone_number.strip()
         cleaned_otp_phone = (otp.phone_number or "").strip()
-        
+
     if cleaned_otp_phone != cleaned_phone:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Token verifikasi tidak cocok dengan nomor telepon tujuan."
         )
-        
+
     otp_expires = otp.expires_at
     if otp_expires.tzinfo is None:
         otp_expires = otp_expires.replace(tzinfo=timezone.utc)
-        
+
     if otp_expires < datetime.now(timezone.utc):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Token verifikasi telah kedaluwarsa."
         )
-        
-    # Mark as used
+
+    # Atomically mark as used — committed by the calling function's transaction
     otp.is_used = True
     await db.commit()
     await db.refresh(otp)
+
+
 
 
 
@@ -402,24 +458,25 @@ async def register_buyer(
             detail=str(e),
         )
 
-    # Validate and consume verify token from DB
-    await validate_and_consume_db_verify_token(db, verify_token, phone)
-        
-    # Check duplicate buyer
+    # ── Validate duplicates BEFORE consuming the token ──────────────────────
+    # This prevents the token from being burned on validation failures.
     existing_email = await buyer_repo.get_buyer_by_email(db, email)
     if existing_email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email is already registered"
         )
-        
+
     existing_phone = await buyer_repo.get_buyer_by_phone(db, phone)
     if existing_phone:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Phone number is already registered"
         )
-        
+
+    # ── Consume token only after all pre-checks pass ─────────────────────────
+    await validate_and_consume_db_verify_token(db, verify_token, phone)
+
     # Create buyer (set is_verified to True because OTP was verified)
     pwd_hash = hash_password(password)
     buyer = await buyer_repo.create_buyer(
@@ -430,7 +487,7 @@ async def register_buyer(
         password_hash=pwd_hash,
         is_verified=True
     )
-    
+
     # Generate JWT
     access_token = create_access_token(
         user_id=buyer.id,
@@ -438,7 +495,7 @@ async def register_buyer(
         username=buyer.email,
         role="buyer"
     )
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -462,7 +519,7 @@ async def login_buyer_password(db: AsyncSession, email: str, password: str) -> d
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
         )
-        
+
     if not verify_password(password, buyer.password_hash):
         _record_buyer_failed_login(email)
         raise HTTPException(
@@ -470,8 +527,15 @@ async def login_buyer_password(db: AsyncSession, email: str, password: str) -> d
             detail="Invalid email or password"
         )
 
+    # Check is_active AFTER password verification to avoid active-user enumeration
+    if not buyer.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Akun buyer tidak aktif.",
+        )
+
     _clear_buyer_login_attempts(email)
-        
+
     # Generate JWT
     access_token = create_access_token(
         user_id=buyer.id,
@@ -479,7 +543,7 @@ async def login_buyer_password(db: AsyncSession, email: str, password: str) -> d
         username=buyer.email,
         role="buyer"
     )
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -539,14 +603,20 @@ async def login_buyer_otp(db: AsyncSession, phone: str, verify_token: str) -> di
     phone = normalize_phone(phone)
     # Validate and consume verify token from DB
     await validate_and_consume_db_verify_token(db, verify_token, phone)
-        
+
     buyer = await buyer_repo.get_buyer_by_phone(db, phone)
     if not buyer:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No buyer account found with this phone number. Please register first."
         )
-        
+
+    if not buyer.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Akun buyer tidak aktif.",
+        )
+
     # Generate JWT
     access_token = create_access_token(
         user_id=buyer.id,
@@ -554,7 +624,7 @@ async def login_buyer_otp(db: AsyncSession, phone: str, verify_token: str) -> di
         username=buyer.email,
         role="buyer"
     )
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -661,10 +731,9 @@ async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password
         )
 
     target = otp.phone_number or otp.target
-    otp.is_used = True
-    await db.commit()
 
-    # Target can be email or phone
+    # ── Look up buyer BEFORE consuming the token ──────────────────────────────
+    # This ensures the token is not burned if the buyer doesn't exist.
     buyer = await buyer_repo.get_buyer_by_email(db, target)
     if not buyer:
         buyer = await buyer_repo.get_buyer_by_phone(db, target)
@@ -675,9 +744,10 @@ async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password
             detail="Buyer account not found"
         )
 
-    # Hash and update password
-    pwd_hash = hash_password(new_password)
-    await buyer_repo.update_buyer_password(db, buyer, pwd_hash)
+    # ── Atomically consume token + update password in a single commit ─────────
+    otp.is_used = True
+    buyer.password_hash = hash_password(new_password)
+    await db.commit()
 
     return {"message": "Password reset successful"}
 
@@ -687,10 +757,12 @@ async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password
 async def request_buyer_forgot_password(db: AsyncSession, email: str) -> dict:
     """
     Request password reset OTP via email for buyer.
-    Always returns success to prevent email enumeration attacks.
+    Always returns HTTP 200 to prevent email enumeration.
+    If the email provider fails, the failure is logged but the response is
+    still 200 — the OTP remains in DB and the user can retry.
     """
-    from app.utils.email_helper import send_otp_email
-
+    import logging
+    _logger = logging.getLogger(__name__)
     buyer = await buyer_repo.get_buyer_by_email(db, email)
 
     if buyer:
@@ -713,8 +785,13 @@ async def request_buyer_forgot_password(db: AsyncSession, email: str) -> dict:
         db.add(otp)
         await db.commit()
 
-        # Send OTP via email (mock mode if SMTP not configured)
-        await send_otp_email(email, code)
+        sent = await send_otp_email(email, code)
+        if not sent:
+            # OTP is persisted; log failure without exposing code/email details
+            _logger.warning(
+                "[AUTH] Failed to deliver buyer password-reset OTP via email. "
+                "OTP persisted in DB — user can retry."
+            )
 
     # Always return success — prevent email enumeration
     return {"message": "Kode OTP reset password telah dikirim ke email Anda."}
@@ -783,11 +860,8 @@ async def reset_buyer_password_email(
             detail=f"Kode OTP salah. Sisa percobaan: {remaining}."
         )
 
-    # Mark OTP as used (single-use)
-    otp.is_used = True
-    await db.commit()
-
-    # Find buyer and update password
+    # ── Look up buyer BEFORE consuming the OTP ───────────────────────────────
+    # This ensures the OTP is not burned if the buyer account doesn't exist.
     buyer = await buyer_repo.get_buyer_by_email(db, email)
     if not buyer:
         raise HTTPException(
@@ -795,8 +869,10 @@ async def reset_buyer_password_email(
             detail="Akun Buyer tidak ditemukan."
         )
 
-    pwd_hash = hash_password(new_password)
-    await buyer_repo.update_buyer_password(db, buyer, pwd_hash)
+    # ── Atomically consume OTP + update password in a single commit ───────────
+    otp.is_used = True
+    buyer.password_hash = hash_password(new_password)
+    await db.commit()
 
     return {"message": "Password berhasil di-reset. Silakan login kembali."}
 
@@ -864,17 +940,20 @@ async def reset_seller_password(db: AsyncSession, verify_token: str, new_passwor
         )
 
     target = otp.target
-    otp.is_used = True
-    await db.commit()
 
-    user = await user_repo.get_user_by_username(db, target)
+    # ── Look up user BEFORE consuming the token ───────────────────────────────
+    # target is the email address set by request_seller_forgot_password.
+    user = await user_repo.get_user_by_email(db, target)
+    if not user:
+        user = await user_repo.get_user_by_username(db, target)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Seller account not found"
         )
 
-    # Update user password in DB
+    # ── Atomically consume token + update password in a single commit ─────────
+    otp.is_used = True
     user.password_hash = hash_password(new_password)
     await db.commit()
     await db.refresh(user)

@@ -260,7 +260,7 @@ async def run_tests():
 
         # ── 9. Forgot password — valid email (buyer exists) ──────────────────────
         print("\n── Test 9: Forgot Password (valid email) ──")
-        with patch("app.utils.email_helper.send_otp_email", new_callable=AsyncMock) as mock_send_email:
+        with patch("app.services.buyer_auth_service.send_otp_email", new_callable=AsyncMock) as mock_send_email:
             r = await client.post(
                 "/auth/buyer/forgot-password",
                 json={"email": "buyer1@test.com"}
@@ -289,7 +289,7 @@ async def run_tests():
 
         # ── 10. Forgot password — email not found (anti-enumeration) ─────────────
         print("\n── Test 10: Forgot Password (email not found) ──")
-        with patch("app.utils.email_helper.send_otp_email", new_callable=AsyncMock) as mock_send_email:
+        with patch("app.services.buyer_auth_service.send_otp_email", new_callable=AsyncMock) as mock_send_email:
             r = await client.post(
                 "/auth/buyer/forgot-password",
                 json={"email": "nobody@test.com"}
