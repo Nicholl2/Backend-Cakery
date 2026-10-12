@@ -10,7 +10,7 @@ from .faq_item import FaqItem
 from .expense import Expense
 from .customer import Customer
 from .order import Order, OrderItem, Invoice
-from .payment import Payment
+from .payment import Payment, RefundTransaction
 from .review import Review, ReviewImage
 from .buyer import Buyer
 from .otp_code import OTPCode
@@ -37,6 +37,7 @@ __all__ = [
     "OrderItem",
     "Invoice",
     "Payment",
+    "RefundTransaction",
     "Review",
     "ReviewImage",
     "Buyer",

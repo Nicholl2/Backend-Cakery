@@ -428,8 +428,11 @@ def generate_order_invoice_pdf(order: Order, store_whatsapp: str = "") -> io.Byt
         amount_paid = Decimal("0.00")
         if order.invoice and hasattr(order.invoice, "payments"):
             for p in order.invoice.payments:
-                if str(getattr(p, "payment_status", "")).lower() == "success":
-                    amount_paid += Decimal(str(p.jumlah_bayar))
+                if str(getattr(p, "payment_status", "")).lower() in ("success", "refunded"):
+                    gross = Decimal(str(p.jumlah_bayar))
+                    refunds = sum((Decimal(str(r.refund_amount)) for r in (p.refunds or [])
+                                   if str(getattr(r.status, "value", r.status)) == "completed"), Decimal("0.00"))
+                    amount_paid += gross - refunds
     else:
         amount_paid = Decimal(str(amount_paid))
 

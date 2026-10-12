@@ -28,6 +28,7 @@ async def run_tests():
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
+    settings.service_owner_numbers_key = "test_owner_numbers_key"
     print("\nRunning Owner WhatsApp Numbers Endpoint Tests...")
     
     # 1. Setup Database & Roles/Users
@@ -77,7 +78,7 @@ async def run_tests():
         # 2c. Valid Service Key
         response = await client.get(
             "/api/users/owner-numbers", 
-            headers={"X-Service-Key": settings.service_api_key}
+            headers={"X-Service-Key": settings.service_owner_numbers_key}
         )
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         
@@ -90,6 +91,13 @@ async def run_tests():
         assert "628123456789" in numbers
         assert "628987654321" in numbers
         print(f"✓ Valid request succeeded, returned normalized numbers: {numbers}")
+
+        # The legacy chatbot key only has order/payment creation capabilities.
+        denied = await client.get(
+            "/api/users/owner-numbers",
+            headers={"X-Service-Key": settings.service_api_key},
+        )
+        assert denied.status_code == 403, f"Expected 403 for disallowed capability, got {denied.status_code}"
 
     app.dependency_overrides.clear()
     await test_engine.dispose()

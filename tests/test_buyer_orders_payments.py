@@ -50,6 +50,8 @@ async def run_tests():
 
     settings.midtrans_server_key = "test_midtrans_server_key_123"
     settings.service_api_key = getattr(settings, "service_api_key", "test_service_key_123") or "test_service_key_123"
+    settings.service_payment_status_key = "test_payment_status_key"
+    settings.service_settlement_key = "test_settlement_key"
 
     # 1. Ensure Migrations and Seed
     async with test_engine.begin() as conn:
@@ -130,6 +132,13 @@ async def run_tests():
         assert order1_data["created_via"] == "web"
         assert len(order1_data["items"]) == 1
         assert order1_data["fulfillment_date"] is not None
+
+        # Duplicate active unpaid order for the same buyer must be rejected.
+        duplicate_active = await client.post(
+            "/orders/buyer", json=order_payload,
+            headers={"Authorization": f"Bearer {token_buyer1}"}
+        )
+        assert duplicate_active.status_code == 409, duplicate_active.text
 
         # Test 1b: Same-day order rejection (H-1 pre-order business rule)
         print("\n1b. Testing same-day order rejection (POST /orders/buyer)...")
@@ -328,7 +337,8 @@ async def run_tests():
         # Chatbot checking status with X-Service-Key
         res_pay_stat_cb = await client.get(
             f"/payments/{order1_id}/status",
-            headers={"X-Service-Key": settings.service_api_key}
+            headers={"X-Service-Key": settings.service_payment_status_key},
+            params={"nomor_wa": b1_phone}
         )
         assert res_pay_stat_cb.status_code == 200
         print("✓ Chatbot checked payment status with X-Service-Key (200)")
@@ -525,7 +535,7 @@ async def run_tests():
         # Call endpoint check-expired-settlements with service key
         res_expired = await client.post(
             "/payments/check-expired-settlements",
-            headers={"X-Service-Key": settings.service_api_key}
+            headers={"X-Service-Key": settings.service_settlement_key}
         )
         assert res_expired.status_code == 200
         assert res_expired.json()["cancelled_orders_count"] >= 1

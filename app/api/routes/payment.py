@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Optional
 import logging
-from fastapi import APIRouter, Depends, Request, status, HTTPException, Header
+from fastapi import APIRouter, Depends, Request, status, HTTPException, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
@@ -16,6 +16,7 @@ from app.api.dependencies import (
     AuthIdentity,
     get_current_user_id,
     require_internal_user,
+    require_service_scope,
 )
 from app.services import payment_service
 from app.repositories import order_repo, customer_repo
@@ -33,6 +34,7 @@ router = APIRouter(
 
 class PaymentChargeRequest(BaseModel):
     order_id: int
+    nomor_wa: Optional[str] = None
     payment_method: str = Field(..., pattern="^(bank_transfer|qris)$")
     payment_type: str = Field(..., pattern="^(full|dp)$")
     amount: Decimal = Field(..., gt=0)
@@ -52,15 +54,27 @@ async def create_midtrans_payment(
     Dapat diakses oleh Chatbot (X-Service-Key) maupun Buyer (Bearer JWT).
     Mengembalikan data transaksi Midtrans (nomor VA atau QRIS string).
     """
+    if auth.is_service and not auth.has_scope("payments:create"):
+        raise HTTPException(status_code=403, detail="Service key lacks required capability")
+    order = await order_repo.get_order_by_id(db, data.order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order tidak ditemukan")
     # Jika diakses oleh Buyer JWT, validasi kepemilikan order
     if auth.is_buyer:
         customer = await customer_repo.get_by_nomor_wa(db, auth.buyer.phone)
-        order = await order_repo.get_order_by_id(db, data.order_id)
-        if not order or not customer or order.customer_id != customer.id:
+        if not customer or order.customer_id != customer.id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Order tidak ditemukan"
             )
+    elif auth.is_service:
+        customer = await customer_repo.get_by_nomor_wa(db, data.nomor_wa or "")
+        if not customer or order.customer_id != customer.id:
+            raise HTTPException(status_code=404, detail="Order tidak ditemukan")
+    elif auth.auth_type == "user":
+        role_level = int(auth.role) if auth.role is not None else 99
+        if role_level > 3:
+            raise HTTPException(status_code=403, detail="Akses ditolak")
 
     return await payment_service.create_midtrans_charge(
         db,
@@ -109,6 +123,7 @@ async def create_manual_payment(
             summary="Get latest payment status of an order")
 async def get_order_payment_status(
     order_id: int,
+    nomor_wa: Optional[str] = Query(None, description="Required for service requests"),
     auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
     db: AsyncSession = Depends(get_db)
 ):
@@ -131,6 +146,12 @@ async def get_order_payment_status(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Order tidak ditemukan"
                 )
+        elif auth.is_service:
+            if not auth.has_scope("payments:read"):
+                raise HTTPException(status_code=403, detail="Service key lacks required capability")
+            customer = await customer_repo.get_by_nomor_wa(db, nomor_wa or "")
+            if not customer or order.customer_id != customer.id:
+                raise HTTPException(status_code=404, detail="Order tidak ditemukan")
 
         payments = await payment_service.get_payments_by_order(db, order_id)
         
@@ -149,14 +170,12 @@ async def get_order_payment_status(
         order = await order_repo.get_order_by_id(db, order_id) or order
             
         amount_paid = Decimal("0.00")
-        for p in payments:
-            if p.payment_status == PaymentStatusEnum.success:
-                amount_paid += p.jumlah_bayar
-                
         amount_due = Decimal("0.00")
         invoice_status = "unpaid"
         if order.invoice:
-            amount_due = Decimal(str(order.invoice.total_tagihan)) - amount_paid
+            totals = await payment_service.invoice_payment_totals(db, order.invoice.id)
+            amount_paid = totals["net_paid"]
+            amount_due = max(Decimal("0.00"), Decimal(str(order.invoice.total_tagihan)) - amount_paid)
             invoice_status = order.invoice.status
             
         return {
@@ -235,6 +254,8 @@ async def check_expired_settlements_endpoint(
     Memeriksa dan membatalkan pesanan DP (partially paid) yang melewati settlement_due_date.
     Mengembalikan jumlah pesanan yang dibatalkan.
     """
+    if auth.is_service and not auth.has_scope("settlements:check"):
+        raise HTTPException(status_code=403, detail="Service key lacks required capability")
     if not auth.is_service and not auth.is_internal_user:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -242,4 +263,3 @@ async def check_expired_settlements_endpoint(
         )
     cancelled_count = await payment_service.check_expired_settlements(db)
     return {"success": True, "cancelled_orders_count": cancelled_count}
-

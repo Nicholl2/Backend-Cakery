@@ -8,11 +8,12 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy import select
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
 from app.models.order import Order, OrderStatusEnum, Invoice, InvoiceStatusEnum
-from app.models.payment import Payment, PaymentStatusEnum, PaymentTypeEnum
+from app.models.payment import Payment, PaymentStatusEnum, PaymentTypeEnum, RefundTransaction, RefundStatusEnum
 from app.models.stock_item import StockItem
 from app.services.order_service import cancel_and_refund_order
 from app.services.payment_service import process_midtrans_webhook
@@ -101,18 +102,20 @@ async def test_order_refund_flow():
             # Verifikasi mock terpanggil
             assert mock_client.return_value.__aenter__.return_value.post.called
             assert refund_res.refund_mode == "auto", f"Expected auto refund_mode, got {refund_res.refund_mode}"
-            assert refund_res.status == "refunded"
-            assert refund_res.payment_status == "refunded"
+            assert refund_res.status == "cancelled"
+            assert refund_res.payment_status == "refund_pending"
 
             # Verifikasi perubahan statenya
             await db.refresh(order)
             await db.refresh(invoice)
             await db.refresh(payment)
             
-            assert order.status == OrderStatusEnum.refunded, f"Order status should be refunded, got {order.status}"
-            assert invoice.status == InvoiceStatusEnum.refunded, f"Invoice status should be refunded, got {invoice.status}"
-            assert payment.payment_status == PaymentStatusEnum.refunded, f"Payment status should be refunded, got {payment.payment_status}"
-            print("✓ Service Refund memicu update DB dengan benar (Order refunded, Invoice refunded, Payment refunded, refund_mode=auto)")
+            refund_records = (await db.execute(select(RefundTransaction).where(RefundTransaction.payment_id == payment.id))).scalars().all()
+            assert order.status == OrderStatusEnum.cancelled
+            assert invoice.status == InvoiceStatusEnum.partial
+            assert payment.payment_status == PaymentStatusEnum.success
+            assert len(refund_records) == 1 and refund_records[0].status == RefundStatusEnum.pending
+            print("✓ Refund request tercatat pending; status payment/invoice belum menganggap uang kembali")
 
         # 3. Test HTTP 412 Midtrans Fallback to Manual Refund (VA / QRIS)
         # Buat order baru dengan status in_process & payment success
@@ -156,9 +159,9 @@ async def test_order_refund_flow():
 
             res_412 = await cancel_and_refund_order(db, order412.id, "Batal VA")
             assert res_412.refund_mode == "manual", f"Expected manual refund_mode for 412, got {res_412.refund_mode}"
-            assert res_412.status == "refunded"
-            assert res_412.payment_status == "refunded"
-            print("✓ HTTP 412 Midtrans ditangani dengan baik dan jatuh ke refund_mode=manual (status refunded)")
+            assert res_412.status == "cancelled"
+            assert res_412.payment_status == "refund_pending"
+            print("✓ HTTP 412 Midtrans tercatat sebagai refund manual pending")
 
     await test_engine.dispose()
     print("✅ Refund DP Flow Test Passed!")
@@ -232,6 +235,10 @@ async def test_midtrans_webhook_refund():
             "status_code": status_code,
             "signature_key": sig
         }
+        payload["refunds"] = [{
+            "refund_key": "legacy-refund-key", "refund_amount": "100000.00",
+            "bank_confirmed_at": "2026-10-01 10:00:00", "reason": "confirmed refund"
+        }]
         
         res = await process_midtrans_webhook(db, payload)
         assert res["status"] == "success"
@@ -242,7 +249,7 @@ async def test_midtrans_webhook_refund():
         
         assert payment.payment_status == PaymentStatusEnum.refunded
         assert invoice.status == InvoiceStatusEnum.refunded
-        assert order.status == OrderStatusEnum.cancelled
+        assert order.status == OrderStatusEnum.refunded
         print("✓ Webhook Refund diproses dengan benar dan mem-bypass Idempotency guard")
 
     await test_engine.dispose()

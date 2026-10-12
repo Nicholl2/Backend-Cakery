@@ -50,6 +50,7 @@ async def run_chatbot_refund_tests():
     test_chatbot_url = "http://mock-chatbot:8000"
 
     settings.service_api_key = test_service_key
+    settings.service_refund_key = "test_chatbot_refund_key_789"
     settings.chatbot_internal_key = test_internal_key
     settings.chatbot_url = test_chatbot_url
 
@@ -205,7 +206,7 @@ async def run_chatbot_refund_tests():
         await db.commit()
 
     token_admin = create_access_token(user_id=1, role_level=2, username="admin_test")
-    service_headers = {"X-Service-Key": test_service_key}
+    service_headers = {"X-Service-Key": settings.service_refund_key}
     admin_headers = {"Authorization": f"Bearer {token_admin}"}
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -267,17 +268,16 @@ async def run_chatbot_refund_tests():
             )
             assert res.status_code == 200, f"Expected 200 for chatbot refund on pending order, got {res.status_code} - {res.text}"
             order_resp = res.json()
-            assert order_resp["status"] == "refunded"
+            assert order_resp["status"] == "cancelled"
             assert order_resp["order_id"] == 1
-            assert order_resp["payment_status"] == "refunded"
+            assert order_resp["payment_status"] == "refund_pending"
             assert order_resp["refund_mode"] == "auto"
-            print(f"  ✓ Chatbot successfully refunded order 1 (status={order_resp['status']}, refund_mode={order_resp['refund_mode']})")
+            print(f"  ✓ Refund request remains pending until gateway confirmation (status={order_resp['status']})")
 
-            # Check that refunded webhook Sinyal 2.a was called for order 1
-            mock_webhook.assert_called()
+            # Gateway acceptance alone does not mean money has been returned.
             call_args = [call[0] for call in mock_webhook.call_args_list]
-            assert any(args[0] == 1 and args[1] == "refunded" for args in call_args)
-            print("  ✓ Chatbot webhook 'refunded' event (Sinyal 2.a Auto Refund) successfully triggered for order 1")
+            assert not any(args[0] == 1 and args[1] == "refunded" for args in call_args)
+            print("  ✓ No completed-refund notification before callback confirmation")
 
         # =====================================================================
         # 4. Admin JWT Refund Flexibility & Sinyal 2.b (Admin Mark as Refunded)
@@ -293,13 +293,15 @@ async def run_chatbot_refund_tests():
             )
             assert res.status_code == 200, f"Admin refund failed: {res.status_code} - {res.text}"
             admin_resp = res.json()
-            assert admin_resp["status"] == "refunded"
+            assert admin_resp["status"] == "cancelled"
             assert admin_resp["order_id"] == 2
-            assert admin_resp["payment_status"] == "refunded"
+            assert admin_resp["payment_status"] == "refund_pending"
             assert "refund_mode" in admin_resp
             print(f"  ✓ Admin successfully refunded 'in_process' order without nomor_wa (200 OK, refund_mode={admin_resp['refund_mode']})")
 
-            # Check that refunded webhook Sinyal 2.b was called for order 2
+            manual_complete = await client.patch("/orders/2/status", json={"status": "refunded"}, headers=admin_headers)
+            assert manual_complete.status_code == 200, manual_complete.text
+            assert manual_complete.json()["status"] == "refunded"
             mock_webhook.assert_called()
             call_args = [call[0] for call in mock_webhook.call_args_list]
             assert any(args[0] == 2 and args[1] == "refunded" for args in call_args)
@@ -320,6 +322,20 @@ async def run_chatbot_refund_tests():
                 created_via="chatbot",
             )
             db.add(order_cancelled)
+            await db.flush()
+            invoice_cancelled = Invoice(
+                id=99,
+                order_id=order_cancelled.id, nomor_invoice="INV-MANUAL-99",
+                total_tagihan=Decimal("50000.00"), status=InvoiceStatusEnum.paid,
+            )
+            db.add(invoice_cancelled)
+            await db.flush()
+            db.add(Payment(
+                id=99,
+                invoice_id=invoice_cancelled.id, jumlah_bayar=Decimal("50000.00"),
+                payment_method="cash", payment_status=PaymentStatusEnum.success,
+                payment_type=PaymentTypeEnum.final,
+            ))
             await db.commit()
 
         with patch("app.services.chatbot_notify.notify_chatbot_order_event", new_callable=AsyncMock) as mock_webhook:

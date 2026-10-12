@@ -20,6 +20,12 @@ class PaymentTypeEnum(str, enum.Enum):
     final = "Final"
 
 
+class RefundStatusEnum(str, enum.Enum):
+    pending = "pending"
+    completed = "completed"
+    failed = "failed"
+
+
 class Payment(Base):
     __tablename__ = "payments"
 
@@ -49,6 +55,26 @@ class Payment(Base):
     # Relationships
     invoice = relationship("Invoice", back_populates="payments")
     verified_by_user = relationship("User", foreign_keys=[verified_by])
+    refunds = relationship("RefundTransaction", back_populates="payment", cascade="all, delete-orphan", lazy="selectin")
 
     def __repr__(self):
         return f"<Payment(id={self.id}, invoice_id={self.invoice_id}, status={self.payment_status})>"
+
+
+class RefundTransaction(Base):
+    __tablename__ = "refund_transactions"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    payment_id = Column(Integer, ForeignKey("payments.id"), nullable=False, index=True)
+    refund_amount = Column(Numeric(10, 2), nullable=False)
+    status = Column(SAEnum(RefundStatusEnum, name="refundstatusenum"), nullable=False,
+                    default=RefundStatusEnum.pending)
+    reason = Column(String(500), nullable=False)
+    gateway_ref = Column(String(100), nullable=True, unique=True)
+    initiated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    initiated_source = Column(String(32), nullable=False, default="seller")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    payment = relationship("Payment", back_populates="refunds")
+    initiator = relationship("User", foreign_keys=[initiated_by])

@@ -10,12 +10,13 @@ import secrets
 import time
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import selectinload
 from sqlalchemy import select, func
 
 from app.core.config import settings
 from app.core.state_machine import is_valid_payment_transition, is_payment_terminal
 from app.models.order import Order, Invoice, OrderStatusEnum, InvoiceStatusEnum
-from app.models.payment import Payment, PaymentStatusEnum, PaymentTypeEnum
+from app.models.payment import Payment, PaymentStatusEnum, PaymentTypeEnum, RefundTransaction, RefundStatusEnum
 from app.repositories import order_repo, payment_repo
 from app.services.chatbot_notify import (
     notify_chatbot_order_event,
@@ -42,6 +43,8 @@ async def create_midtrans_charge(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Order tidak ditemukan"
         )
+    if order.status in (OrderStatusEnum.cancelled, OrderStatusEnum.refunded, OrderStatusEnum.cancelled_settlement_expired):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Order yang dibatalkan tidak dapat menerima pembayaran")
     if not order.invoice:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -53,20 +56,8 @@ async def create_midtrans_charge(
     if not invoice:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice tidak ditemukan")
 
-    paid_res = await db.execute(
-        select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
-            Payment.invoice_id == invoice.id,
-            Payment.payment_status == PaymentStatusEnum.success,
-        )
-    )
-    refunded_res = await db.execute(
-        select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
-            Payment.invoice_id == invoice.id,
-            Payment.payment_status == PaymentStatusEnum.refunded,
-        )
-    )
-    net_paid = Decimal(str(paid_res.scalar() or 0)) - Decimal(str(refunded_res.scalar() or 0))
-    remaining = Decimal(str(invoice.total_tagihan)) - net_paid
+    totals = await invoice_payment_totals(db, invoice.id)
+    remaining = Decimal(str(invoice.total_tagihan)) - totals["net_paid"]
     if remaining <= 0:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invoice sudah lunas")
 
@@ -233,8 +224,6 @@ async def _apply_transaction_status(
         "deny": PaymentStatusEnum.failed,
         "cancel": PaymentStatusEnum.failed,
         "expire": PaymentStatusEnum.failed,
-        "refund": PaymentStatusEnum.refunded,
-        "partial_refund": PaymentStatusEnum.refunded
     }
     
     new_status = status_map.get(txn_status, PaymentStatusEnum.pending)
@@ -277,16 +266,7 @@ async def _apply_transaction_status(
         )
         invoice = invoice_res.scalars().first()
         if invoice:
-            # Hitung total pembayaran sukses untuk invoice ini
-            sum_res = await db.execute(
-                select(func.sum(Payment.jumlah_bayar))
-                .where(
-                    Payment.invoice_id == invoice.id,
-                    Payment.payment_status == PaymentStatusEnum.success
-                )
-            )
-            total_success = sum_res.scalar() or Decimal("0.00")
-            total_success = Decimal(str(total_success))
+            total_success = (await invoice_payment_totals(db, invoice.id))["net_paid"]
             
             old_invoice_status = invoice.status
 
@@ -499,6 +479,13 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
             await db.rollback()
             return {"status": "error_handled", "message": "Payment amount mismatch"}
 
+        if txn_status in ("refund", "partial_refund"):
+            await complete_refund_notification(db, payment, payload)
+            await db.commit()
+            if payment.payment_status == PaymentStatusEnum.refunded:
+                await notify_refund_status(invoice.order_id)
+            return {"status": "success", "payment_status": payment.payment_status}
+
         # 3. IDEMPOTENCY GUARD — skip jika payment sudah di terminal state
         # Pengecualian: webhook 'refund' atau 'partial_refund' boleh diproses dari state 'success'
         is_refund_webhook = txn_status in ["refund", "partial_refund"]
@@ -521,6 +508,7 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
         return {"status": "success", "payment_status": payment.payment_status}
 
     except Exception as e:
+        await db.rollback()
         logger.error(f"Midtrans notification error: {e}", exc_info=True)
         return {"status": "error_handled"}
 
@@ -560,119 +548,187 @@ async def get_payments_by_order(db: AsyncSession, order_id: int) -> List[Payment
     return await payment_repo.get_payments_by_order_id(db, order_id)
 
 
-async def process_refund(db: AsyncSession, order_id: int, reason: str) -> str:
-    """
-    Proses refund untuk transaksi yang berstatus Success.
-    Mencoba memanggil API Refund/Cancel Midtrans, dengan fallback ke Refund Manual (offline)
-    bila transaksi berupa VA / QRIS (HTTP 412) atau unsupported method.
-    
-    Mengembalikan mode refund:
-    - 'auto': jika direct refund Midtrans berhasil (200/201)
-    - 'manual': jika direct refund gagal (412 / unsupported / error) dan dicatat sebagai manual refund
-    """
-    payments = await get_payments_by_order(db, order_id)
-    success_payments = [p for p in payments if p.payment_status == PaymentStatusEnum.success]
-    
-    if not success_payments:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Tidak ada pembayaran sukses yang bisa di-refund untuk pesanan ini."
+async def invoice_payment_totals(db: AsyncSession, invoice_id: int) -> dict[str, Decimal]:
+    """Return gross settled payments, completed refunds, and net paid for an invoice."""
+    gross_res = await db.execute(
+        select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
+            Payment.invoice_id == invoice_id,
+            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.refunded]),
         )
+    )
+    refund_res = await db.execute(
+        select(func.coalesce(func.sum(RefundTransaction.refund_amount), 0)).where(
+            RefundTransaction.payment_id.in_(select(Payment.id).where(Payment.invoice_id == invoice_id)),
+            RefundTransaction.status == RefundStatusEnum.completed,
+        )
+    )
+    gross = Decimal(str(gross_res.scalar() or 0)).quantize(Decimal("0.01"))
+    refunded = Decimal(str(refund_res.scalar() or 0)).quantize(Decimal("0.01"))
+    return {"gross_paid": gross, "refunded": refunded, "net_paid": gross - refunded}
 
-    refund_modes: list[str] = []
 
-    for payment in success_payments:
-        payment_refund_mode = "manual"
+async def _refresh_refund_payment_state(db: AsyncSession, payment: Payment) -> None:
+    totals = await db.execute(
+        select(func.coalesce(func.sum(RefundTransaction.refund_amount), 0)).where(
+            RefundTransaction.payment_id == payment.id,
+            RefundTransaction.status == RefundStatusEnum.completed,
+        )
+    )
+    completed = Decimal(str(totals.scalar() or 0)).quantize(Decimal("0.01"))
+    payment_amount = Decimal(str(payment.jumlah_bayar)).quantize(Decimal("0.01"))
+    if completed > payment_amount:
+        raise HTTPException(status_code=409, detail="Refund kumulatif melebihi jumlah pembayaran")
+    payment.payment_status = PaymentStatusEnum.refunded if completed == payment_amount else PaymentStatusEnum.success
 
-        # Panggil API Refund/Cancel Midtrans jika memungkinkan
+    invoice = await db.get(Invoice, payment.invoice_id, with_for_update=True)
+    if not invoice:
+        return
+    invoice_totals = await invoice_payment_totals(db, invoice.id)
+    if invoice_totals["net_paid"] < 0 or invoice_totals["net_paid"] > Decimal(str(invoice.total_tagihan)):
+        raise HTTPException(status_code=409, detail="Saldo bersih invoice di luar batas")
+    if invoice_totals["gross_paid"] > 0 and invoice_totals["refunded"] == invoice_totals["gross_paid"]:
+        invoice.status = InvoiceStatusEnum.refunded
+        from app.models.order import OrderItem
+        from app.models.product import Product
+        from app.models.recipe import Recipe
+        order_result = await db.execute(
+            select(Order).where(Order.id == invoice.order_id).with_for_update()
+            .options(selectinload(Order.order_items).selectinload(OrderItem.product)
+                     .selectinload(Product.recipes).selectinload(Recipe.stock_item))
+        )
+        order = order_result.scalars().first()
+        if order:
+            from app.core.state_machine import is_valid_order_transition
+            if order.status != OrderStatusEnum.refunded and not is_valid_order_transition(order.status, OrderStatusEnum.refunded):
+                raise HTTPException(status_code=409, detail="Transisi order ke refunded tidak valid")
+            if order.status not in (OrderStatusEnum.cancelled, OrderStatusEnum.refunded):
+                from app.services.order_service import _rollback_order_stock
+                await _rollback_order_stock(db, order)
+            order.status = OrderStatusEnum.refunded
+    elif invoice_totals["net_paid"] >= Decimal(str(invoice.total_tagihan)):
+        invoice.status = InvoiceStatusEnum.paid
+    elif invoice_totals["net_paid"] > 0:
+        invoice.status = InvoiceStatusEnum.partial
+    else:
+        invoice.status = InvoiceStatusEnum.unpaid
+
+
+async def process_refund(
+    db: AsyncSession,
+    order_id: int,
+    reason: str,
+    amount: Optional[Decimal] = None,
+    initiated_by: Optional[int] = None,
+    initiated_source: str = "seller",
+) -> str:
+    """Create pending refund records; only confirmed callbacks/admin confirmation complete them."""
+    order_result = await db.execute(
+        select(Order).where(Order.id == order_id).with_for_update()
+        .options(selectinload(Order.invoice).selectinload(Invoice.payments))
+    )
+    order = order_result.scalars().first()
+    if not order or not order.invoice:
+        raise HTTPException(status_code=404, detail="Invoice tidak ditemukan")
+    payments = await db.execute(
+        select(Payment).where(Payment.invoice_id == order.invoice.id)
+        .with_for_update().order_by(Payment.id)
+    )
+    candidates = [p for p in payments.scalars().all()
+                  if p.payment_status in (PaymentStatusEnum.success, PaymentStatusEnum.refunded)]
+    remaining_by_payment: dict[int, Decimal] = {}
+    for payment in candidates:
+        sums = await db.execute(
+            select(func.coalesce(func.sum(RefundTransaction.refund_amount), 0)).where(
+                RefundTransaction.payment_id == payment.id,
+                RefundTransaction.status.in_([RefundStatusEnum.completed, RefundStatusEnum.pending]),
+            )
+        )
+        remaining_by_payment[payment.id] = max(
+            Decimal("0.00"), Decimal(str(payment.jumlah_bayar)) - Decimal(str(sums.scalar() or 0))
+        )
+    refundable = sum(remaining_by_payment.values(), Decimal("0.00")).quantize(Decimal("0.01"))
+    requested = refundable if amount is None else Decimal(str(amount)).quantize(Decimal("0.01"))
+    if requested <= 0 or requested > refundable:
+        raise HTTPException(status_code=400, detail="Nominal refund melebihi saldo refundable")
+
+    allocations: list[tuple[Payment, Decimal, RefundTransaction]] = []
+    left = requested
+    for payment in candidates:
+        part = min(left, remaining_by_payment[payment.id])
+        if part <= 0:
+            continue
+        refund = RefundTransaction(
+            payment_id=payment.id, refund_amount=part, status=RefundStatusEnum.pending,
+            reason=reason, gateway_ref=f"refund-{payment.id}-{secrets.token_hex(8)}",
+            initiated_by=initiated_by, initiated_source=initiated_source,
+        )
+        db.add(refund)
+        allocations.append((payment, part, refund))
+        left -= part
+        if left == 0:
+            break
+    await db.flush()
+
+    modes: list[str] = []
+    for payment, part, refund in allocations:
+        mode = "manual"
         if payment.pg_transaction_id:
             url = f"{settings.midtrans_api_url}/{payment.pg_transaction_id}/refund"
             encoded_key = base64.b64encode(f"{settings.midtrans_server_key}:".encode()).decode()
-            headers = {
-                "Authorization": f"Basic {encoded_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            }
-            payload = {
-                "refund_key": f"refund-{payment.id}-{int(datetime.now().timestamp())}",
-                "reason": reason
-            }
-            
+            payload = {"refund_key": refund.gateway_ref, "amount": int(part), "reason": reason}
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    response = await client.post(url, json=payload, headers=headers)
-                    
-                    # 1. Error 412: Transaksi VA / QRIS tidak mendukung Direct Refund via API
-                    if response.status_code == 412:
-                        logger.warning(
-                            "[REFUND_AUDIT] midtrans_api_unsupported_412 | payment_id=%s | "
-                            "method=%s | fallback=manual",
-                            payment.id, payment.payment_method
-                        )
-                        payment_refund_mode = "manual"
-                    elif response.status_code in [200, 201]:
-                        res_json = response.json()
-                        midtrans_status = str(res_json.get("status_code", ""))
-                        if midtrans_status.startswith("2"):
-                            payment_refund_mode = "auto"
-                            logger.info(
-                                "[REFUND_AUDIT] midtrans_api_success | payment_id=%s | "
-                                "refund_key=%s | refund_mode=auto",
-                                payment.id, payload["refund_key"]
-                            )
-                        elif midtrans_status == "412":
-                            logger.warning(
-                                "[REFUND_AUDIT] midtrans_api_unsupported_412_body | payment_id=%s | "
-                                "message=%s | fallback=manual",
-                                payment.id, res_json.get("status_message")
-                            )
-                            payment_refund_mode = "manual"
-                        else:
-                            logger.warning(
-                                "[REFUND_AUDIT] midtrans_api_failed | payment_id=%s | "
-                                "status_code=%s | message=%s | fallback=manual",
-                                payment.id, midtrans_status, res_json.get("status_message")
-                            )
-                            payment_refund_mode = "manual"
-                    else:
-                        logger.warning(
-                            "[REFUND_AUDIT] midtrans_api_non_2xx | payment_id=%s | "
-                            "http_status=%s | fallback=manual",
-                            payment.id, response.status_code
-                        )
-                        payment_refund_mode = "manual"
-            except Exception as e:
-                logger.error(f"Midtrans Refund API error for payment {payment.id}: {e}")
-                logger.warning(f"[REFUND_AUDIT] fallback=manual for payment {payment.id}")
-                payment_refund_mode = "manual"
-        else:
-            logger.info(f"[REFUND_AUDIT] No pg_transaction_id for payment {payment.id} | fallback=manual")
-            payment_refund_mode = "manual"
+                    response = await client.post(url, json=payload, headers={
+                        "Authorization": f"Basic {encoded_key}", "Content-Type": "application/json", "Accept": "application/json"
+                    })
+                body = response.json()
+                if response.status_code in (200, 201) and str(body.get("status_code", "")).startswith("2"):
+                    mode = "auto"
+                else:
+                    logger.warning("[REFUND_AUDIT] refund_request_rejected | payment_id=%s | http=%s", payment.id, response.status_code)
+            except Exception as exc:
+                logger.error("[REFUND_AUDIT] gateway_refund_request_error | payment_id=%s | error=%s", payment.id, exc)
+        refund.initiated_source = f"{initiated_source}:{mode}"
+        modes.append(mode)
+        logger.info("[REFUND_AUDIT] refund_pending | refund_id=%s | payment_id=%s | amount=%s | source=%s | mode=%s",
+                    refund.id, payment.id, part, initiated_source, mode)
 
-        refund_modes.append(payment_refund_mode)
+    return "auto" if modes and all(mode == "auto" for mode in modes) else "manual"
 
-        # Update status DB (Offline / Fallback manual jika API gagal, atau Success jika API berhasil)
-        # Dilakukan dengan commit=False agar seluruh payment diproses dalam satu atomic transaction
-        fake_payload = {
-            "transaction_status": "refund",
-            "transaction_id": payment.pg_transaction_id,
-            "order_id": str(order_id)
-        }
-        await _apply_transaction_status(db, payment, fake_payload, commit=False)
 
-    # Commit seluruh mutasi status ke database terlebih dahulu
-    await db.commit()
-
-    # Evaluasi status mode refund keseluruhan
-    overall_refund_mode = "auto" if refund_modes and all(m == "auto" for m in refund_modes) else "manual"
-
-    # Sinyal Auto Refund (Poin 2.a):
-    # Tembak webhook internal ke Chatbot HANYA jika panggilan API Refund Midtrans sukses (refund_mode == "auto")
-    # Pemicu Webhook Chatbot dieksekusi SETELAH db.commit() berhasil dilakukan
-    if overall_refund_mode == "auto":
-        await notify_refund_status(order_id)
-
-    return overall_refund_mode
+async def complete_refund_notification(db: AsyncSession, payment: Payment, payload: dict) -> None:
+    """Reconcile the per-refund Midtrans entries; repeated notifications are idempotent."""
+    refund_entries = payload.get("refunds") or []
+    if not refund_entries and payload.get("refund_key"):
+        refund_entries = [{
+            "refund_key": payload.get("refund_key"),
+            "refund_amount": payload.get("refund_amount"),
+            "bank_confirmed_at": payload.get("bank_confirmed_at"),
+            "refund_chargeback_id": payload.get("refund_chargeback_id"),
+            "reason": payload.get("reason", "Midtrans refund"),
+        }]
+    for entry in refund_entries:
+        key = str(entry.get("refund_key") or "").strip()
+        if not key or entry.get("refund_amount") is None:
+            continue
+        result = await db.execute(select(RefundTransaction).where(RefundTransaction.gateway_ref == key).with_for_update())
+        refund = result.scalars().first()
+        if not refund:
+            amount = Decimal(str(entry["refund_amount"])).quantize(Decimal("0.01"))
+            refund = RefundTransaction(payment_id=payment.id, refund_amount=amount, reason=str(entry.get("reason") or "Midtrans refund")[:500],
+                                       gateway_ref=key, initiated_source="midtrans", status=RefundStatusEnum.pending)
+            db.add(refund)
+            await db.flush()
+        if refund.payment_id != payment.id:
+            raise HTTPException(status_code=400, detail="Refund callback payment mismatch")
+        callback_amount = Decimal(str(entry["refund_amount"])).quantize(Decimal("0.01"))
+        if callback_amount != Decimal(str(refund.refund_amount)).quantize(Decimal("0.01")):
+            raise HTTPException(status_code=400, detail="Refund callback amount mismatch")
+        if refund.status != RefundStatusEnum.failed and entry.get("bank_confirmed_at"):
+            refund.status = RefundStatusEnum.completed
+            refund.completed_at = datetime.now(timezone.utc)
+    await db.flush()
+    await _refresh_refund_payment_state(db, payment)
 
 
 async def process_manual_payment(
@@ -698,6 +754,8 @@ async def process_manual_payment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Order tidak ditemukan"
         )
+    if order.status in (OrderStatusEnum.cancelled, OrderStatusEnum.refunded, OrderStatusEnum.cancelled_settlement_expired):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Order yang dibatalkan tidak dapat menerima pembayaran")
 
     # Pastikan invoice ada
     invoice = order.invoice
@@ -715,17 +773,8 @@ async def process_manual_payment(
         db.add(invoice)
         await db.flush()
 
-    paid_res = await db.execute(
-        select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
-            Payment.invoice_id == invoice.id, Payment.payment_status == PaymentStatusEnum.success
-        )
-    )
-    refunded_res = await db.execute(
-        select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
-            Payment.invoice_id == invoice.id, Payment.payment_status == PaymentStatusEnum.refunded
-        )
-    )
-    remaining = Decimal(str(invoice.total_tagihan)) - Decimal(str(paid_res.scalar() or 0)) + Decimal(str(refunded_res.scalar() or 0))
+    totals = await invoice_payment_totals(db, invoice.id)
+    remaining = Decimal(str(invoice.total_tagihan)) - totals["net_paid"]
     amount = Decimal(str(amount)).quantize(Decimal("0.01"))
     if amount <= 0 or amount > remaining:
         await db.rollback()
@@ -748,20 +797,13 @@ async def process_manual_payment(
     await db.flush()
 
     # Hitung total pembayaran sukses pada invoice
-    sum_res = await db.execute(
-        select(func.sum(Payment.jumlah_bayar))
-        .where(
-            Payment.invoice_id == invoice.id,
-            Payment.payment_status == PaymentStatusEnum.success
-        )
-    )
-    total_paid = sum_res.scalar() or Decimal("0.00")
-    total_paid = Decimal(str(total_paid))
-
+    total_paid = (await invoice_payment_totals(db, invoice.id))["net_paid"]
     if total_paid >= Decimal(str(invoice.total_tagihan)):
         invoice.status = InvoiceStatusEnum.paid
-    else:
+    elif total_paid > 0:
         invoice.status = InvoiceStatusEnum.partial
+    else:
+        invoice.status = InvoiceStatusEnum.unpaid
 
     await db.commit()
     await db.refresh(order)

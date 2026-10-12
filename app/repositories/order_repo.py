@@ -39,13 +39,24 @@ async def check_active_unpaid_order(db: AsyncSession, customer_id: int) -> bool:
         .where(
             and_(
                 Order.customer_id == customer_id,
-                func.lower(cast(Order.status, String)).notin_(["cancelled", "picked_up"]),
-                func.lower(cast(Invoice.status, String)) != "paid",
+                func.lower(cast(Order.status, String)).notin_([
+                    "cancelled", "cancelled_settlement_expired", "picked_up",
+                    "delivered", "completed", "refunded",
+                ]),
+                func.lower(cast(Invoice.status, String)).notin_(["paid", "refunded"]),
             )
         )
         .limit(1)
     )
     return result.scalars().first() is not None
+
+
+async def lock_customer_for_order_creation(db: AsyncSession, customer_id: int) -> bool:
+    """Serialize order creation attempts for this customer until the transaction ends."""
+    result = await db.execute(
+        select(Customer.id).where(Customer.id == customer_id).with_for_update()
+    )
+    return result.scalar_one_or_none() is not None
 
 
 async def get_order_with_details(db: AsyncSession, order_id: int) -> Optional[Order]:

@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, UploadFile, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.api.dependencies import require_owner, get_current_user_id, require_service_key
+from app.api.dependencies import require_owner, get_current_user_id, require_service_scope
 from app.schemas.user import (
     UserTakeoverUpdate,
     UserTakeoverResponse,
@@ -188,7 +188,7 @@ async def update_takeover_handler(
 
 # ── SERVICE-TO-SERVICE CHATBOT ENDPOINTS ────────────────────────────────────
 
-@router.get("/owner-numbers", dependencies=[Depends(require_service_key)],
+@router.get("/owner-numbers", dependencies=[Depends(require_service_scope("owners:read"))],
             summary="Ambil nomor WA Owner aktif untuk chatbot service")
 async def get_owner_numbers(db: AsyncSession = Depends(get_db)):
     """

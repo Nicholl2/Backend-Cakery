@@ -10,7 +10,7 @@ from app.core.rate_limiter import limiter, RATE_ORDER_CREATE
 
 from app.core.database import get_db
 from app.api.dependencies import (
-    require_service_key,
+    require_service_scope,
     require_internal_user,
     get_current_buyer,
     get_auth_identity_optional_service_or_jwt,
@@ -157,7 +157,7 @@ async def list_seller_orders(
 
 
 @router.post("", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
-             dependencies=[Depends(require_service_key)],
+             dependencies=[Depends(require_service_scope("orders:create"))],
              summary="Buat order baru — dipanggil oleh chatbot")
 @limiter.limit(RATE_ORDER_CREATE)
 async def create_order(
@@ -200,7 +200,7 @@ async def create_custom_order(
     return OrderOut.model_validate(order)
 
 
-@router.get("/latest", response_model=OrderOut, dependencies=[Depends(require_service_key)],
+@router.get("/latest", response_model=OrderOut, dependencies=[Depends(require_service_scope("orders:read"))],
             summary="Ambil order terbaru customer berdasarkan nomor WA")
 async def get_latest_order(
     nomor_wa: str = Query(..., description="Nomor WhatsApp customer"),
@@ -227,12 +227,17 @@ async def get_order_stats(
 
 
 
-@router.post("/{order_id}/cancel", dependencies=[Depends(require_service_key)],
+@router.post("/{order_id}/cancel", dependencies=[Depends(require_service_scope("orders:cancel"))],
              summary="Batalkan order customer")
 async def cancel_order(
     order_id: int,
+    nomor_wa: str = Query(..., description="Nomor WhatsApp pemilik order"),
     db: AsyncSession = Depends(get_db),
 ):
+    order = await order_repo.get_order_by_id(db, order_id)
+    customer = await customer_repo.get_by_nomor_wa(db, nomor_wa)
+    if not order or not customer or order.customer_id != customer.id:
+        raise HTTPException(status_code=404, detail="Order tidak ditemukan")
     return await order_service.cancel_order_by_customer(db, order_id)
 
 
@@ -265,6 +270,7 @@ async def get_seller_order_detail(
 async def update_order_status(
     order_id: int,
     data: OrderStatusUpdate,
+    auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
     """
@@ -273,7 +279,7 @@ async def update_order_status(
     Jika status diubah menjadi 'refunded', memicu push notification webhook /refunded ke Chatbot Service.
     Jika status diubah menjadi 'cancelled', stok bahan baku pesanan biasa akan dikembalikan secara otomatis.
     """
-    order = await order_service.update_order_status(db, order_id, data.status.value)
+    order = await order_service.update_order_status(db, order_id, data.status.value, updated_by=auth.user_id)
     return OrderOut.model_validate(order)
 
 
@@ -316,6 +322,8 @@ async def refund_order(
     atau 'manual' jika pembayaran via VA/QRIS 412 yang memerlukan refund manual).
     """
     if auth.is_service:
+        if not auth.has_scope("refunds:request"):
+            raise HTTPException(status_code=403, detail="Service key lacks required capability")
         is_service_call = True
     elif auth.auth_type == "user":
         role_level = int(auth.role) if auth.role is not None else 3
@@ -337,6 +345,8 @@ async def refund_order(
         reason=data.reason,
         is_service=is_service_call,
         customer_phone=data.nomor_wa,
+        refund_amount=data.amount,
+        initiated_by=auth.user_id,
     )
 
 

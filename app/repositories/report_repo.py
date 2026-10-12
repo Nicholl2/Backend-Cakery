@@ -1,10 +1,10 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, cast, String
+from sqlalchemy import select, func, cast, String, case, or_, and_
 from sqlalchemy.orm import selectinload
 from decimal import Decimal
 from datetime import datetime
 from typing import Optional
-from app.models.payment import Payment, PaymentStatusEnum
+from app.models.payment import Payment, PaymentStatusEnum, RefundTransaction, RefundStatusEnum
 from app.models.expense import Expense
 from app.models.order import Order, OrderItem, OrderStatusEnum, Invoice, InvoiceStatusEnum
 from app.models.product import Product
@@ -82,11 +82,11 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     # ── 3b. Cash Refunded: Total refunds executed in period ─────────────────────
     cash_refunded_query = await _execute_readonly(
         db,
-        select(func.sum(Payment.jumlah_bayar))
+        select(func.sum(RefundTransaction.refund_amount))
         .where(
-            func.lower(cast(Payment.payment_status, String)) == "refunded",
-            func.coalesce(Payment.updated_at, Payment.created_at) >= start_dt,
-            func.coalesce(Payment.updated_at, Payment.created_at) <= end_dt
+            RefundTransaction.status == RefundStatusEnum.completed,
+            RefundTransaction.completed_at >= start_dt,
+            RefundTransaction.completed_at <= end_dt,
         )
     )
     cash_refunded = cash_refunded_query.scalar() or Decimal("0.00")
@@ -135,32 +135,42 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
     net_profit = gross_profit - total_expenses + non_refundable_dp_income
 
     # ── 7. Outstanding Payments (Cumulative Unpaid Balance up to end_dt) ───────
-    paid_amount_subquery = (
-        select(
-            Payment.invoice_id,
-            func.sum(Payment.jumlah_bayar).label("paid_sum")
-        )
+    gross_paid_subquery = (
+        select(Payment.invoice_id, func.sum(Payment.jumlah_bayar).label("gross_sum"))
         .where(
-            func.lower(cast(Payment.payment_status, String)) == "success",
-            Payment.created_at <= end_dt
+            func.lower(cast(Payment.payment_status, String)).in_(["success", "refunded"]),
+            Payment.created_at <= end_dt,
         )
         .group_by(Payment.invoice_id)
         .subquery()
     )
+    refunded_subquery = (
+        select(Payment.invoice_id, func.sum(RefundTransaction.refund_amount).label("refund_sum"))
+        .join(RefundTransaction, RefundTransaction.payment_id == Payment.id)
+        .where(RefundTransaction.status == RefundStatusEnum.completed, RefundTransaction.completed_at <= end_dt)
+        .group_by(Payment.invoice_id)
+        .subquery()
+    )
 
+    outstanding_expr = (
+        func.coalesce(Invoice.total_tagihan, Decimal("0.00"))
+        - func.coalesce(gross_paid_subquery.c.gross_sum, Decimal("0.00"))
+        + func.coalesce(refunded_subquery.c.refund_sum, Decimal("0.00"))
+    )
     outstanding_query = await _execute_readonly(
         db,
-        select(
-            func.sum(
-                func.coalesce(Invoice.total_tagihan, Decimal("0.00")) - func.coalesce(paid_amount_subquery.c.paid_sum, Decimal("0.00"))
-            )
-        )
+        select(func.sum(case((outstanding_expr > 0, outstanding_expr), else_=Decimal("0.00"))))
         .join(Order, Order.id == Invoice.order_id)
-        .outerjoin(paid_amount_subquery, paid_amount_subquery.c.invoice_id == Invoice.id)
+        .outerjoin(gross_paid_subquery, gross_paid_subquery.c.invoice_id == Invoice.id)
+        .outerjoin(refunded_subquery, refunded_subquery.c.invoice_id == Invoice.id)
         .where(
-            func.lower(cast(Invoice.status, String)).in_(["unpaid", "partial"]),
-            func.lower(cast(Order.status, String)).notin_(["cancelled", "refunded"]),
-            Order.created_at <= end_dt
+            func.lower(cast(Invoice.status, String)).in_(["unpaid", "partial", "paid"]),
+            or_(
+                func.lower(cast(Order.status, String)).notin_(["refunded", "cancelled", "cancelled_settlement_expired"]),
+                and_(func.lower(cast(Order.status, String)) == "cancelled",
+                     func.lower(cast(Invoice.status, String)).in_(["partial", "paid"])),
+            ),
+            Order.created_at <= end_dt,
         )
     )
     outstanding_payments = outstanding_query.scalar() or Decimal("0.00")

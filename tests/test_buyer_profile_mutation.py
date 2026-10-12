@@ -80,6 +80,7 @@ async def run_tests():
 
     app.dependency_overrides[get_db] = override_get_db
     settings.service_api_key = getattr(settings, "service_api_key", "test_key") or "test_key"
+    settings.service_customers_key = "test_customers_key"
 
     # ── Create tables & migrations ────────────────────────────────────────────
     async with test_engine.begin() as conn:

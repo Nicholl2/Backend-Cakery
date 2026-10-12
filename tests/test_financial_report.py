@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base
 from app.models.customer import Customer
 from app.models.order import Order, OrderItem, Invoice, OrderStatusEnum, InvoiceStatusEnum, MetodePengirimanEnum
-from app.models.payment import Payment, PaymentStatusEnum, PaymentTypeEnum
+from app.models.payment import Payment, PaymentStatusEnum, PaymentTypeEnum, RefundTransaction, RefundStatusEnum
 from app.models.product import Product
 from app.models.purchasing import Supplier, Purchase
 from app.models.expense import Expense
@@ -479,6 +479,9 @@ async def test_cumulative_outstanding_and_non_refundable_dp(db_session: AsyncSes
         settled_at=feb_date_3,
     )
     db_session.add(pay_refunded)
+    db_session.add(RefundTransaction(payment_id=pay_refunded.id, refund_amount=Decimal("40000.00"),
+        status=RefundStatusEnum.completed, reason="Legacy fixture full refund", initiated_source="test",
+        created_at=feb_date_3, completed_at=feb_date_3))
 
     # 5. Operating Expense in February: 10,000
     expense_feb = Expense(
@@ -580,6 +583,9 @@ async def test_cross_period_refund_and_historical_integrity(db_session: AsyncSes
         updated_at=feb_refund_date,
     )
     db_session.add(payment)
+    db_session.add(RefundTransaction(payment_id=payment.id, refund_amount=Decimal("150000.00"),
+        status=RefundStatusEnum.completed, reason="Historical test refund", initiated_source="test",
+        created_at=feb_refund_date, completed_at=feb_refund_date))
     await db_session.commit()
 
     # ── Test January Report (Historical Integrity Check) ─────────────────────
@@ -740,6 +746,5 @@ async def test_financial_report_deadlock_retry(db_session: AsyncSession):
         report = await report_service.get_financial_report(db_session, "2026-05-01", "2026-05-31")
         assert report is not None
         assert call_count == 3
-
 
 

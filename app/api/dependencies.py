@@ -10,6 +10,7 @@ from app.core.security import decode_token
 from app.repositories import user_repo
 from typing import Optional
 import logging
+import hmac
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +81,14 @@ class AuthIdentity:
         auth_type: str,
         buyer: Optional[Buyer] = None,
         user_id: Optional[int] = None,
-        role: Optional[str] = None
+        role: Optional[str] = None,
+        service_scopes: Optional[set[str]] = None,
     ):
         self.auth_type = auth_type  # "service", "buyer", "user"
         self.buyer = buyer
         self.user_id = user_id
         self.role = role
+        self.service_scopes = service_scopes or set()
 
     @property
     def is_service(self) -> bool:
@@ -94,6 +97,51 @@ class AuthIdentity:
     @property
     def is_buyer(self) -> bool:
         return self.auth_type == "buyer"
+
+    @property
+    def is_internal_user(self) -> bool:
+        return self.auth_type == "user"
+
+    def has_scope(self, scope: str) -> bool:
+        return scope in self.service_scopes
+
+
+_SERVICE_SCOPE_KEYS = {
+    "service_api_key": {"orders:create", "payments:create"},
+    "service_orders_read_key": {"orders:read"},
+    "service_orders_cancel_key": {"orders:cancel"},
+    "service_customers_key": {"customers:manage"},
+    "service_refund_key": {"refunds:request"},
+    "service_payment_status_key": {"payments:read"},
+    "service_financial_summary_key": {"reports:summary"},
+    "service_owner_numbers_key": {"owners:read"},
+    "service_settlement_key": {"settlements:check"},
+    "service_wa_verification_key": {"identity:verify"},
+}
+
+
+def _service_scopes_for_key(candidate: Optional[str]) -> set[str]:
+    if not candidate:
+        return set()
+    matched = []
+    for setting_name, configured_scopes in _SERVICE_SCOPE_KEYS.items():
+        configured = getattr(settings, setting_name, "")
+        if configured and hmac.compare_digest(candidate, configured):
+            matched.append(configured_scopes)
+    # Duplicated secrets fail closed instead of silently combining capabilities.
+    return set(matched[0]) if len(matched) == 1 else set()
+
+
+def require_service_scope(scope: str):
+    async def check_service_scope(
+        x_service_key: Optional[str] = Header(None, alias="X-Service-Key")
+    ) -> None:
+        scopes = _service_scopes_for_key(x_service_key)
+        if not scopes:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid service key")
+        if scope not in scopes:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Service key lacks required capability")
+    return check_service_scope
 
 
 async def get_auth_identity_optional_service_or_jwt(
@@ -105,8 +153,9 @@ async def get_auth_identity_optional_service_or_jwt(
     Authenticate via either X-Service-Key (Chatbot) or Bearer JWT (Buyer or Internal User).
     """
     # 1. Check Service Key
-    if x_service_key and x_service_key == settings.service_api_key:
-        return AuthIdentity(auth_type="service")
+    scopes = _service_scopes_for_key(x_service_key)
+    if scopes:
+        return AuthIdentity(auth_type="service", service_scopes=scopes)
 
     # 2. Check Bearer Token
     if authorization and authorization.startswith("Bearer "):
@@ -201,27 +250,16 @@ async def get_current_user_role_level(
     return jwt_role_level
 
 
-async def require_service_key(
-    x_service_key: str = Header(None, alias="X-Service-Key")
-) -> None:
-    """Validate internal service key untuk chatbot / service-to-service calls."""
-    if not x_service_key or x_service_key != settings.service_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid service key"
-        )
-
-
 async def require_wa_internal_key(
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
     x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key")
 ) -> None:
     """Validate chatbot/internal-service identity. Accepts X-Service-Key or X-Internal-Key."""
-    is_service_ok = bool(x_service_key and x_service_key == settings.service_api_key)
+    is_service_ok = "identity:verify" in _service_scopes_for_key(x_service_key)
     is_internal_ok = bool(
         x_internal_key
         and settings.chatbot_internal_key  # guard: reject if config is blank
-        and x_internal_key == settings.chatbot_internal_key
+        and hmac.compare_digest(x_internal_key, settings.chatbot_internal_key)
     )
     if not (is_service_ok or is_internal_ok):
         raise HTTPException(

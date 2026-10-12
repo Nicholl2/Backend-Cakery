@@ -112,6 +112,7 @@ class CustomOrderCreate(BaseModel):
 
 class RefundRequest(BaseModel):
     reason: str = Field(..., min_length=1, max_length=500, description="Alasan melakukan refund")
+    amount: Optional[Decimal] = Field(None, gt=0, decimal_places=2, description="Nominal refund; kosong berarti seluruh saldo refundable")
     nomor_wa: Optional[str] = Field(None, max_length=20, description="Nomor WA customer pemesan (wajib diisi jika dipanggil via Chatbot Service Key)")
 
     @field_validator("reason", mode="before")

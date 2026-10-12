@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, status, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.api.dependencies import require_service_key, get_current_buyer
+from app.api.dependencies import require_service_scope, get_current_buyer
 from app.models.buyer import Buyer, Wishlist
 from app.schemas.customer import CustomerUpsert, CustomerOut, TakeoverSet, TakeoverStatus, BuyerChangePasswordRequest, BuyerChangePhoneRequest
 from app.schemas.auth import BuyerProfileResponse
@@ -13,7 +13,7 @@ from fastapi import HTTPException
 
 router = APIRouter(
     tags=["Customers (Chatbot)"],
-    dependencies=[Depends(require_service_key)],
+    dependencies=[Depends(require_service_scope("customers:manage"))],
     responses={
         401: {"description": "Invalid or missing X-Service-Key header"},
         404: {"description": "Customer not found"},
@@ -35,7 +35,7 @@ buyer_router = APIRouter(
 admin_router = APIRouter(
     prefix="/admin",
     tags=["Admin Takeover"],
-    dependencies=[Depends(require_service_key)],
+    dependencies=[Depends(require_service_scope("customers:manage"))],
     responses={
         401: {"description": "Invalid or missing X-Service-Key header"},
     },
@@ -214,4 +214,3 @@ async def remove_from_wishlist(
 ):
     await wishlist_repo.remove_wishlist(db, buyer.id, product_id)
     return {"message": "Produk dihapus dari wishlist."}
-

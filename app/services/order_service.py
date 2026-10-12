@@ -43,6 +43,7 @@ async def create_new_order(
 ) -> Order:
     try:
         # ── 1. Cek tagihan aktif ─────────────────────────────────────────────
+        await order_repo.lock_customer_for_order_creation(db, customer_id)
         has_active = await order_repo.check_active_unpaid_order(db, customer_id)
         if has_active:
             raise HTTPException(
@@ -290,6 +291,8 @@ async def create_custom_order(
             )
             await db.flush()
 
+            await order_repo.lock_customer_for_order_creation(db, customer.id)
+
             # Cek tagihan aktif untuk customer ini
             has_active = await order_repo.check_active_unpaid_order(db, customer.id)
             if has_active:
@@ -402,20 +405,12 @@ async def _attach_payment_amounts(db: AsyncSession, order: Order) -> Order:
         return order
     amount_paid = Decimal("0.00")
     if order.invoice:
-        payment_query = await db.execute(
-            select(func.sum(Payment.jumlah_bayar))
-            .where(
-                Payment.invoice_id == order.invoice.id,
-                func.lower(cast(Payment.payment_status, String)) == "success",
-            )
-        )
-        sum_result = payment_query.scalar()
-        if sum_result is not None:
-            amount_paid = Decimal(str(sum_result))
+        from app.services.payment_service import invoice_payment_totals
+        amount_paid = (await invoice_payment_totals(db, order.invoice.id))["net_paid"]
             
     if order.invoice and order.invoice.total_tagihan is not None:
         try:
-            amount_due = Decimal(str(order.invoice.total_tagihan)) - amount_paid
+            amount_due = max(Decimal("0.00"), Decimal(str(order.invoice.total_tagihan)) - amount_paid)
         except Exception:
             amount_due = Decimal("0.00")
     else:
@@ -633,7 +628,7 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
         )
 
 
-async def update_order_status(db: AsyncSession, order_id: int, new_status: str) -> Order:
+async def update_order_status(db: AsyncSession, order_id: int, new_status: str, updated_by: Optional[int] = None) -> Order:
     from app.core.state_machine import is_valid_order_transition
 
     # Lock Order row untuk mencegah concurrent status update (double-cancel, dll)
@@ -677,32 +672,77 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str) 
     if new_status in [OrderStatusEnum.cancelled.value, OrderStatusEnum.refunded.value] and order.status not in [OrderStatusEnum.cancelled, OrderStatusEnum.refunded]:
         await _rollback_order_stock(db, order)
 
-    # Update invoice & payment jika status diubah menjadi 'refunded'
+    # A seller's explicit "refunded" transition confirms the manual payout.
+    # Persist its amount before changing status; gateway refunds await signed callbacks.
     if new_status == OrderStatusEnum.refunded.value:
-        if order.invoice and order.invoice.status != InvoiceStatusEnum.refunded:
-            order.invoice.status = InvoiceStatusEnum.refunded
-            if order.invoice.payments:
-                from app.models.payment import PaymentStatusEnum
-                for payment in order.invoice.payments:
-                    if payment.payment_status == PaymentStatusEnum.success:
-                        payment.payment_status = PaymentStatusEnum.refunded
-                        payment.updated_at = datetime.now(timezone.utc)
+        from app.models.payment import RefundTransaction, RefundStatusEnum
+        from app.services.payment_service import _refresh_refund_payment_state, invoice_payment_totals
+        if not order.invoice:
+            raise HTTPException(status_code=409, detail="Invoice refund tidak ditemukan")
+        payment_result = await db.execute(
+            select(Payment).where(Payment.invoice_id == order.invoice.id).with_for_update()
+        )
+        invoice_payments = payment_result.scalars().all()
+        pending_result = await db.execute(
+            select(RefundTransaction).join(Payment).where(
+                Payment.invoice_id == order.invoice.id,
+                RefundTransaction.status == RefundStatusEnum.pending,
+            ).with_for_update()
+        )
+        pending_refunds = pending_result.scalars().all()
+        if any(refund.initiated_source.endswith(":auto") for refund in pending_refunds):
+            raise HTTPException(status_code=409, detail="Refund gateway masih menunggu konfirmasi Midtrans")
+        for refund in pending_refunds:
+            refund.status = RefundStatusEnum.completed
+            refund.completed_at = datetime.now(timezone.utc)
+        if not pending_refunds:
+            gross_total = sum((Decimal(str(p.jumlah_bayar)) for p in invoice_payments
+                               if p.payment_status in (PaymentStatusEnum.success, PaymentStatusEnum.refunded)), Decimal("0.00"))
+            existing = await invoice_payment_totals(db, order.invoice.id)
+            amount_to_record = gross_total - existing["refunded"]
+            if amount_to_record <= 0:
+                raise HTTPException(status_code=409, detail="Tidak ada saldo refund yang dapat dikonfirmasi")
+            left = amount_to_record
+            for payment in invoice_payments:
+                if payment.payment_status not in (PaymentStatusEnum.success, PaymentStatusEnum.refunded):
+                    continue
+                completed_res = await db.execute(
+                    select(func.coalesce(func.sum(RefundTransaction.refund_amount), 0)).where(
+                        RefundTransaction.payment_id == payment.id,
+                        RefundTransaction.status == RefundStatusEnum.completed,
+                    )
+                )
+                remaining = Decimal(str(payment.jumlah_bayar)) - Decimal(str(completed_res.scalar() or 0))
+                part = min(left, remaining)
+                if part > 0:
+                    db.add(RefundTransaction(payment_id=payment.id, refund_amount=part,
+                        status=RefundStatusEnum.completed, reason="Manual refund confirmed by seller",
+                        initiated_by=updated_by, initiated_source="seller_manual_confirmation",
+                        completed_at=datetime.now(timezone.utc)))
+                    left -= part
+                if left == 0:
+                    break
+        await db.flush()
+        for payment in invoice_payments:
+            await _refresh_refund_payment_state(db, payment)
 
     old_status_val = order.status.value
-    order.status = new_status_enum
+    if new_status_enum != OrderStatusEnum.refunded or order.invoice.status == InvoiceStatusEnum.refunded:
+        order.status = new_status_enum
     await db.commit()
 
     # Re-query order with details to avoid lazy loading issues
     order_refetched = await order_repo.get_order_with_details(db, order_id)
     await _attach_payment_amounts(db, order_refetched)
+    actual_status = order_refetched.status.value if hasattr(order_refetched.status, "value") else str(order_refetched.status)
 
     from app.services.notification_service import notify_order_status_updated
-    await notify_order_status_updated(db, order_refetched, old_status_val, new_status)
+    await notify_order_status_updated(db, order_refetched, old_status_val, actual_status)
 
-    if new_status == "ready":
+    if actual_status == "ready":
         from app.services.chatbot_notify import notify_chatbot_order_event
         await notify_chatbot_order_event(order_id, "ready")
-    elif new_status == OrderStatusEnum.refunded.value or new_status == "refunded":
+    elif actual_status == OrderStatusEnum.refunded.value:
         # Sinyal Manual Refund Completed (Poin 2.b):
         # Dipicu saat Admin/Seller mengubah status pesanan menjadi refunded di Dashboard Site
         from app.services.chatbot_notify import notify_refund_status
@@ -766,6 +806,8 @@ async def cancel_and_refund_order(
     reason: str,
     is_service: bool = False,
     customer_phone: Optional[str] = None,
+    refund_amount: Optional[Decimal] = None,
+    initiated_by: Optional[int] = None,
 ):
     from app.services.payment_service import process_refund
     from app.utils.phone import normalize_phone
@@ -834,29 +876,24 @@ async def cancel_and_refund_order(
         )
 
     # Panggil payment_service untuk eksekusi API Midtrans, commit DB, dan kirim webhook post-commit (jika auto)
-    refund_mode = await process_refund(db, order_id, reason)
+    refund_mode = await process_refund(
+        db, order_id, reason, amount=refund_amount, initiated_by=initiated_by,
+        initiated_source="chatbot" if is_service else "seller",
+    )
 
-    # Tentukan status akhir order:
-    # 1. Jika refund_mode == "auto": API direct refund Midtrans sukses -> status pesanan menjadi 'refunded'
-    # 2. Jika Admin/Seller memproses refund di Dashboard Site (not is_service): Admin menandai refund selesai -> status pesanan menjadi 'refunded'
-    # 3. Jika Chatbot memicu refund namun mode manual (VA/QRIS 412): status pesanan 'cancelled' (menunggu transfer manual admin)
-    if refund_mode == "auto" or not is_service:
-        order.status = OrderStatusEnum.refunded
-        await db.commit()
-        # Sinyal Manual Refund Completed (Poin 2.b):
-        # Jika diproses oleh Admin di Dashboard Site dan mode manual, tembak notifikasi webhook setelah commit DB
-        if not is_service and refund_mode == "manual":
-            from app.services.chatbot_notify import notify_refund_status
-            await notify_refund_status(order_id)
-    else:
+    # Refund request is not proof that money was returned. Cancel/release the order
+    # while the refund remains pending; signed gateway callback or seller confirmation
+    # records the completed amount and may transition it to fully refunded.
+    if order.status != OrderStatusEnum.cancelled:
+        await _rollback_order_stock(db, order)
         order.status = OrderStatusEnum.cancelled
-        await db.commit()
+    await db.commit()
 
     return RefundResponse(
         message="Order refund processed successfully",
         order_id=order.id,
         status=order.status.value if hasattr(order.status, 'value') else str(order.status),
-        payment_status="refunded",
+        payment_status="refund_pending",
         refund_mode=refund_mode,
     )
 

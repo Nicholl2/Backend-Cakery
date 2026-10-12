@@ -6,7 +6,7 @@ from datetime import datetime, time
 from typing import List, Optional
 
 from app.core.database import get_db
-from app.api.dependencies import require_internal_user, require_owner, require_service_key
+from app.api.dependencies import require_internal_user, require_owner, require_service_scope
 from app.schemas.report import (
     FinancialReportSummary,
     ReportSummary,
@@ -83,7 +83,7 @@ async def get_financial_summary(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     db: AsyncSession = Depends(get_db),
-    _ = Depends(require_service_key)
+    _ = Depends(require_service_scope("reports:summary"))
 ) -> FinancialReportSummary:
     """
     Get financial report summary for chatbot.
@@ -121,4 +121,3 @@ async def get_analytics_report(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Gagal memuat analitik: {str(exc)}"
         )
-
