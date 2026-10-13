@@ -29,7 +29,10 @@ def _test_url(env_name: str) -> str:
     return value
 
 
-@pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="function")
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_postgres_empty_database_bootstrap_creates_current_schema_and_stamps_head():
     url = _test_url("TEST_POSTGRES_BOOTSTRAP_URL")
     child_env = os.environ.copy()
@@ -95,7 +98,7 @@ async def test_postgres_empty_database_bootstrap_creates_current_schema_and_stam
     assert revision == "20261014_03"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")
 async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_and_outbox_rows():
     url = _test_url("TEST_POSTGRES_UPGRADE_URL")
     engine = create_async_engine(url)

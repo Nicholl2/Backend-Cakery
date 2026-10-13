@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+import pytest_asyncio
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.engine import make_url
@@ -26,8 +27,10 @@ from app.services.payment_service import (
 )
 from app.services.user_service import bootstrap_owner
 
+pytestmark = pytest.mark.asyncio(loop_scope="function")
 
-@pytest.fixture
+
+@pytest.fixture(scope="function")
 def pg_url():
     value = os.getenv("TEST_POSTGRES_URL")
     if not value:
@@ -40,7 +43,7 @@ def pg_url():
     return value
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="function", loop_scope="function")
 async def pg_sessions(pg_url):
     engine = create_async_engine(pg_url, pool_pre_ping=True)
     async with engine.begin() as connection:
@@ -50,12 +53,14 @@ async def pg_sessions(pg_url):
     try:
         yield factory
     finally:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.drop_all)
-        await engine.dispose()
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.drop_all)
+        finally:
+            await engine.dispose()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")
 async def test_postgres_concurrent_owner_bootstrap_creates_exactly_one_owner(pg_sessions):
     barrier = asyncio.Barrier(2)
 
@@ -80,7 +85,7 @@ async def test_postgres_concurrent_owner_bootstrap_creates_exactly_one_owner(pg_
         assert await db.scalar(select(func.count(Role.id))) == 3
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")
 async def test_postgres_concurrent_outbox_claim_sends_one_live_lease(pg_sessions, monkeypatch):
     async with pg_sessions() as db:
         await enqueue_email(db, event_key="pg-concurrent-claim", recipient="buyer@example.test",
@@ -120,7 +125,7 @@ async def test_postgres_concurrent_outbox_claim_sends_one_live_lease(pg_sessions
         assert event.attempts == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")
 async def test_postgres_expired_lease_is_reclaimed_and_completed(pg_sessions, monkeypatch):
     async with pg_sessions() as db:
         await enqueue_email(db, event_key="pg-expired-lease", recipient="buyer@example.test",
@@ -173,7 +178,7 @@ async def _create_pending_payment_graph(db, *, pg_order_id):
     return order.id, invoice.id, payment.id, f"{invoice.nomor_invoice}-PAY-1700000000000-ABCD"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")
 async def test_postgres_payment_transition_commits_payment_invoice_and_outbox(pg_sessions, monkeypatch):
     async def no_chatbot_notification(*_args, **_kwargs):
         return None
@@ -204,7 +209,7 @@ async def test_postgres_payment_transition_commits_payment_invoice_and_outbox(pg
         assert json.loads(event.payload_json)["payment_status"] == PaymentStatusEnum.success.value
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")
 async def test_postgres_legacy_pending_payment_requires_exact_order_id_reconciliation(
     pg_sessions, monkeypatch
 ):
@@ -267,7 +272,7 @@ async def test_postgres_legacy_pending_payment_requires_exact_order_id_reconcili
         assert await db.scalar(select(func.count(EmailOutbox.id))) == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")
 async def test_postgres_worker_batch_failure_is_retryable_and_visible_in_backlog(
     pg_sessions, monkeypatch, capsys
 ):
