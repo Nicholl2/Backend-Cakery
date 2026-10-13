@@ -11,8 +11,8 @@ async def send_otp_email(to_email: str, otp_code: str) -> bool:
     """
     Send OTP code to buyer's email for password reset.
 
-    If SMTP is not configured (smtp_host is empty), logs the OTP to console
-    (mock mode for development/testing) and returns True.
+    If SMTP is not configured, report delivery failure. A log entry is not
+    delivery and must never be treated as a successful production email.
     """
     subject = f"Kode OTP Reset Password — {settings.smtp_from_name}"
     html_body = f"""\
@@ -39,12 +39,8 @@ async def send_otp_email(to_email: str, otp_code: str) -> bool:
 
     # ── Mock mode: SMTP not configured ────────────────────────────────────────
     if not settings.smtp_host:
-        logger.info(
-            "[EMAIL MOCK] SMTP not configured. OTP email simulated for %s — "
-            "configure smtp_host in .env to send real emails.",
-            to_email,
-        )
-        return True
+        logger.warning("[EMAIL MOCK] SMTP is not configured; OTP email was not delivered")
+        return False
 
 
     # ── Real SMTP sending ─────────────────────────────────────────────────────
@@ -65,9 +61,9 @@ async def send_otp_email(to_email: str, otp_code: str) -> bool:
             password=settings.smtp_password,
             start_tls=settings.smtp_use_tls,
         )
-        logger.info(f"[EMAIL] OTP sent successfully to {to_email}")
+        logger.info("[EMAIL] OTP email delivered successfully")
         return True
 
-    except Exception as e:
-        logger.error(f"[EMAIL] Failed to send OTP to {to_email}: {e}")
+    except Exception:
+        logger.error("[EMAIL] OTP delivery failed; recipient and message details suppressed")
         return False

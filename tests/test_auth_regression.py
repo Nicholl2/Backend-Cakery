@@ -412,6 +412,17 @@ class TestOTPValidation:
 
 class TestVerifyTokenSingleUse:
     @pytest.mark.asyncio
+    async def test_verify_token_purpose_is_bound(self, db: AsyncSession):
+        phone = "+6281200000020"
+        otp = await _seed_otp(db, target=phone, purpose="login", verified=True)
+        await db.commit()
+        from app.services.buyer_auth_service import validate_and_consume_db_verify_token
+        with pytest.raises(HTTPException):
+            await validate_and_consume_db_verify_token(db, otp.verify_token, phone, purpose="register")
+        await db.refresh(otp)
+        assert otp.is_used is False
+
+    @pytest.mark.asyncio
     async def test_verify_token_single_use(self, db: AsyncSession):
         """Bug 6/10 fix: token can only be consumed once."""
         phone = "+6281200000020"
@@ -475,6 +486,28 @@ class TestVerifyTokenSingleUse:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestRegisterBuyerTokenOrdering:
+    @pytest.mark.asyncio
+    async def test_concurrent_duplicate_registration_rolls_back_token(self, db: AsyncSession):
+        phone = "+6281200000099"
+        otp = await _seed_otp(db, target=phone, purpose="login", verified=True)
+        await db.commit()
+        competitor = Buyer(name="Winner", email="race@test.com", phone=phone,
+                           password_hash=hash_password("correct-password123"))
+        from sqlalchemy.exc import IntegrityError
+        from app.services.buyer_auth_service import register_buyer
+        with patch("app.services.buyer_auth_service.buyer_repo.get_buyer_by_email",
+                   new_callable=AsyncMock, side_effect=[None, competitor]), \
+             patch("app.services.buyer_auth_service.buyer_repo.get_buyer_by_phone",
+                   new_callable=AsyncMock, return_value=None), \
+             patch.object(db, "commit", new_callable=AsyncMock,
+                          side_effect=IntegrityError("insert", {}, Exception("unique"))):
+            with pytest.raises(HTTPException) as exc:
+                await register_buyer(db, "Winner", "race@test.com", phone,
+                                     "NewPassword123!", otp.verify_token)
+        assert exc.value.status_code == 400
+        await db.refresh(otp)
+        assert otp.is_used is False
+
     """Bug 3 fix: duplicate checks happen BEFORE consuming the verify_token."""
 
     @pytest.mark.asyncio
@@ -569,6 +602,20 @@ class TestRegisterBuyerTokenOrdering:
 
 class TestEmailProviderFailure:
     @pytest.mark.asyncio
+    async def test_unconfigured_smtp_is_not_reported_as_delivered(self):
+        import logging
+        from app.utils.email_helper import send_otp_email
+        with patch("app.utils.email_helper.settings.smtp_host", ""):
+            assert await send_otp_email("buyer@test.com", "123456") is False
+
+    def test_production_settings_require_smtp_configuration(self):
+        from pydantic import ValidationError
+        from app.core.config import Settings
+        with pytest.raises(ValidationError, match="Production requires SMTP"):
+            Settings(database_url="sqlite+aiosqlite://", environment="production",
+                     secret_key="strong-secret", service_api_key="strong-service-key")
+
+    @pytest.mark.asyncio
     async def test_send_otp_raises_503_when_email_fails(self, db: AsyncSession):
         """Bug 7 & 9 fix: send_otp must raise 503 if email delivery fails."""
         with patch(
@@ -623,7 +670,7 @@ class TestResetPasswordAtomicity:
             id=otp_id,
             target="ghost@nowhere.com",
             channel="whatsapp",
-            purpose="login",
+            purpose="buyer_reset_password",
             code_hash=hash_password("123456"),
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
             is_used=False,
@@ -663,7 +710,14 @@ class TestResetPasswordAtomicity:
             verify_token=verify_token,
             attempt_count=0,
         )
+        older_token = OTPCode(
+            id=str(uuid.uuid4()), target="resetme@test.com", channel="email",
+            purpose="buyer_reset_password", code_hash=hash_password("654321"),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            is_used=False, is_verified=True, verify_token=str(uuid.uuid4()), attempt_count=0,
+        )
         db.add(otp)
+        db.add(older_token)
         await db.commit()
 
         from app.services.buyer_auth_service import reset_buyer_password
@@ -672,6 +726,8 @@ class TestResetPasswordAtomicity:
 
         await db.refresh(otp)
         assert otp.is_used is True
+        await db.refresh(older_token)
+        assert older_token.is_used is True
 
         await db.refresh(buyer)
         from app.core.security import verify_password
@@ -703,6 +759,29 @@ class TestResetPasswordAtomicity:
 
         await db.refresh(otp)
         assert otp.is_used is False, "Token must not be consumed when seller is not found"
+
+    @pytest.mark.asyncio
+    async def test_seller_reset_revokes_other_active_tokens(self, db: AsyncSession):
+        db.add(Role(id=2, nama_role="Admin", level=2))
+        user = User(username="reset-seller", email="reset-seller@test.com",
+                    password_hash=hash_password("OldPassword123!"), role_id=2)
+        db.add(user)
+        selected = OTPCode(
+            id=str(uuid.uuid4()), target=user.email, channel="email", purpose="reset_password",
+            code_hash=hash_password("123456"), expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            is_used=False, is_verified=True, verify_token=str(uuid.uuid4()), attempt_count=0,
+        )
+        sibling = OTPCode(
+            id=str(uuid.uuid4()), target=user.email, channel="email", purpose="reset_password",
+            code_hash=hash_password("654321"), expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            is_used=False, is_verified=True, verify_token=str(uuid.uuid4()), attempt_count=0,
+        )
+        db.add_all([selected, sibling])
+        await db.commit()
+        from app.services.buyer_auth_service import reset_seller_password
+        await reset_seller_password(db, selected.verify_token, "NewPassword123!")
+        await db.refresh(sibling)
+        assert sibling.is_used is True
 
     @pytest.mark.asyncio
     async def test_reset_buyer_password_email_otp_consumed_and_password_updated(self, db: AsyncSession):

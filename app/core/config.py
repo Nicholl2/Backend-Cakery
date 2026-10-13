@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     def enforce_production_security(self) -> "Settings":
         if self.environment.lower() == "production":
             self.wa_verification_mode = "real"
+            if not self.smtp_host or not self.smtp_from_email:
+                raise ValueError("Production requires SMTP host and sender email configuration.")
             if self.secret_key == "your-secret-key-change-in-production":
                 raise ValueError("CRITICAL SECURITY: 'secret_key' wajib diganti dengan string rahasia kuat pada environment production!")
             if self.service_api_key == "change-this-service-key":

@@ -1,5 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status, UploadFile
 from app.repositories import user_repo
@@ -144,18 +146,19 @@ async def ensure_roles_exist(db: AsyncSession) -> None:
         admin_role = Role(id=2, nama_role="Admin", level=2)
         staff_role = Role(id=3, nama_role="Staff", level=3)
         db.add_all([owner_role, admin_role, staff_role])
-        await db.commit()
 
 
 async def bootstrap_owner(db: AsyncSession, data: UserBootstrap) -> User:
+    # Serialize first-owner creation on PostgreSQL. SQLite remains useful for
+    # unit tests but cannot verify this production concurrency guarantee.
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        await db.execute(text("SELECT pg_advisory_xact_lock(731942610)"))
+
     # Ensure default roles exist
     await ensure_roles_exist(db)
 
-    # Check if user list is empty
-    # Note: This check + insert is not atomic without DB-level advisory locks.
-    # A concurrent request can pass this check simultaneously. We guard with
-    # a try/except on commit to detect IntegrityError from a UNIQUE constraint
-    # on username — and re-raise as a clear 400.
+    # The PostgreSQL transaction-level advisory lock above spans this check,
+    # role creation, and owner insert through the commit below.
     users_result = await db.execute(select(User))
     if users_result.scalars().first() is not None:
         raise HTTPException(
@@ -185,7 +188,7 @@ async def bootstrap_owner(db: AsyncSession, data: UserBootstrap) -> User:
     db.add(owner_user)
     try:
         await db.commit()
-    except Exception:
+    except IntegrityError:
         await db.rollback()
         # Re-check: if another concurrent bootstrap committed first, raise 400
         users_result2 = await db.execute(select(User))
@@ -194,6 +197,9 @@ async def bootstrap_owner(db: AsyncSession, data: UserBootstrap) -> User:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Bootstrap sudah dilakukan oleh request lain. Hanya satu Owner yang diizinkan."
             )
+        raise
+    except Exception:
+        await db.rollback()
         raise
 
     stmt = select(User).options(selectinload(User.role)).where(User.id == owner_user.id)

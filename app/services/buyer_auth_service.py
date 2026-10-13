@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.repositories import buyer_repo, otp_repo, user_repo
 from app.models.buyer import Buyer
@@ -173,7 +174,7 @@ async def verify_otp(db: AsyncSession, otp_id: str, code: str) -> dict:
 
 # ── DB VERIFICATION TOKENS ────────────────────────────────────────────────────
 
-async def validate_and_consume_db_verify_token(db: AsyncSession, verify_token: str, phone_number: str):
+async def validate_and_consume_db_verify_token(db: AsyncSession, verify_token: str, phone_number: str, purpose: str = "login"):
     """
     Validate and atomically consume a DB-backed verify_token.
 
@@ -190,7 +191,7 @@ async def validate_and_consume_db_verify_token(db: AsyncSession, verify_token: s
 
     stmt = (
         select(OTPCode)
-        .where(OTPCode.verify_token == verify_token)
+        .where(OTPCode.verify_token == verify_token, OTPCode.purpose == purpose)
         .with_for_update()
     )
     res = await db.execute(stmt)
@@ -237,10 +238,9 @@ async def validate_and_consume_db_verify_token(db: AsyncSession, verify_token: s
             detail="Token verifikasi telah kedaluwarsa."
         )
 
-    # Atomically mark as used — committed by the calling function's transaction
+    # The caller commits consumption together with its business operation.
     otp.is_used = True
-    await db.commit()
-    await db.refresh(otp)
+    return otp
 
 
 
@@ -257,6 +257,8 @@ def generate_nonce(length: int = 6) -> str:
 async def start_wa_verification(db: AsyncSession, phone_number: str) -> dict:
     phone_number = normalize_phone(phone_number)
     
+    # `login` is shared by OTP login and buyer registration to preserve the
+    # existing WA start API contract.
     is_mock = (settings.WA_VERIFICATION_MODE == "mock")
     
     wa_number = ""
@@ -475,18 +477,24 @@ async def register_buyer(
         )
 
     # ── Consume token only after all pre-checks pass ─────────────────────────
-    await validate_and_consume_db_verify_token(db, verify_token, phone)
+    await validate_and_consume_db_verify_token(db, verify_token, phone, purpose="login")
 
     # Create buyer (set is_verified to True because OTP was verified)
     pwd_hash = hash_password(password)
-    buyer = await buyer_repo.create_buyer(
-        db=db,
-        name=name,
-        email=email,
-        phone=phone,
-        password_hash=pwd_hash,
-        is_verified=True
-    )
+    buyer = Buyer(name=name, email=email, phone=phone, password_hash=pwd_hash, is_verified=True)
+    db.add(buyer)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Roll back token consumption with the failed insert. A competing
+        # registration may have won the unique email/phone constraint.
+        await db.rollback()
+        if await buyer_repo.get_buyer_by_email(db, email):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already registered")
+        if await buyer_repo.get_buyer_by_phone(db, phone):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Phone number is already registered")
+        raise
+    await db.refresh(buyer)
 
     # Generate JWT
     access_token = create_access_token(
@@ -617,6 +625,8 @@ async def login_buyer_otp(db: AsyncSession, phone: str, verify_token: str) -> di
             detail="Akun buyer tidak aktif.",
         )
 
+    await db.commit()
+
     # Generate JWT
     access_token = create_access_token(
         user_id=buyer.id,
@@ -705,7 +715,7 @@ async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password
             detail=str(e),
         )
 
-    stmt = select(OTPCode).where(OTPCode.verify_token == verify_token)
+    stmt = select(OTPCode).where(OTPCode.verify_token == verify_token, OTPCode.purpose.in_(("buyer_reset_password", "reset_password"))).with_for_update()
     res = await db.execute(stmt)
     otp = res.scalars().first()
 
@@ -715,7 +725,7 @@ async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password
             detail="Token verifikasi tidak valid atau tidak ditemukan."
         )
 
-    if otp.is_used:
+    if otp.is_used or not otp.is_verified:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Token verifikasi sudah digunakan."
@@ -746,6 +756,14 @@ async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password
 
     # ── Atomically consume token + update password in a single commit ─────────
     otp.is_used = True
+    await db.execute(
+        OTPCode.__table__.update().where(
+            OTPCode.target == target,
+            OTPCode.purpose.in_(("buyer_reset_password", "reset_password")),
+            OTPCode.id != otp.id,
+            OTPCode.is_used == False,  # noqa: E712
+        ).values(is_used=True)
+    )
     buyer.password_hash = hash_password(new_password)
     await db.commit()
 
@@ -814,6 +832,7 @@ async def reset_buyer_password_email(
             OTPCode.is_used == False,  # noqa: E712
         )
         .order_by(OTPCode.created_at.desc())
+        .with_for_update()
     )
     res = await db.execute(stmt)
     otp = res.scalars().first()
@@ -871,6 +890,14 @@ async def reset_buyer_password_email(
 
     # ── Atomically consume OTP + update password in a single commit ───────────
     otp.is_used = True
+    await db.execute(
+        OTPCode.__table__.update().where(
+            OTPCode.target == email,
+            OTPCode.purpose == "buyer_reset_password",
+            OTPCode.id != otp.id,
+            OTPCode.is_used == False,  # noqa: E712
+        ).values(is_used=True)
+    )
     buyer.password_hash = hash_password(new_password)
     await db.commit()
 
@@ -914,7 +941,7 @@ async def reset_seller_password(db: AsyncSession, verify_token: str, new_passwor
             detail=str(e),
         )
 
-    stmt = select(OTPCode).where(OTPCode.verify_token == verify_token)
+    stmt = select(OTPCode).where(OTPCode.verify_token == verify_token, OTPCode.purpose == "reset_password").with_for_update()
     res = await db.execute(stmt)
     otp = res.scalars().first()
 
@@ -924,7 +951,7 @@ async def reset_seller_password(db: AsyncSession, verify_token: str, new_passwor
             detail="Token verifikasi tidak valid atau tidak ditemukan."
         )
 
-    if otp.is_used:
+    if otp.is_used or not otp.is_verified:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Token verifikasi sudah digunakan."
@@ -954,6 +981,14 @@ async def reset_seller_password(db: AsyncSession, verify_token: str, new_passwor
 
     # ── Atomically consume token + update password in a single commit ─────────
     otp.is_used = True
+    await db.execute(
+        OTPCode.__table__.update().where(
+            OTPCode.target == target,
+            OTPCode.purpose == "reset_password",
+            OTPCode.id != otp.id,
+            OTPCode.is_used == False,  # noqa: E712
+        ).values(is_used=True)
+    )
     user.password_hash = hash_password(new_password)
     await db.commit()
     await db.refresh(user)
