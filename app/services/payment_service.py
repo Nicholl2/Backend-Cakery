@@ -26,6 +26,37 @@ from app.services.chatbot_notify import (
 
 logger = logging.getLogger(__name__)
 
+
+async def _validate_midtrans_payment_payload(
+    db: AsyncSession, payment: Payment, payload: dict
+) -> Invoice:
+    """Reconcile gateway status data to the persisted payment and invoice."""
+    transaction_id = str(payload.get("transaction_id") or "").strip()
+    expected_transaction_id = str(payment.pg_transaction_id or "").strip()
+    if not expected_transaction_id or transaction_id != expected_transaction_id:
+        raise ValueError("Midtrans transaction_id mismatch")
+
+    invoice = await db.get(Invoice, payment.invoice_id)
+    order_reference = str(payload.get("order_id") or "").strip()
+    if not invoice:
+        raise ValueError("Midtrans order reference mismatch")
+    # A format-shaped order_id does not prove which charge it belongs to.
+    # Legacy rows must be reconciled and backfilled from a trusted Midtrans
+    # record before callbacks or status refreshes can mutate business state.
+    if not payment.pg_order_id or order_reference != payment.pg_order_id:
+        raise ValueError("Midtrans order reference mismatch")
+
+    try:
+        gross_amount = Decimal(str(payload.get("gross_amount")))
+        expected_amount = Decimal(str(payment.jumlah_bayar))
+        if not gross_amount.is_finite() or not expected_amount.is_finite():
+            raise ValueError("Non-finite amount")
+    except Exception as exc:
+        raise ValueError("Invalid Midtrans gross_amount") from exc
+    if gross_amount != expected_amount:
+        raise ValueError("Midtrans gross_amount mismatch")
+    return invoice
+
 async def create_midtrans_charge(
     db: AsyncSession,
     order_id: int,
@@ -72,6 +103,9 @@ async def create_midtrans_charge(
     amount_rounded = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if amount_rounded <= 0 or amount_rounded != valid_amount_rounded or amount_rounded > remaining:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payment amount. Amount exceeds outstanding balance or does not match payment type.")
+    if amount_rounded != Decimal(int(amount_rounded)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Midtrans charge amount must be a whole rupiah amount.")
 
     # 2a. Cek apakah sudah ada payment Pending yang aktif untuk order ini
     existing_payments = await payment_repo.get_payments_by_order_id(db, order_id)
@@ -156,6 +190,7 @@ async def create_midtrans_charge(
     payment_obj = Payment(
         invoice_id=invoice.id,
         pg_transaction_id=pg_transaction_id,
+        pg_order_id=order_id_midtrans,
         jumlah_bayar=amount_rounded,
         payment_method=payment_method,
         payment_status=PaymentStatusEnum.pending,
@@ -286,6 +321,11 @@ async def _apply_transaction_status(
                 )
 
             events_to_notify.append((invoice.order_id, "paid"))
+            from app.services.email_outbox_service import enqueue_order_payment_event
+            await enqueue_order_payment_event(
+                db, invoice.order_id, "payment_status_updated", f"{payment.id}:{new_status.value}",
+                payment_status=new_status.value,
+            )
 
     elif new_status == PaymentStatusEnum.refunded:
         payment.updated_at = datetime.now(timezone.utc)
@@ -332,11 +372,21 @@ async def _apply_transaction_status(
             )
 
             events_to_notify.append((invoice.order_id, "refunded"))
+            from app.services.email_outbox_service import enqueue_order_payment_event
+            await enqueue_order_payment_event(
+                db, invoice.order_id, "refund_status_updated", f"payment-{payment.id}",
+                refund_status="completed", amount=str((await invoice_payment_totals(db, invoice.id))["refunded"]),
+            )
 
     elif new_status == PaymentStatusEnum.failed:
         invoice_res = await db.execute(select(Invoice).where(Invoice.id == payment.invoice_id))
         invoice = invoice_res.scalars().first()
         if invoice:
+            from app.services.email_outbox_service import enqueue_order_payment_event
+            await enqueue_order_payment_event(
+                db, invoice.order_id, "payment_status_updated", f"{payment.id}:{new_status.value}",
+                payment_status=new_status.value,
+            )
             successful_res = await db.execute(
                 select(func.coalesce(func.sum(Payment.jumlah_bayar), 0)).where(
                     Payment.invoice_id == invoice.id,
@@ -461,23 +511,13 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
             )
             return {"status": "ok", "message": "Test notification received, dummy order ignored"}
 
-        # Reconcile the Midtrans reference and amount against backend records.
-        invoice_res = await db.execute(select(Invoice).where(Invoice.id == payment.invoice_id))
-        invoice = invoice_res.scalars().first()
-        expected_prefix = f"{invoice.nomor_invoice}-PAY-" if invoice else ""
-        if not invoice or not order_id_str.startswith(expected_prefix):
-            await db.rollback()
-            return {"status": "error_handled", "message": "Payment reference mismatch"}
+        payment_id = payment.id
         try:
-            webhook_amount = Decimal(gross_amount_str).quantize(Decimal("0.01"))
-            expected_amount = Decimal(str(payment.jumlah_bayar)).quantize(Decimal("0.01"))
-        except Exception:
+            invoice = await _validate_midtrans_payment_payload(db, payment, payload)
+        except ValueError as exc:
             await db.rollback()
-            return {"status": "error_handled", "message": "Invalid gross_amount"}
-        if webhook_amount != expected_amount:
-            logger.warning("[PAYMENT_AUDIT] gross_amount_mismatch | payment_id=%s", payment.id)
-            await db.rollback()
-            return {"status": "error_handled", "message": "Payment amount mismatch"}
+            logger.warning("[PAYMENT_AUDIT] payment_payload_mismatch | payment_id=%s | reason=%s", payment_id, exc)
+            return {"status": "error_handled", "message": str(exc)}
 
         if txn_status in ("refund", "partial_refund"):
             await complete_refund_notification(db, payment, payload)
@@ -535,6 +575,12 @@ async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
             response = await client.get(url, headers=headers)
             if response.status_code == 200:
                 midtrans_payload = response.json()
+                try:
+                    await _validate_midtrans_payment_payload(db, payment, midtrans_payload)
+                except ValueError as exc:
+                    logger.warning("[PAYMENT_AUDIT] status_refresh_mismatch | payment_id=%s | reason=%s",
+                                   payment.id, exc)
+                    return payment
                 # Commit DB terlebih dahulu sebelum memicu webhook Chatbot
                 await _apply_transaction_status(db, payment, midtrans_payload, commit=True)
                 await db.refresh(payment)
@@ -724,9 +770,18 @@ async def complete_refund_notification(db: AsyncSession, payment: Payment, paylo
         callback_amount = Decimal(str(entry["refund_amount"])).quantize(Decimal("0.01"))
         if callback_amount != Decimal(str(refund.refund_amount)).quantize(Decimal("0.01")):
             raise HTTPException(status_code=400, detail="Refund callback amount mismatch")
+        newly_completed = refund.status != RefundStatusEnum.completed and refund.status != RefundStatusEnum.failed and bool(entry.get("bank_confirmed_at"))
         if refund.status != RefundStatusEnum.failed and entry.get("bank_confirmed_at"):
             refund.status = RefundStatusEnum.completed
             refund.completed_at = datetime.now(timezone.utc)
+            if newly_completed:
+                from app.services.email_outbox_service import enqueue_order_payment_event
+                invoice = await db.get(Invoice, payment.invoice_id)
+                if invoice:
+                    await enqueue_order_payment_event(
+                        db, invoice.order_id, "refund_status_updated", f"refund-{refund.id}",
+                        refund_status="completed", amount=str(refund.refund_amount),
+                    )
     await db.flush()
     await _refresh_refund_payment_state(db, payment)
 
@@ -804,6 +859,12 @@ async def process_manual_payment(
         invoice.status = InvoiceStatusEnum.partial
     else:
         invoice.status = InvoiceStatusEnum.unpaid
+
+    from app.services.email_outbox_service import enqueue_order_payment_event
+    await enqueue_order_payment_event(
+        db, order.id, "payment_status_updated", f"{payment_obj.id}:{PaymentStatusEnum.success.value}",
+        payment_status=PaymentStatusEnum.success.value,
+    )
 
     await db.commit()
     await db.refresh(order)

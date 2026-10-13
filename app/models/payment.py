@@ -1,7 +1,7 @@
 import enum
 from decimal import Decimal
 
-from sqlalchemy import Column, Integer, String, Text, Numeric, ForeignKey, DateTime, Enum as SAEnum
+from sqlalchemy import Column, Integer, String, Text, Numeric, ForeignKey, DateTime, Enum as SAEnum, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -28,10 +28,12 @@ class RefundStatusEnum(str, enum.Enum):
 
 class Payment(Base):
     __tablename__ = "payments"
+    __table_args__ = (Index("uq_payments_pg_order_id", "pg_order_id", unique=True),)
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False, index=True)
     pg_transaction_id = Column(String(100), nullable=True)
+    pg_order_id = Column(String(100), nullable=True)
     jumlah_bayar = Column(Numeric(10, 2), nullable=False)
     payment_method = Column(String(50), nullable=False)
     notes = Column(Text, nullable=True)

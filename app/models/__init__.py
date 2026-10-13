@@ -15,6 +15,7 @@ from .review import Review, ReviewImage
 from .buyer import Buyer
 from .otp_code import OTPCode
 from .notification import Notification
+from .email_outbox import EmailOutbox, EmailOutboxAudit
 
 __all__ = [
     "Base",
@@ -43,4 +44,6 @@ __all__ = [
     "Buyer",
     "OTPCode",
     "Notification",
+    "EmailOutbox",
+    "EmailOutboxAudit",
 ]

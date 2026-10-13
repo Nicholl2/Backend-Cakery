@@ -10,13 +10,17 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import settings
 from app.core.database import Base
 from app.models.customer import Customer
+from app.models.buyer import Buyer
+from app.models.email_outbox import EmailOutbox
 from app.models.order import Invoice, InvoiceStatusEnum, MetodePengirimanEnum, Order, OrderStatusEnum
 from app.models.payment import Payment, PaymentStatusEnum, PaymentTypeEnum
 from app.models.product import Product
 from app.models.recipe import Recipe
 from app.models.stock_item import KategoriEnum, SatuanEnum, StockItem, StockMovement
 from app.models.order import OrderItem
-from app.services.payment_service import create_midtrans_charge, process_manual_payment, process_midtrans_webhook
+from app.services.payment_service import (
+    create_midtrans_charge, process_manual_payment, process_midtrans_webhook, refresh_if_pending,
+)
 
 
 @pytest.fixture
@@ -79,7 +83,7 @@ async def test_manual_payment_cannot_exceed_remaining(db_session):
 async def _payload(amount="1000000.00", signature=True):
     key = "integrity-test-key"
     settings.midtrans_server_key = key
-    body = {"order_id": "INV-INTEGRITY-PAY-1", "status_code": "200", "gross_amount": amount,
+    body = {"order_id": "INV-INTEGRITY-PAY-1700000000000-ABCD", "status_code": "200", "gross_amount": amount,
             "transaction_status": "settlement", "transaction_id": "dp-txn"}
     if signature:
         body["signature_key"] = hashlib.sha512(f"{body['order_id']}{body['status_code']}{amount}{key}".encode()).hexdigest()
@@ -109,7 +113,8 @@ async def test_webhook_invalid_signature_is_rejected_without_mutation(db_session
 @pytest.mark.asyncio
 async def test_webhook_valid_signature_processes_transaction(db_session):
     db, order, invoice, _ = db_session
-    payment = Payment(invoice_id=invoice.id, pg_transaction_id="new-txn", jumlah_bayar=Decimal("500000"),
+    payment = Payment(invoice_id=invoice.id, pg_transaction_id="new-txn",
+                      pg_order_id="INV-INTEGRITY-PAY-1700000000000-ABCD", jumlah_bayar=Decimal("500000"),
                       payment_method="qris", payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
     db.add(payment)
     await db.commit()
@@ -125,12 +130,252 @@ async def test_webhook_valid_signature_processes_transaction(db_session):
 
 
 @pytest.mark.asyncio
+async def test_webhook_rejects_other_charge_order_id_and_subcent_amount(db_session):
+    db, _, invoice, _ = db_session
+    expected_order_id = f"{invoice.nomor_invoice}-PAY-1700000000000-ABCD"
+    payment = Payment(invoice_id=invoice.id, pg_transaction_id="strict-order-txn",
+                      pg_order_id=expected_order_id, jumlah_bayar=Decimal("500000.00"),
+                      payment_method="qris", payment_status=PaymentStatusEnum.pending,
+                      payment_type=PaymentTypeEnum.final)
+    db.add(payment)
+    await db.commit()
+
+    for transaction_id, order_id, gross_amount in (
+        ("wrong-transaction-txn", expected_order_id, "500000.00"),
+        (payment.pg_transaction_id, f"{invoice.nomor_invoice}-PAY-1700000000001-ABCD", "500000.00"),
+        (payment.pg_transaction_id, expected_order_id, "500000.001"),
+    ):
+        body = {
+            "transaction_id": transaction_id,
+            "order_id": order_id,
+            "status_code": "200",
+            "gross_amount": gross_amount,
+            "transaction_status": "settlement",
+        }
+        body["signature_key"] = hashlib.sha512(
+            f"{order_id}200{gross_amount}{settings.midtrans_server_key}".encode()
+        ).hexdigest()
+        result = await process_midtrans_webhook(db, body)
+        assert result["status"] == "error_handled"
+        await db.refresh(payment)
+        assert payment.payment_status == PaymentStatusEnum.pending
+        assert await db.scalar(select(EmailOutbox.id).limit(1)) is None
+
+
+@pytest.mark.asyncio
+async def test_charge_persists_exact_midtrans_order_id_and_amount(db_session, monkeypatch):
+    db, order, invoice, _ = db_session
+    charge_payloads = []
+
+    class FakeResponse:
+        def json(self):
+            charge = charge_payloads[-1]["transaction_details"]
+            return {"status_code": "201", "transaction_id": "created-charge-txn",
+                    "order_id": charge["order_id"]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json, **kwargs):
+            charge_payloads.append(json)
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    result = await create_midtrans_charge(db, order.id, "qris", "full", Decimal("500000"))
+    payment = await db.get(Payment, result["payment_id"])
+    assert payment.pg_order_id == charge_payloads[0]["transaction_details"]["order_id"]
+    assert payment.jumlah_bayar == Decimal("500000.00")
+    assert charge_payloads[0]["transaction_details"]["gross_amount"] == 500000
+
+
+@pytest.mark.asyncio
+async def test_charge_rejects_fractional_rupiah_before_calling_midtrans(db_session, monkeypatch):
+    db, order, invoice, _ = db_session
+    invoice.total_tagihan = Decimal("1000001.00")
+    await db.commit()
+
+    async def unexpected_midtrans_call(*args, **kwargs):
+        pytest.fail("Midtrans should not be called for a truncated amount")
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", unexpected_midtrans_call)
+    with pytest.raises(HTTPException) as exc:
+        await create_midtrans_charge(db, order.id, "qris", "dp", Decimal("500000.50"))
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_webhook_amount_mismatch_is_rejected_without_mutation(db_session):
     db, _, _, dp = db_session
     result = await process_midtrans_webhook(db, await _payload("1.00"))
     assert result["status"] == "error_handled"
     await db.refresh(dp)
     assert dp.payment_status == PaymentStatusEnum.success
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload_changes",
+    [
+        {"transaction_id": "another-transaction"},
+        {"gross_amount": "500001.00"},
+        {"gross_amount": "500000.001"},
+        {"order_id": "INV-INTEGRITY-PAY-1700000000001-ABCD"},
+    ],
+    ids=["transaction-id-mismatch", "gross-amount-mismatch", "sub-cent-amount-mismatch", "order-id-mismatch"],
+)
+async def test_status_refresh_mismatch_does_not_mutate_or_enqueue(db_session, monkeypatch, payload_changes):
+    db, order, invoice, _ = db_session
+    customer = await db.get(Customer, order.customer_id)
+    db.add(Buyer(name="Payment buyer", email="buyer@example.test", phone=customer.nomor_wa,
+                 password_hash="hash", is_active=True))
+    payment = Payment(invoice_id=invoice.id, pg_transaction_id="refresh-txn",
+                      pg_order_id=f"{invoice.nomor_invoice}-PAY-1700000000000-ABCD",
+                      jumlah_bayar=Decimal("500000"), payment_method="qris",
+                      payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
+    db.add(payment)
+    await db.commit()
+
+    payload = {
+        "transaction_id": payment.pg_transaction_id,
+        "order_id": payment.pg_order_id,
+        "gross_amount": "500000.00",
+        "transaction_status": "settlement",
+    }
+    payload.update(payload_changes)
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    await refresh_if_pending(db, payment)
+
+    await db.refresh(payment)
+    await db.refresh(invoice)
+    assert payment.payment_status == PaymentStatusEnum.pending
+    assert payment.jumlah_bayar == Decimal("500000.00")
+    assert invoice.status == InvoiceStatusEnum.partial
+    assert await db.scalar(select(EmailOutbox.id).limit(1)) is None
+
+
+@pytest.mark.asyncio
+async def test_status_refresh_valid_payload_updates_payment_and_enqueues(db_session, monkeypatch):
+    db, order, invoice, _ = db_session
+    customer = await db.get(Customer, order.customer_id)
+    db.add(Buyer(name="Payment buyer", email="buyer@example.test", phone=customer.nomor_wa,
+                 password_hash="hash", is_active=True))
+    payment = Payment(invoice_id=invoice.id, pg_transaction_id="refresh-valid-txn",
+                      pg_order_id=f"{invoice.nomor_invoice}-PAY-1700000000000-ABCD",
+                      jumlah_bayar=Decimal("500000"), payment_method="qris",
+                      payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
+    db.add(payment)
+    await db.commit()
+    payload = {
+        "transaction_id": payment.pg_transaction_id,
+        "order_id": payment.pg_order_id,
+        "gross_amount": "500000.00",
+        "transaction_status": "settlement",
+    }
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    await refresh_if_pending(db, payment)
+
+    await db.refresh(payment)
+    assert payment.payment_status == PaymentStatusEnum.success
+    event = (await db.execute(select(EmailOutbox))).scalar_one()
+    assert event.event_type == "payment_status_updated"
+
+
+@pytest.mark.asyncio
+async def test_legacy_payment_without_persisted_order_id_fails_closed(db_session, monkeypatch):
+    db, _, invoice, _ = db_session
+    payment = Payment(invoice_id=invoice.id, pg_transaction_id="legacy-pending-txn",
+                      pg_order_id=None, jumlah_bayar=Decimal("500000"), payment_method="qris",
+                      payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
+    db.add(payment)
+    await db.commit()
+    payment_id = payment.id
+    payload = {
+        "transaction_id": payment.pg_transaction_id,
+        "order_id": f"{invoice.nomor_invoice}-PAY-1700000000000-ABCD",
+        "status_code": "200", "gross_amount": "500000.00", "transaction_status": "settlement",
+    }
+    payload["signature_key"] = hashlib.sha512(
+        f"{payload['order_id']}{payload['status_code']}{payload['gross_amount']}{settings.midtrans_server_key}".encode()
+    ).hexdigest()
+
+    webhook_result = await process_midtrans_webhook(db, payload)
+    assert webhook_result["status"] == "error_handled"
+    payment = await db.get(Payment, payment_id)
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    await refresh_if_pending(db, payment)
+
+    await db.refresh(payment)
+    await db.refresh(invoice)
+    assert payment.payment_status == PaymentStatusEnum.pending
+    assert invoice.status == InvoiceStatusEnum.partial
+    assert await db.scalar(select(EmailOutbox.id).limit(1)) is None
 
 
 @pytest.mark.asyncio
@@ -144,7 +389,8 @@ async def test_failed_initial_payment_cancels_order_and_reverses_stock_once(db_s
     await db.flush()
     db.add(Recipe(product_id=product.id, stock_item_id=stock.id, jumlah_dibutuhkan=Decimal("2")))
     db.add(OrderItem(order_id=order.id, product_id=product.id, jumlah=1, subtotal=Decimal("1000000")))
-    pending = Payment(invoice_id=invoice.id, pg_transaction_id="initial-txn", jumlah_bayar=Decimal("1000000"),
+    pending = Payment(invoice_id=invoice.id, pg_transaction_id="initial-txn",
+                      pg_order_id="INV-INTEGRITY-PAY-1700000000000-ABCD", jumlah_bayar=Decimal("1000000"),
                       payment_method="qris", payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
     db.add(pending)
     await db.commit()

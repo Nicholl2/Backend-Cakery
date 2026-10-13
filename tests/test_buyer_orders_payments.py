@@ -255,7 +255,7 @@ async def run_tests():
             "status_code": "201",
             "status_message": "Success, Bank Transfer transaction is created",
             "transaction_id": "mock-dp-txn-id-123",
-            "order_id": f"{order1_data['invoice']['nomor_invoice']}-PAY-1",
+            "order_id": "placeholder-until-charge-request",
             "gross_amount": str(int(expected_dp)),
             "payment_type": "bank_transfer",
             "transaction_time": "2026-10-01 10:00:00",
@@ -266,6 +266,9 @@ async def run_tests():
         async def mock_midtrans_post(self, url, *args, **kwargs):
             if "midtrans" in str(url):
                 from unittest.mock import MagicMock
+                charge = kwargs["json"]["transaction_details"]
+                midtrans_dp_response["order_id"] = charge["order_id"]
+                midtrans_dp_response["gross_amount"] = str(charge["gross_amount"])
                 return MagicMock(status_code=200, json=lambda: midtrans_dp_response)
             return await orig_post(self, url, *args, **kwargs)
 

@@ -96,6 +96,31 @@ Exit PostgreSQL:
 \q
 ```
 
+For a newly created, empty database, set `DATABASE_URL` in `.env` and initialize the current schema before starting the API:
+
+```bash
+python -m app.db_bootstrap --confirm-empty
+```
+
+This command refuses any database that already has tables or custom enum types. It creates the schema from the current SQLAlchemy models, applies extensions/indexes, and stamps Alembic at the current head (`20261014_03`). Do not run `alembic upgrade head` directly against a blank database: the historical migration chain starts from an existing application schema, not from a blank PostgreSQL database.
+
+For a database that already has an `alembic_version` row, back it up and use `alembic upgrade head` after reviewing the pending revisions. For an existing application database without an Alembic revision, do not run `upgrade head` or blindly stamp head. Run the read-only preflight tool to verify schema and data prerequisites, including the exact unique stock-name index and ledger balances. It fails closed if refund migration objects already exist because their schema/data cannot safely be adopted by the historical refund revision:
+
+```bash
+# 1. Read-only audit (stops if any prerequisite is unmet):
+python -m app.db_preflight
+
+# 2. Stamp 20261005_01 (only if preflight passes with 0 errors):
+python -m app.db_preflight --stamp
+
+# 3. Apply subsequent revisions (refund transactions, outbox, and payment order references):
+alembic upgrade head
+```
+
+If the baseline comparison fails, stop and prepare a database-specific reconciliation plan; never reset the existing database.
+
+API startup note: The API lifespan no longer performs runtime DDL migrations during startup. It verifies connectivity and schema presence, and only runs idempotent initial master data seeding if the `roles` table is empty. Critical initialization failures cause the API to fail fast rather than starting in a degraded state.
+
 ---
 
 ### 5. Configure Environment Variables

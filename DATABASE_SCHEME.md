@@ -358,6 +358,12 @@ CREATE INDEX IF NOT EXISTS ix_suppliers_nama_supplier_trgm ON suppliers USING gi
 
 ## 4. Alembic Migrations
 
-Manajemen skema database terkelola via Alembic (`alembic.ini` dan `alembic/versions/`):
+Database baru dibuat melalui `python -m app.db_bootstrap --confirm-empty`. Perintah tersebut memakai `Base.metadata.create_all` dan `run_auto_migrations` yang selama ini dipanggil oleh lifespan FastAPI, lalu mencatat revision head Alembic. Perintah menolak database yang sudah berisi tabel.
+
+Revision Alembic historis dikelola melalui `alembic.ini` dan `alembic/versions/`, tetapi revision pertama (`20260919_01`) bukan baseline: revision itu mengubah tabel aplikasi yang sudah ada. Karena itu `alembic upgrade head` tidak dapat dipakai untuk membuat schema dari database kosong.
+
+Untuk database existing yang sudah memiliki `alembic_version`, jalankan upgrade berurutan setelah backup dan rehearsal. Untuk database existing tanpa revision, jangan jalankan upgrade dari root atau stamp head langsung. Setelah clone staging, validasi bahwa schema dan backfill runtime setara dengan `20261005_01`, stamp pada revision tersebut, lalu jalankan revision setelahnya supaya backfill refund/outbox berjalan. Jika setara tidak terbukti, hentikan adopsi dan siapkan prosedur khusus berdasarkan database itu.
+
+Manajemen revision:
 - `alembic/versions/20260919_01_pg_trgm_and_schema_optimization.py`: Mengaktifkan `pg_trgm`, GIN Trigram indexes, konversi kolom `TEXT`, presisi `Numeric(3, 2)` pada rating produk, dan constraint `NOT NULL` pada status boolean.
 - Pipeline aplikasi otomatis menjalankan DDL idempotent di `app/core/migrations.py` saat startup.

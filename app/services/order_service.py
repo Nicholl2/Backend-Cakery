@@ -40,6 +40,7 @@ async def create_new_order(
     due_date: Optional[datetime] = None,
     fulfillment_date: Optional[datetime] = None,
     payment_method_preference: Optional[str] = None,
+    email_seller_on_commit: bool = False,
 ) -> Order:
     try:
         # ── 1. Cek tagihan aktif ─────────────────────────────────────────────
@@ -250,6 +251,11 @@ async def create_new_order(
                 status=InvoiceStatusEnum.unpaid,
             ),
         )
+
+        if email_seller_on_commit:
+            order_obj.customer = await db.get(Customer, customer_id)
+            from app.services.email_outbox_service import enqueue_new_order_for_sellers
+            await enqueue_new_order_for_sellers(db, order_obj)
 
         # ── 7. Commit & return dengan relasi ter-load ─────────────────────────
         await db.commit()
@@ -527,6 +533,7 @@ async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCre
             due_date=data.due_date,
             fulfillment_date=data.fulfillment_date,
             payment_method_preference=data.payment_method_preference,
+            email_seller_on_commit=True,
         )
         await _attach_payment_amounts(db, order)
         from app.services.notification_service import notify_order_created
@@ -725,10 +732,20 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
         await db.flush()
         for payment in invoice_payments:
             await _refresh_refund_payment_state(db, payment)
+        if order.invoice.status == InvoiceStatusEnum.refunded:
+            from app.services.email_outbox_service import enqueue_order_payment_event
+            totals = await invoice_payment_totals(db, order.invoice.id)
+            await enqueue_order_payment_event(
+                db, order.id, "refund_status_updated", f"seller-confirmed:{order.id}",
+                refund_status="completed", amount=str(totals["refunded"]),
+            )
 
     old_status_val = order.status.value
     if new_status_enum != OrderStatusEnum.refunded or order.invoice.status == InvoiceStatusEnum.refunded:
         order.status = new_status_enum
+    if new_status_enum != OrderStatusEnum.refunded or order.invoice.status == InvoiceStatusEnum.refunded:
+        from app.services.email_outbox_service import enqueue_order_status_for_buyer
+        await enqueue_order_status_for_buyer(db, order, new_status_enum.value)
     await db.commit()
 
     # Re-query order with details to avoid lazy loading issues

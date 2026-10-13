@@ -267,12 +267,11 @@ async def ensure_trigram_and_schema_optimizations(conn: AsyncConnection):
         ("ix_suppliers_nama_supplier_trgm", "suppliers", "nama_supplier"),
     ]
     for idx_name, table_name, col_name in indexes:
-        try:
-            await conn.execute(text(
-                f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name} USING gin ({col_name} gin_trgm_ops);"
-            ))
-        except Exception:
-            pass
+        # These indexes are part of the supported PostgreSQL schema. Do not
+        # silently stamp a database whose required trigram index could not be built.
+        await conn.execute(text(
+            f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name} USING gin ({col_name} gin_trgm_ops);"
+        ))
 
     # 3. Optimize column types to TEXT
     type_conversions = [
@@ -284,20 +283,14 @@ async def ensure_trigram_and_schema_optimizations(conn: AsyncConnection):
         ("orders", "notes"),
     ]
     for table_name, col_name in type_conversions:
-        try:
-            await conn.execute(text(
-                f"ALTER TABLE {table_name} ALTER COLUMN {col_name} TYPE TEXT;"
-            ))
-        except Exception:
-            pass
+        await conn.execute(text(
+            f"ALTER TABLE {table_name} ALTER COLUMN {col_name} TYPE TEXT;"
+        ))
 
     # 4. Rating precision conversion (DOUBLE PRECISION/FLOAT -> NUMERIC(3, 2))
-    try:
-        await conn.execute(text(
-            "ALTER TABLE products ALTER COLUMN rating TYPE NUMERIC(3, 2) USING rating::NUMERIC(3, 2);"
-        ))
-    except Exception:
-        pass
+    await conn.execute(text(
+        "ALTER TABLE products ALTER COLUMN rating TYPE NUMERIC(3, 2) USING rating::NUMERIC(3, 2);"
+    ))
 
     # 5. Enforce NOT NULL constraints and defaults on status/boolean flags
     boolean_cleanups = [
@@ -309,18 +302,15 @@ async def ensure_trigram_and_schema_optimizations(conn: AsyncConnection):
         ("faq_items", "is_active", "TRUE"),
     ]
     for table_name, col_name, default_val in boolean_cleanups:
-        try:
-            await conn.execute(text(
-                f"UPDATE {table_name} SET {col_name} = COALESCE({col_name}, {default_val}) WHERE {col_name} IS NULL;"
-            ))
-            await conn.execute(text(
-                f"ALTER TABLE {table_name} ALTER COLUMN {col_name} SET DEFAULT {default_val};"
-            ))
-            await conn.execute(text(
-                f"ALTER TABLE {table_name} ALTER COLUMN {col_name} SET NOT NULL;"
-            ))
-        except Exception:
-            pass
+        await conn.execute(text(
+            f"UPDATE {table_name} SET {col_name} = COALESCE({col_name}, {default_val}) WHERE {col_name} IS NULL;"
+        ))
+        await conn.execute(text(
+            f"ALTER TABLE {table_name} ALTER COLUMN {col_name} SET DEFAULT {default_val};"
+        ))
+        await conn.execute(text(
+            f"ALTER TABLE {table_name} ALTER COLUMN {col_name} SET NOT NULL;"
+        ))
 
 
 async def ensure_product_images_table(conn: AsyncConnection):
@@ -412,6 +402,18 @@ async def ensure_review_images_table(conn: AsyncConnection):
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_review_images_review_id ON review_images (review_id);"))
 
 
+async def ensure_email_outbox_indexes(conn: AsyncConnection):
+    """
+    Ensure lease expiry index exists on email_outbox table on PostgreSQL.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+    await conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_email_outbox_lease_expiry "
+        "ON email_outbox (status, lease_expires_at);"
+    ))
+
+
 async def run_auto_migrations(conn: AsyncConnection):
     """
     Wrapper to run all auto-migrations sequentially on a given connection.
@@ -431,3 +433,4 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_product_images_table(conn)
     await ensure_notification_table(conn)
     await ensure_review_images_table(conn)
+    await ensure_email_outbox_indexes(conn)

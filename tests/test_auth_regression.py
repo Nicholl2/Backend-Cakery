@@ -27,7 +27,8 @@ Covers every bug found and fixed in the auth security audit:
 21. reset_seller_password: atomicity — token not burned if seller not found
 22. reset_buyer_password_email: OTP consumed + password updated atomically
 23. Bootstrap: second call rejected
-24. Bootstrap: concurrent calls — only one succeeds (simulated via DB)
+24. Bootstrap: PostgreSQL advisory-lock branch is requested (actual concurrent
+    locking requires a PostgreSQL integration test)
 25. Concurrent OTP token consumption — second attempt is rejected
 
 NOTE: Tests use SQLite (aiosqlite in-memory). WITH FOR UPDATE silently degrades
@@ -223,6 +224,8 @@ class TestInactiveAccountRejection:
         with pytest.raises(HTTPException) as exc:
             await login_buyer_otp(db, phone, verify_token)
         assert exc.value.status_code == 422
+        await db.refresh(otp)
+        assert otp.is_used is False
 
     @pytest.mark.asyncio
     async def test_inactive_seller_login_rejected(self, db: AsyncSession):
@@ -819,6 +822,31 @@ class TestResetPasswordAtomicity:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestBootstrapOwner:
+    @pytest.mark.asyncio
+    async def test_postgres_bootstrap_requests_transaction_advisory_lock(self, db: AsyncSession):
+        from types import SimpleNamespace
+        from app.schemas.user import UserBootstrap
+        from app.services.user_service import bootstrap_owner
+
+        statements = []
+
+        class PostgresDialectSession:
+            bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+            def __getattr__(self, name):
+                return getattr(db, name)
+
+            async def execute(self, statement, *args, **kwargs):
+                if "pg_advisory_xact_lock" in str(statement):
+                    statements.append(str(statement))
+                    return None
+                return await db.execute(statement, *args, **kwargs)
+
+        await bootstrap_owner(PostgresDialectSession(), UserBootstrap(
+            username="locked-bootstrap", password="StrongPass123!", nomor_wa_admin="+6281200000077"
+        ))
+        assert len(statements) == 1
+
     @pytest.mark.asyncio
     async def test_bootstrap_succeeds_on_empty_table(self, db: AsyncSession):
         # Seed roles first

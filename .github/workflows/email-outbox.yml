@@ -1,0 +1,47 @@
+name: Email outbox batch
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: email-outbox-worker
+  cancel-in-progress: false
+
+jobs:
+  deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SECRET_KEY: ${{ secrets.SECRET_KEY }}
+      SERVICE_API_KEY: ${{ secrets.SERVICE_API_KEY }}
+      ENVIRONMENT: production
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ vars.SMTP_PORT || '587' }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_FROM_EMAIL: ${{ secrets.SMTP_FROM_EMAIL }}
+      SMTP_FROM_NAME: ${{ vars.SMTP_FROM_NAME || 'Toti Cakery' }}
+      SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS || 'true' }}
+      EMAIL_OUTBOX_MAX_ATTEMPTS: ${{ vars.EMAIL_OUTBOX_MAX_ATTEMPTS || '10' }}
+      EMAIL_OUTBOX_LEASE_SECONDS: ${{ vars.EMAIL_OUTBOX_LEASE_SECONDS || '300' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Validate required worker secrets
+        run: |
+          test -n "$DATABASE_URL" || { echo "::error::DATABASE_URL secret is missing"; exit 1; }
+          test -n "$SECRET_KEY" || { echo "::error::SECRET_KEY secret is missing"; exit 1; }
+          test -n "$SERVICE_API_KEY" || { echo "::error::SERVICE_API_KEY secret is missing"; exit 1; }
+          test -n "$SMTP_HOST" || { echo "::error::SMTP_HOST secret is missing"; exit 1; }
+          test -n "$SMTP_FROM_EMAIL" || { echo "::error::SMTP_FROM_EMAIL secret is missing"; exit 1; }
+      - name: Deliver one bounded batch
+        run: python -m app.services.email_worker --once --limit 20

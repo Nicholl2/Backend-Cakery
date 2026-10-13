@@ -609,9 +609,6 @@ async def login_buyer_phone(db: AsyncSession, phone: str, password: str) -> dict
 async def login_buyer_otp(db: AsyncSession, phone: str, verify_token: str) -> dict:
     """Login buyer via OTP verification token"""
     phone = normalize_phone(phone)
-    # Validate and consume verify token from DB
-    await validate_and_consume_db_verify_token(db, verify_token, phone)
-
     buyer = await buyer_repo.get_buyer_by_phone(db, phone)
     if not buyer:
         raise HTTPException(
@@ -625,6 +622,9 @@ async def login_buyer_otp(db: AsyncSession, phone: str, verify_token: str) -> di
             detail="Akun buyer tidak aktif.",
         )
 
+    # Consume only after the account is known to be eligible for login. The
+    # caller commits this with successful authentication below.
+    await validate_and_consume_db_verify_token(db, verify_token, phone)
     await db.commit()
 
     # Generate JWT

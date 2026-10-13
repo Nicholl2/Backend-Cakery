@@ -1,4 +1,4 @@
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     smtp_from_email: str = ""
     smtp_from_name: str = "Toti Cakery"
     smtp_use_tls: bool = True
+    smtp_operational_inbox: str = ""
+    email_outbox_poll_seconds: int = 5
+    email_outbox_max_attempts: int = 10
+    email_outbox_lease_seconds: int = Field(default=300, ge=3)
+    email_outbox_admin_token: str = ""
 
     @model_validator(mode="after")
     def enforce_production_security(self) -> "Settings":

@@ -49,6 +49,25 @@ jobs:
         run: |
           pytest tests/
 
+      - name: Prepare isolated PostgreSQL readiness database
+        env:
+          PGPASSWORD: ci
+        run: |
+          createdb -h localhost -U ci toti_readiness_test
+          createdb -h localhost -U ci toti_bootstrap_test
+          createdb -h localhost -U ci toti_upgrade_test
+
+      - name: Run PostgreSQL concurrency and payment integration tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://ci:ci@localhost:5432/toti_readiness_test
+          TEST_POSTGRES_URL: postgresql+asyncpg://ci:ci@localhost:5432/toti_readiness_test
+          TEST_POSTGRES_BOOTSTRAP_URL: postgresql+asyncpg://ci:ci@localhost:5432/toti_bootstrap_test
+          TEST_POSTGRES_UPGRADE_URL: postgresql+asyncpg://ci:ci@localhost:5432/toti_upgrade_test
+          SECRET_KEY: dummy
+          SERVICE_API_KEY: dummy
+          PYTHONPATH: .
+        run: pytest -q tests/integration/
+
   docker:
     name: Build image + smoke test
     runs-on: ubuntu-latest
@@ -99,6 +118,11 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           TAG=$(echo "$TAGS" | head -n1)
+          docker run --rm --network host \
+            -e DATABASE_URL=postgresql+asyncpg://ci:ci@localhost:5432/ci \
+            -e SECRET_KEY=dummy \
+            -e SERVICE_API_KEY=dummy \
+            "$TAG" python -m app.db_bootstrap --confirm-empty
           docker run -d --name api --network host \
             -e DATABASE_URL=postgresql+asyncpg://ci:ci@localhost:5432/ci \
             -e SECRET_KEY=dummy \

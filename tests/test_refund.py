@@ -208,6 +208,7 @@ async def test_midtrans_webhook_refund():
         payment = Payment(
             invoice_id=invoice.id,
             pg_transaction_id="mock-pg-wh-123",
+            pg_order_id="INV-WH-001-PAY-1700000000000-ABCD",
             jumlah_bayar=Decimal("100000.00"),
             payment_method="qris",
             payment_status=PaymentStatusEnum.success,
@@ -220,7 +221,7 @@ async def test_midtrans_webhook_refund():
         import hashlib
         from app.core.config import settings
         
-        midtrans_order_id = "INV-WH-001-PAY-999"
+        midtrans_order_id = payment.pg_order_id
         gross_amount = "100000.00"
         status_code = "200"
         

@@ -61,38 +61,45 @@ async def lifespan(app: FastAPI):
     import logging
     main_logger = logging.getLogger(__name__)
 
+    from sqlalchemy import select, text
+    from sqlalchemy.exc import ProgrammingError, OperationalError
+    from app.core.database import AsyncSessionLocal, seed_initial_data
+    from app.models.role import Role
+
+    # 1. Verify database connectivity
     try:
-        from app.core.migrations import (
-            run_auto_migrations,
-            ensure_order_status_enum,
-        )
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        main_logger.critical(f"Database connectivity check failed during startup: {exc}")
+        raise RuntimeError(f"Database connectivity check failed: {exc}") from exc
 
-        # 1. Run enum additions in isolated autocommit connection (PostgreSQL requires ALTER TYPE outside transaction blocks)
-        try:
-            async with engine.connect() as auto_conn:
-                await ensure_order_status_enum(auto_conn)
-        except Exception as enum_err:
-            main_logger.warning(f"Enum migration notice: {enum_err}")
-
-        # 2. Run table creations and column migrations in transactional block
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-            await run_auto_migrations(conn)
-
-        # Auto-seed initial master data if roles table is empty
-        from app.core.database import AsyncSessionLocal, seed_initial_data
-        from sqlalchemy import select
-        from app.models.role import Role
-
+    # 2. Verify schema initialization and run idempotent initial seed if needed
+    try:
         async with AsyncSessionLocal() as db:
-            role_check = await db.execute(select(Role).limit(1))
-            if not role_check.scalars().first():
+            try:
+                role_check = await db.execute(select(Role).limit(1))
+                has_roles = role_check.scalars().first() is not None
+            except (ProgrammingError, OperationalError) as schema_err:
+                main_logger.critical(
+                    "Database schema is not initialized ('roles' table not found). "
+                    "Run database bootstrap or migrations before starting the API."
+                )
+                raise RuntimeError(
+                    "Database schema is not initialized. Run 'python -m app.db_bootstrap --confirm-empty' "
+                    "or 'alembic upgrade head' before starting the application."
+                ) from schema_err
+
+            if not has_roles:
+                main_logger.info("Roles table is empty. Running idempotent initial master data seed...")
                 await seed_initial_data(db)
+                main_logger.info("Initial seeding completed successfully.")
     except Exception as e:
-        main_logger.warning(f"Startup initialization / auto-seed encountered a non-fatal warning: {e}")
+        main_logger.critical(f"Critical initialization failure during startup: {e}")
+        raise
 
     yield
-    pass
+
 
 app = FastAPI(
     title="Toti Cakery API",
