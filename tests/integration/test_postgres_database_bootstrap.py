@@ -123,7 +123,8 @@ async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_a
                           pg_order_id="upgrade-order-ref", jumlah_bayar=50000, payment_method="qris",
                           payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.dp)
         stock = StockItem(nama_item="Upgrade flour", satuan=SatuanEnum.gram,
-                          kategori=KategoriEnum.bahan_baku, harga_per_satuan=10, stok_tersedia=321, version=0)
+                          kategori=KategoriEnum.bahan_baku, harga_per_satuan=10, stok_tersedia=321,
+                          alert_min_stok=0, version=0)
         db.add_all([payment, stock])
         await db.flush()
         movement = StockMovement(stock_item_id=stock.id, movement_type="OPENING_BALANCE", quantity=321,
@@ -179,21 +180,22 @@ async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_a
     await engine.dispose()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")
 async def test_postgres_adoption_preflight_blocks_invalid_database():
     url = _test_url("TEST_POSTGRES_UPGRADE_URL")
     engine = create_async_engine(url)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
+        await connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
         await connection.run_sync(Base.metadata.create_all)
         # Introduce duplicate stock item to violate preflight
         await connection.execute(text(
-            "INSERT INTO stock_items (nama_item, satuan, kategori, harga_per_satuan, stok_tersedia, version) "
-            "VALUES ('Tepung Terigu', 'gram', 'bahan_baku', 10, 100, 0)"
+            "INSERT INTO stock_items (nama_item, satuan, kategori, harga_per_satuan, stok_tersedia, alert_min_stok, version) "
+            "VALUES ('Tepung Terigu', 'gram', 'bahan_baku', 10, 100, 0, 0)"
         ))
         await connection.execute(text(
-            "INSERT INTO stock_items (nama_item, satuan, kategori, harga_per_satuan, stok_tersedia, version) "
-            "VALUES ('tepung terigu ', 'gram', 'bahan_baku', 10, 100, 0)"
+            "INSERT INTO stock_items (nama_item, satuan, kategori, harga_per_satuan, stok_tersedia, alert_min_stok, version) "
+            "VALUES ('tepung terigu ', 'gram', 'bahan_baku', 10, 100, 0, 0)"
         ))
 
     child_env = os.environ.copy()
@@ -212,7 +214,7 @@ async def test_postgres_adoption_preflight_blocks_invalid_database():
     await engine.dispose()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.parametrize(("case", "expected_error"), [
     ("refund_objects", "Refund migration objects already exist"),
     ("refund_enum_only", "Refund migration objects already exist"),
@@ -232,6 +234,10 @@ async def test_postgres_preflight_invalid_state_fails_before_stamp(case, expecte
     engine = create_async_engine(url)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
+        # alembic_version is not in Base.metadata so drop_all leaves it behind when a
+        # previous test (e.g. the upgrade test) stamped the DB.  Drop it explicitly so
+        # the preflight assertion "failed run must not create alembic_version" is reliable.
+        await connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
         await connection.run_sync(Base.metadata.create_all)
         if case != "refund_objects":
             await connection.execute(text("DROP TABLE refund_transactions"))

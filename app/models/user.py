@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, inspect
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Index, Text, inspect, text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -10,9 +10,13 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, nullable=False, index=True)
-    email = Column(String(100), unique=True, nullable=True, index=True)
+    email = Column(String(100), nullable=True)
     phone_number = Column(String(20), nullable=True)
     password_hash = Column(String(255), nullable=False)
+
+    __table_args__ = (
+        Index("ix_users_email", "email", unique=True, postgresql_where=text("email IS NOT NULL")),
+    )
     avatar_url = Column(Text, nullable=True)
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
     is_active = Column(Boolean, default=True, server_default="true", nullable=False)

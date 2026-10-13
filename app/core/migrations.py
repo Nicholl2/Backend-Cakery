@@ -142,6 +142,12 @@ async def ensure_otp_columns(conn: AsyncConnection):
 async def ensure_user_columns(conn: AsyncConnection):
     """
     Ensure email and phone_number columns exist in the 'users' table on PostgreSQL database.
+
+    NOTE: Base.metadata.create_all may have already created ix_users_email as a plain
+    non-partial unique index (from Column(email, unique=True, index=True) on the model).
+    The bootstrap validator requires it to be a partial unique B-tree index with the predicate
+    WHERE email IS NOT NULL.  We therefore check the existing index's predicate and, if it
+    lacks one, drop and recreate it as the correct partial form.
     """
     if conn.dialect.name != "postgresql":
         return
@@ -149,7 +155,42 @@ async def ensure_user_columns(conn: AsyncConnection):
     await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(100);"))
     await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);"))
     await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500);"))
-    await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email) WHERE email IS NOT NULL;"))
+
+    # Check whether ix_users_email already exists and whether it has the required WHERE predicate.
+    index_row = (await conn.execute(text("""
+        SELECT idx.relname AS name,
+               pg_get_expr(i.indpred, i.indrelid) AS predicate
+        FROM pg_index i
+        JOIN pg_class idx ON idx.oid = i.indexrelid
+        JOIN pg_class tbl ON tbl.oid = i.indrelid
+        JOIN pg_namespace ns  ON ns.oid  = tbl.relnamespace
+        WHERE ns.nspname = current_schema()
+          AND tbl.relname = 'users'
+          AND idx.relname = 'ix_users_email'
+    """))).mappings().first()
+
+    if index_row is None:
+        # Index does not exist yet — create the correct partial form.
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email "
+            "ON users (email) WHERE email IS NOT NULL;"
+        ))
+    else:
+        predicate = index_row["predicate"]
+        is_valid_predicate = False
+        if predicate:
+            normalised = predicate.replace('"', "").replace(" ", "").replace("(", "").replace(")", "").lower()
+            if normalised == "emailisnotnull":
+                is_valid_predicate = True
+
+        if not is_valid_predicate:
+            # Drop plain or invalid index and recreate with the required partial predicate.
+            await conn.execute(text("DROP INDEX ix_users_email;"))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX ix_users_email "
+                "ON users (email) WHERE email IS NOT NULL;"
+            ))
+
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_phone_number ON users (phone_number) WHERE phone_number IS NOT NULL;"))
 
 

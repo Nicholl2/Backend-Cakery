@@ -615,8 +615,11 @@ class TestEmailProviderFailure:
         from pydantic import ValidationError
         from app.core.config import Settings
         with pytest.raises(ValidationError, match="Production requires SMTP"):
+            # Pass smtp_host="" and smtp_from_email="" explicitly so that any SMTP
+            # values present in a local .env file do not suppress the validator.
             Settings(database_url="sqlite+aiosqlite://", environment="production",
-                     secret_key="strong-secret", service_api_key="strong-service-key")
+                     secret_key="strong-secret", service_api_key="strong-service-key",
+                     smtp_host="", smtp_from_email="")
 
     @pytest.mark.asyncio
     async def test_send_otp_raises_503_when_email_fails(self, db: AsyncSession):
