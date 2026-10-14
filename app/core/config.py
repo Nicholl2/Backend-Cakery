@@ -1,5 +1,8 @@
-from pydantic import Field, model_validator
+import logging
+from pydantic import Field, AliasChoices, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -25,7 +28,7 @@ class Settings(BaseSettings):
     midtrans_is_production: bool = False
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://toti-cakery.vercel.app"
     chatbot_wa_number: str = "6287881273160"
-    environment: str = "development"
+    environment: str = Field(default="development", validation_alias=AliasChoices("environment", "app_env"))
     wa_verification_mode: str = "mock"  # "mock" | "real"
     cloudinary_cloud_name: str = ""
     cloudinary_api_key: str = ""
@@ -47,10 +50,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_production_security(self) -> "Settings":
-        if self.environment.lower() == "production":
+        env_name = (self.environment or "").lower()
+        if env_name == "production":
             self.wa_verification_mode = "real"
             if not self.smtp_host or not self.smtp_from_email:
-                raise ValueError("Production requires SMTP host and sender email configuration.")
+                logger.warning(
+                    "[CONFIG_WARNING] Production mode enabled but SMTP host/sender email is not configured. "
+                    "Email outbox dispatches will fail until SMTP settings are provided."
+                )
             if self.secret_key == "your-secret-key-change-in-production":
                 raise ValueError("CRITICAL SECURITY: 'secret_key' wajib diganti dengan string rahasia kuat pada environment production!")
             if self.service_api_key == "change-this-service-key":

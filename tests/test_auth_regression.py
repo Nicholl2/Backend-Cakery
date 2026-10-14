@@ -611,15 +611,15 @@ class TestEmailProviderFailure:
         with patch("app.utils.email_helper.settings.smtp_host", ""):
             assert await send_otp_email("buyer@test.com", "123456") is False
 
-    def test_production_settings_require_smtp_configuration(self):
-        from pydantic import ValidationError
+    def test_production_settings_require_smtp_configuration(self, caplog):
+        import logging
         from app.core.config import Settings
-        with pytest.raises(ValidationError, match="Production requires SMTP"):
-            # Pass smtp_host="" and smtp_from_email="" explicitly so that any SMTP
-            # values present in a local .env file do not suppress the validator.
-            Settings(database_url="sqlite+aiosqlite://", environment="production",
-                     secret_key="strong-secret", service_api_key="strong-service-key",
-                     smtp_host="", smtp_from_email="")
+        with caplog.at_level(logging.WARNING):
+            cfg = Settings(database_url="sqlite+aiosqlite://", environment="production",
+                           secret_key="strong-secret", service_api_key="strong-service-key",
+                           smtp_host="", smtp_from_email="")
+            assert cfg.environment == "production"
+            assert "SMTP host/sender email is not configured" in caplog.text
 
     @pytest.mark.asyncio
     async def test_send_otp_raises_503_when_email_fails(self, db: AsyncSession):

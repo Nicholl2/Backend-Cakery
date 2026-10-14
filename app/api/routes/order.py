@@ -12,6 +12,7 @@ from app.core.database import get_db
 from app.api.dependencies import (
     require_service_scope,
     require_internal_user,
+    require_order_read_access,
     get_current_buyer,
     get_auth_identity_optional_service_or_jwt,
     AuthIdentity,
@@ -242,14 +243,15 @@ async def cancel_order(
 
 
 @router.get("/{order_id}", response_model=OrderOut,
-            dependencies=[Depends(require_internal_user)],
-            summary="Detail pesanan berdasarkan ID (Khusus Staff/Admin/Owner)")
+            dependencies=[Depends(require_order_read_access)],
+            summary="Detail pesanan berdasarkan ID (Staff/Admin/Owner atau Service Key)")
 async def get_seller_order_detail(
     order_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
     """
-    Mengambil detail pesanan spesifik untuk Seller (Staff/Admin/Owner) dengan relasi lengkap.
+    Mengambil detail pesanan spesifik berdasarkan ID dengan relasi lengkap.
+    Dapat diakses oleh Seller internal (Staff/Admin/Owner via JWT) maupun Service Key (SERVICE_ORDERS_READ_KEY via header/query).
     """
     try:
         order = await order_service.get_seller_order_by_id(db, order_id)
@@ -257,7 +259,7 @@ async def get_seller_order_detail(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching seller order detail {order_id}: {e}", exc_info=True)
+        logger.error(f"Error fetching order detail {order_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Gagal memuat detail pesanan: {str(e)}",

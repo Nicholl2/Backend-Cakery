@@ -51,12 +51,16 @@ async def adjust_stock(db: AsyncSession, stock_id: int, data: StockAdjustmentCre
     if not item:
         raise HTTPException(404, "Stock item tidak ditemukan.")
     delta = data.quantity_difference
+    if not delta.is_finite():
+        raise HTTPException(400, "Penyesuaian kuantitas harus bernilai terhingga (finite).")
     old_qty = Decimal(str(item.stok_tersedia))
     new_qty = old_qty + delta
     if new_qty < 0:
         raise HTTPException(409, "Penyesuaian tidak dapat membuat stok negatif.")
     old_cost = Decimal(str(item.harga_per_satuan))
     cost = data.unit_cost if delta > 0 else old_cost
+    if cost is None or not cost.is_finite() or cost < 0:
+        raise HTTPException(400, "Unit cost harus bernilai terhingga dan non-negatif.")
     if delta > 0 and new_qty > 0:
         item.harga_per_satuan = ((old_qty * old_cost + delta * cost) / new_qty).quantize(Decimal("0.0001"))
     item.stok_tersedia = new_qty

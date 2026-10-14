@@ -245,6 +245,7 @@ class OrderOut(BaseModel):
     invoice: Optional[InvoiceOut] = None
     amount_paid: Optional[Decimal] = None
     amount_due: Optional[Decimal] = None
+    payment_status: Optional[str] = None
 
     @field_validator("fulfillment_date", "settlement_due_date", "due_date", "created_at", "updated_at", mode="after")
     @classmethod

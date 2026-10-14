@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 async def notify_chatbot_order_event(order_id: int, event: str) -> None:
     """
     Send async fire-and-forget HTTP POST notification to Chatbot internal webhook.
-    Supported events: 'paid', 'refunded', 'ready'
+    Supported events: 'paid', 'refunded', 'ready', 'processing', 'completed'
     Target URL: {settings.chatbot_url}/webhook/internal/orders/{order_id}/{event}
     Header: X-Internal-Key: {settings.chatbot_internal_key}
     """
@@ -32,6 +32,16 @@ async def notify_chatbot_order_event(order_id: int, event: str) -> None:
         logger.error(
             f"[CHATBOT_WEBHOOK_ERROR] Failed notifying chatbot for order {order_id} (event: '{event}'): {e}"
         )
+
+
+async def notify_order_processing(order_id: int) -> None:
+    """Kirim notifikasi pesanan diproses ke webhook Chatbot."""
+    await notify_chatbot_order_event(order_id, "processing")
+
+
+async def notify_order_completed(order_id: int) -> None:
+    """Kirim notifikasi pesanan selesai ke webhook Chatbot."""
+    await notify_chatbot_order_event(order_id, "completed")
 
 
 async def notify_payment_status(order_id: int, status: str = "paid") -> None:

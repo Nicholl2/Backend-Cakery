@@ -1,6 +1,5 @@
-from fastapi import Header
+from fastapi import Header, Query, Depends, HTTPException, status
 from app.core.config import settings
-from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer
 from fastapi.security.http import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -134,9 +133,11 @@ def _service_scopes_for_key(candidate: Optional[str]) -> set[str]:
 
 def require_service_scope(scope: str):
     async def check_service_scope(
-        x_service_key: Optional[str] = Header(None, alias="X-Service-Key")
+        x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
+        service_key: Optional[str] = Query(None, alias="service_key"),
     ) -> None:
-        scopes = _service_scopes_for_key(x_service_key)
+        key = x_service_key or service_key
+        scopes = _service_scopes_for_key(key)
         if not scopes:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid service key")
         if scope not in scopes:
@@ -146,14 +147,16 @@ def require_service_scope(scope: str):
 
 async def get_auth_identity_optional_service_or_jwt(
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
+    service_key: Optional[str] = Query(None, alias="service_key"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
     db: AsyncSession = Depends(get_db)
 ) -> AuthIdentity:
     """
-    Authenticate via either X-Service-Key (Chatbot) or Bearer JWT (Buyer or Internal User).
+    Authenticate via either X-Service-Key / query service_key (Chatbot) or Bearer JWT (Buyer or Internal User).
     """
     # 1. Check Service Key
-    scopes = _service_scopes_for_key(x_service_key)
+    key = x_service_key or service_key
+    scopes = _service_scopes_for_key(key)
     if scopes:
         return AuthIdentity(auth_type="service", service_scopes=scopes)
 
@@ -290,6 +293,35 @@ require_owner = require_role(1)  # Only Owner (level 1)
 require_admin_or_owner = require_role(2)  # Admin (2) or Owner (1)
 require_staff_or_above = require_role(3)  # Staff, Admin, or Owner (levels 1, 2, 3)
 require_internal_user = require_staff_or_above  # All internal users (Staff, Admin, Owner)
+
+
+async def require_order_read_access(
+    auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt)
+) -> AuthIdentity:
+    """
+    Allow access to read order by ID:
+    - Internal users (Staff, Admin, Owner) via Bearer JWT
+    - Service clients with 'orders:read' scope (SERVICE_ORDERS_READ_KEY via header or query param)
+    """
+    if auth.is_service:
+        if not auth.has_scope("orders:read"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Service key lacks required capability"
+            )
+        return auth
+    if auth.is_internal_user:
+        role_level = int(auth.role) if auth.role is not None else 99
+        if role_level > 3:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Akses ditolak: Anda tidak memiliki izin untuk mengakses resource ini."
+            )
+        return auth
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Akses ditolak: Anda tidak memiliki izin untuk mengakses resource ini."
+    )
 
 
 async def get_current_user(

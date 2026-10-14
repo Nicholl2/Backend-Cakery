@@ -482,6 +482,14 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
             payment = result.scalars().first()
 
         if not payment and order_id_str:
+            result = await db.execute(
+                select(Payment)
+                .where(Payment.pg_order_id == order_id_str)
+                .with_for_update()
+            )
+            payment = result.scalars().first()
+
+        if not payment and order_id_str:
             # Fallback: parsing order_id untuk mendapatkan nomor invoice
             if "-PAY-" in order_id_str:
                 inv_num = order_id_str.split("-PAY-")[0]

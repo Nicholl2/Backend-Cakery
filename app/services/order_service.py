@@ -151,59 +151,44 @@ async def create_new_order(
                 detail=f"Total pesanan Rp {total_harga_pesanan:,.0f} melebihi batas maksimal Rp {MAX_ORDER_AMOUNT:,.0f} per order.",
             )
 
-        # ── 3. Validasi & Kurangi Stok (Optimistic Locking + Auto-Retry) ────
-        MAX_STOCK_RETRY = 3
+        # ── 3. Validasi & Kurangi Stok (Row-Level Locking SELECT ... FOR UPDATE) ────
+        sorted_stock_ids = sorted(stock_item_requirements.keys())
+        if sorted_stock_ids:
+            res = await db.execute(
+                select(StockItem)
+                .where(StockItem.id.in_(sorted_stock_ids))
+                .with_for_update()
+            )
+            locked_stock_items = {s.id: s for s in res.scalars().all()}
+            for stock_id in sorted_stock_ids:
+                req = stock_item_requirements[stock_id]
+                total_needed = req["total_needed"]
+                product_name = req["product_name"]
 
-        for stock_id, req in stock_item_requirements.items():
-            total_needed = req["total_needed"]
-            product_name = req["product_name"]
-
-            for attempt in range(1, MAX_STOCK_RETRY + 1):
-                # Re-fetch stock item untuk fresh version pada retry
-                if attempt > 1:
-                    fresh_result = await db.execute(
-                        select(StockItem).where(StockItem.id == stock_id)
+                if not total_needed.is_finite() or total_needed <= 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Jumlah kebutuhan bahan baku tidak valid untuk {product_name}.",
                     )
-                    stock_item = fresh_result.scalars().first()
-                    if not stock_item:
-                        raise HTTPException(
-                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            detail=f"Bahan baku tidak ditemukan saat retry.",
-                        )
-                else:
-                    stock_item = req["stock_item_obj"]
 
-                # Validasi stok bahan baku
+                stock_item = locked_stock_items.get(stock_id)
+                if not stock_item:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Bahan baku ID {stock_id} tidak ditemukan.",
+                    )
+
+                # Validasi stok bahan baku terkini di bawah row lock
                 if stock_item.stok_tersedia < total_needed:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Stok bahan baku tidak mencukupi untuk memproses pesanan {product_name}",
                     )
 
-                # Kurangi stok & terapkan Optimistic Locking dengan filter version
-                stmt = (
-                    update(StockItem)
-                    .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
-                    .values(
-                        stok_tersedia=StockItem.stok_tersedia - total_needed,
-                        version=StockItem.version + 1
-                    )
-                )
-                res = await db.execute(stmt)
-                if res.rowcount > 0:
-                    break  # Berhasil, lanjut ke stock item berikutnya
-
-                # Conflict: versi berubah oleh transaksi lain
-                if attempt == MAX_STOCK_RETRY:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Terjadi kegagalan validasi stok karena transaksi bersamaan. Silakan coba lagi.",
-                    )
-                logger.warning(
-                    "[STOCK_RETRY] Optimistic lock conflict on stock_item %s, "
-                    "attempt %s/%s, retrying...",
-                    stock_id, attempt, MAX_STOCK_RETRY,
-                )
+                # Kurangi stok bahan baku secara atomik
+                stock_item.stok_tersedia = stock_item.stok_tersedia - total_needed
+                stock_item.version += 1
+                req["stock_item_obj"] = stock_item
 
         # ── 4. Buat Order ────────────────────────────────────────────────────
         order_obj = Order(
@@ -759,6 +744,12 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
     if actual_status == "ready":
         from app.services.chatbot_notify import notify_chatbot_order_event
         await notify_chatbot_order_event(order_id, "ready")
+    elif actual_status == OrderStatusEnum.in_process.value:
+        from app.services.chatbot_notify import notify_chatbot_order_event
+        await notify_chatbot_order_event(order_id, "processing")
+    elif actual_status == OrderStatusEnum.completed.value:
+        from app.services.chatbot_notify import notify_chatbot_order_event
+        await notify_chatbot_order_event(order_id, "completed")
     elif actual_status == OrderStatusEnum.refunded.value:
         # Sinyal Manual Refund Completed (Poin 2.b):
         # Dipicu saat Admin/Seller mengubah status pesanan menjadi refunded di Dashboard Site
@@ -770,7 +761,6 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
 
 async def _rollback_order_stock(db: AsyncSession, order: Order) -> None:
     from app.models.stock_item import StockItem
-    from sqlalchemy import update
     
     stock_item_returns = {}
     for item in order.order_items:

@@ -11,6 +11,8 @@ async def create(db: AsyncSession, data: StockCreate, user_id: int | None = None
     payload = data.model_dump()
     opening_qty = payload.pop("stok_tersedia")
     opening_cost = payload.pop("harga_per_satuan")
+    if payload.get("alert_min_stok") is None:
+        payload["alert_min_stok"] = Decimal("0.00")
     item = StockItem(**payload, stok_tersedia=opening_qty, harga_per_satuan=opening_cost)
     db.add(item)
     await db.flush()
@@ -42,6 +44,8 @@ async def get_all(db: AsyncSession, kategori: Optional[str] = None) -> list[Stoc
 
 async def update(db: AsyncSession, item: StockItem, data: StockUpdate) -> StockItem:
     for field, value in data.model_dump(exclude_unset=True).items():
+        if field == "alert_min_stok" and value is None:
+            continue
         setattr(item, field, value)
     await db.commit()
     await db.refresh(item)
