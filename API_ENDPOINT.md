@@ -13,7 +13,7 @@ Dokumentasi lengkap seluruh endpoint REST API Backend Toti Cakery (FastAPI).
 | **Admin (Level 2)** | JWT Bearer Token | `Authorization: Bearer <token>` (`require_admin_or_owner`) | Akses operasional: CRUD produk, stock, purchasing, expenses, update order |
 | **Staff (Level 3)** | JWT Bearer Token | `Authorization: Bearer <token>` (`require_staff_or_above`) | Akses dasar internal |
 | **Buyer Site (Pelanggan)** | JWT Bearer Token | `Authorization: Bearer <token>` (`get_current_buyer_id`) | Akses akun buyer, buat review, transaksi web |
-| **Chatbot & Internal Services** | Pre-shared Service Key | `X-Service-Key: <key>` / `X-Internal-Key: <key>` | Komunikasi headless: webhook, order placement, takeover |
+| **Chatbot & Internal Services** | Pre-shared Service Key | `X-Service-Key: <key>` / `?service_key=<key>` (atau `X-Internal-Key`) | Komunikasi headless dengan scoping granular: `orders:create`, `orders:read`, `orders:cancel`, `payments:create`, `payments:read`, `customers:manage`, `refunds:request`, `reports:summary`, `owners:read`, `settlements:check`, `identity:verify` |
 | **Public Webhook Midtrans** | SHA512 Signature Hash | Signature di payload webhook | Verifikasi integritas pembayaran Midtrans tanpa token |
 | **Public Endpoint** | Tanpa Autentikasi | - | Katalog produk, FAQ, cek status ulasan |
 
@@ -39,7 +39,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `POST` | `/auth/bootstrap` | Public (First-time only) | Inisialisasi akun Owner pertama jika database masih kosong |
 | `POST` | `/auth/login` | Public | Login akun internal (Owner/Admin/Staff), return JWT token & role level |
 | `POST` | `/auth/verify/wa/start` | Public | Memulai sesi verifikasi WA (E.164 7-15 digit). Di mode real: return `nonce` & `deeplink`. Di mode mock (`WA_VERIFICATION_MODE=mock` non-prod): otomatis verifikasi dan return `verify_token` & `mock_mode: true` |
-| `POST` | `/auth/verify/wa/confirm` | `X-Service-Key` / `X-Internal-Key` | Konfirmasi nomor pengirim oleh chatbot saat customer mengirim pesan verifikasi |
+| `POST` | `/auth/verify/wa/confirm` | `X-Service-Key` (`SERVICE_WA_VERIFICATION_KEY`) / `X-Internal-Key` | Konfirmasi nomor pengirim oleh chatbot saat customer mengirim pesan verifikasi WhatsApp (scope `identity:verify`) |
 | `GET` | `/auth/verify/wa/status` | Public (Polling) | Cek status verifikasi WA berdasarkan `nonce`. Di mode mock/verified: return status `"verified"` & `verify_token` |
 | `POST` | `/auth/buyer/register` | Public (`verify_token`) | Registrasi akun pembeli baru menggunakan token verifikasi WA dan nomor telepon valid |
 | `POST` | `/auth/buyer/login` | Public | Login pembeli via email/password atau phone/`verify_token` |
@@ -92,11 +92,11 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/stock/` | Internal | Buat satu master material, opsional dengan saldo awal yang menghasilkan `OPENING_BALANCE`. Supplier pembelian dipilih pada Purchase; endpoint ini tidak membuat item untuk restock. |
+| `POST` | `/stock/` | Internal | Buat satu master material baru (memastikan default `alert_min_stok = 0.00` konsisten), opsional dengan saldo awal yang menghasilkan `OPENING_BALANCE`. Supplier pembelian dipilih pada Purchase; endpoint ini tidak membuat item untuk restock. |
 | `GET` | `/stock/` | Internal | List semua item stok (Filter: `bahan_baku` / `kemasan`) |
 | `GET` | `/stock/{stock_id}` | Internal | Detail master bahan (stok terkini, average cost, alert minimum) |
-| `PUT` | `/stock/{stock_id}` | Internal | Update atribut master/alert. Saldo dan harga tidak dapat diedit langsung. |
-| `POST` | `/stock/{stock_id}/adjustments` | Admin / Owner | Koreksi stok dengan `quantity_difference`, `reason` wajib, dan `unit_cost` opsional untuk penambahan. Membuat ledger movement. |
+| `PUT` | `/stock/{stock_id}` | Internal | Update atribut master/alert (mempertahankan fallback `alert_min_stok = 0.00`). Saldo dan harga tidak dapat diedit langsung. |
+| `POST` | `/stock/{stock_id}/adjustments` | Admin / Owner | Koreksi stok dengan validasi bilangan riil terbatas (`quantity_difference` & `unit_cost` finite, menolak `NaN`/`Infinity`), pencegahan saldo negatif (stok tidak boleh di bawah 0), `reason` wajib, dan membuat ledger `StockMovement` tercatat. |
 | `GET` | `/stock/{stock_id}/movements` | Internal | Histori stock movement untuk audit. |
 | `DELETE` | `/stock/{stock_id}` | Admin / Owner | Hapus hanya jika tidak punya saldo, recipe, atau histori movement. |
 
@@ -142,15 +142,15 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | :--- | :--- | :--- | :--- |
 | `GET` | `/orders` | Staff / Admin / Owner | List seluruh pesanan toko untuk Seller (Staff/Admin/Owner) dengan relasi lengkap (Customer, OrderItems, Invoice, Payments, amount_paid, amount_due, fulfillment_date, settlement_due_date). Filter: `status`, `limit`, `offset`. |
 | `GET` | `/orders/stats` | Staff / Admin / Owner | Ringkasan statistik pesanan toko (total orders, count per status, active/completed orders, dan total revenue). Parameter query tanggal `start_date` dan `end_date` bersifat opsional (default: seluruh/rentang aman tanpa memicu error HTTP 422). |
-| `GET` | `/orders/{order_id}` | Staff / Admin / Owner | Detail pesanan spesifik untuk Seller beserta customer, item kustom/produk (dengan field `product_name`), invoice, fulfillment_date, settlement_due_date, dan ringkasan pembayaran. |
+| `GET` | `/orders/{order_id}` | Staff / Admin / Owner (JWT) OR `SERVICE_ORDERS_READ_KEY` (`X-Service-Key` / `?service_key=...`) | Detail pesanan spesifik (`OrderOut`) lengkap beserta metadata customer/buyer, item produk (dengan field `product_name`), invoice, `fulfillment_date`, `settlement_due_date`, ringkasan pembayaran, dan `payment_status`. Dilindungi guard `require_order_read_access` (scope `orders:read`). |
 | `POST` | `/orders/custom` | Staff / Admin / Owner | Buat pesanan kustom buatan seller tanpa master produk (otomatis create customer, bypass stock deduction, generate invoice, set `created_via = 'seller'`, opsional `fulfillment_date`). |
-| `POST` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Buat order baru khusus Buyer: (1) Wajib menyertakan `fulfillment_date` minimal H+1 dari tanggal order dibuat (Same-day ditolak HTTP 400); (2) Otomatis derive `customer_id` via logika `get_or_create` berbasis varian nomor HP untuk mencegah error 409 Conflict; (3) Generate `nomor_invoice` unik dengan suffix acak; (4) Validasi ketersediaan produk `is_in_stock` & batas `stock_quantity`, reservasi bahan via Optimistic Locking; (5) Exception handling terpusat yang mereturn HTTP 400 jika ada kesalahan data. |
+| `POST` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Buat order baru khusus Buyer: (1) Wajib menyertakan `fulfillment_date` minimal H+1 dari tanggal order dibuat (Same-day ditolak HTTP 400); (2) Otomatis derive `customer_id` via logika `get_or_create` berbasis varian nomor HP untuk mencegah error 409 Conflict; (3) Generate `nomor_invoice` unik dengan suffix acak; (4) Validasi ketersediaan produk `is_in_stock` & batas `stock_quantity`, reservasi bahan via Pessimistic Row Locking (`SELECT ... FOR UPDATE` berurut ID bahan) dan Optimistic Locking; (5) Exception handling terpusat yang mereturn HTTP 400 jika ada kesalahan data. |
 | `GET` | `/orders/buyer` | Buyer JWT (`get_current_buyer`) | Ambil seluruh riwayat pesanan milik Buyer yang sedang login (eager-loaded dengan customer, order_items, invoice, payments, fulfillment_date, settlement_due_date). |
 | `GET` | `/orders/buyer/{id}` | Buyer JWT (`get_current_buyer`) | Detail pesanan spesifik milik Buyer (isolasi data aman antarpembeli, 404 jika bukan milik Buyer yang login). |
-| `POST` | `/orders` | `X-Service-Key` | Buat order baru via chatbot (wajib `fulfillment_date` minimal H+1, validasi ketat ketersediaan produk `is_in_stock` & batas `stock_quantity` -> HTTP 400 jika habis/melebihi stok, reservasi stok bahan via Optimistic Locking, generate invoice). |
+| `POST` | `/orders` | `X-Service-Key` | Buat order baru via chatbot (wajib `fulfillment_date` minimal H+1 dan tersimpan, validasi ketat ketersediaan produk `is_in_stock` & batas `stock_quantity` -> HTTP 400 jika habis/melebihi stok, reservasi stok bahan via Pessimistic Row Locking `SELECT ... FOR UPDATE` berurut ID bahan untuk mencegah overselling pada request serentak, Optimistic Locking, generate invoice). |
 | `GET` | `/orders/latest` | `X-Service-Key` | Ambil order terbaru pelanggan berdasarkan query `?nomor_wa=...` |
 | `POST` | `/orders/{order_id}/cancel` | `X-Service-Key` | Pembatalan otomatis oleh pelanggan (hanya jika invoice `unpaid`, stok bahan dikembalikan). |
-| `PATCH` | `/orders/{order_id}/status` | Staff / Admin / Owner | Update status pesanan (`pending`, `in_process`, `ready`, `delivered`, `picked_up`, `completed`, `cancelled`, `refunded`, `cancelled_settlement_expired`). Memvalidasi aturan transisi State Machine (termasuk transisi `cancelled` -> `refunded` untuk menyelesaikan refund manual). Memicu webhook notifikasi `/ready` jika status menjadi `ready`, atau sinyal 2.b webhook `/refunded` jika status menjadi `refunded` (SETELAH `db.commit()`). |
+| `PATCH` | `/orders/{order_id}/status` | Staff / Admin / Owner | Update status pesanan (`pending`, `in_process`, `ready`, `delivered`, `picked_up`, `completed`, `cancelled`, `refunded`, `cancelled_settlement_expired`). Memvalidasi aturan transisi State Machine (termasuk transisi `cancelled` -> `refunded` untuk menyelesaikan refund manual, serta dukungan transisi pesanan DP ke `ready`/`picked_up` tanpa memaksakan pelunasan online untuk mendukung pelunasan tunai di toko). Memicu webhook notifikasi asynchronous ke Chatbot: `/processing` (status `in_process`), `/ready` (status `ready`), `/completed` (status `completed`), atau sinyal 2.b webhook `/refunded` jika status `refunded` (SETELAH `db.commit()`). |
 | `POST` | `/orders/{order_id}/refund` | Staff/Admin/Owner OR `X-Service-Key` | Memproses pembatalan sekaligus refund untuk pesanan berstatus DP/Lunas. Memicu API Midtrans, rollback stok bahan, dan trigger webhook `/refunded` ke Chatbot SETELAH database commit. Jika dipanggil Chatbot (`X-Service-Key`), memvalidasi kepemilikan `nomor_wa` dan status wajib `pending`. Mengembalikan payload DTO dengan penanda `refund_mode` (`auto` jika direct API Midtrans berhasil dengan status akhir order `refunded`, atau `manual` jika metode VA/QRIS 412 yang mewajibkan transfer manual dengan status order `cancelled`). Jika dipanggil oleh Admin/Seller, pesanan langsung bertransisi menjadi `refunded` dan memicu sinyal 2.b webhook `/refunded`. |
 | `GET` | `/orders/{id}/invoice/pdf` | Buyer Pemilik / Staff / Admin / Owner | Generate dan unduh PDF Invoice pesanan Toti Cakery (ReportLab). Mengembalikan `StreamingResponse` dengan `Content-Type: application/pdf` dan header `Content-Disposition: attachment; filename="Invoice-TotiCakery-{order_id}.pdf"`. Eager-loading order, customer, items, product, invoice, dan payments. Buyer dibatasi hanya untuk pesanan miliknya (404 jika bukan pemilik). |
 
@@ -163,7 +163,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `POST` | `/payments` | `X-Service-Key` / Buyer JWT | Charge pembayaran ke Midtrans (Bank Transfer BCA VA atau QRIS). Validasi nominal anti-tampering (tipe `full` 100%, tipe `dp` 50% dari total tagihan), hitung `settlement_due_date` otomatis (H-1 sebelum `fulfillment_date` pukul 18:00 WIB), dan verifikasi kepemilikan order untuk Buyer |
 | `POST` | `/payments/manual` | Staff / Admin / Owner (JWT) / System | Catat transaksi pembayaran manual (CASH, TRANSFER, dll.). Mengubah `payment_status` pesanan menjadi `PAID`, mempertahankan status order tetap `pending` (agar konsisten dengan alur pembayaran dan dapat dibatalkan bila perlu), serta membuat record pembayaran baru di database (beserta kolom `notes`) |
 | `GET` | `/payments/{order_id}/status` | `X-Service-Key` / Buyer JWT | Cek status tagihan, total terbayar, sisa tagihan, dan refresh transaksi pending untuk Chatbot & Buyer |
-| `POST` | `/payments/notify` (alias: `/payments/notification`) | Public Webhook | Listener webhook otomatis Midtrans (validasi signature SHA512, defensive payload check, auto-settlement invoice & order, 200 OK acknowledgment jika order tidak ditemukan di database) |
+| `POST` | `/payments/notify` (alias: `/payments/notification`) | Public Webhook | Listener webhook otomatis Midtrans (validasi signature SHA512, defensive payload check, auto-settlement invoice & order, idempotensi pencocokan transaksi direct `Payment.pg_order_id == order_id` dengan row-level locking `with_for_update()` sebelum invoice fallback, 200 OK acknowledgment jika order tidak ditemukan di database) |
 | `POST` | `/payments/check-expired-settlements` | `X-Service-Key` / Internal JWT | Background task internal untuk memeriksa pesanan DP (`partial`) yang telah melewati `settlement_due_date`, otomatis membatalkan pesanan menjadi `cancelled_settlement_expired` dan me-rollback stok bahan ke gudang |
 
 ---
@@ -185,6 +185,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | :--- | :--- | :--- | :--- |
 | `GET` | `/reports/summary` | Staff / Admin / Owner (JWT) | Ringkasan metrik dashboard Frontend Admin Site: `total_products` (int), `active_products` (int), `total_revenue` (Decimal), `total_orders` (int), dan `recent_orders` (5 pesanan terbaru lengkap dengan ID, nama customer, total harga, dan status) |
 | `GET` | `/reports/financial` | Staff / Admin / Owner (JWT) | Laporan komprehensif Laba/Rugi (P&L): `revenue`/`total_revenue`, `cash_received` (akumulasi arus kas masuk riil periode ini dengan integritas historis), `cash_refunded` (total arus kas keluar via refund pada periode ini), `net_cash_flow` (`cash_received - cash_refunded`), `hpp_total`/`total_hpp_cost`, `gross_profit`, `expenses_total`/`total_expenses`, `net_profit` (termasuk pendapatan DP hangus), `outstanding_payments` (akumulasi piutang kumulatif seluruh order non-cancelled per titik `end_date`), `non_refundable_dp_income`/`other_income` (pendapatan lain-lain dari DP pesanan yang dibatalkan tanpa refund), `product_profitability`/`full_product_profitability` (rincian qty terjual, revenue, HPP, gross profit, margin % per produk), dan `supplier_spending` (total belanja dan frekuensi PO per supplier). Menggunakan basis tanggal pembayaran lunas yang konsisten (menghindari pergeseran periode) dan mengeluarkan seluruh order unpaid/pending dari HPP & profit. |
+| `GET` | `/reports/financial-summary` | `SERVICE_FINANCIAL_SUMMARY_KEY` (`X-Service-Key` / `?service_key=...`) / Internal JWT | Ringkasan cepat laporan keuangan (`FinancialReportSummary`) untuk Chatbot atau internal: omzet kotor (`omzet_kotor`), modal HPP (`modal_hpp`), laba kotor (`laba_kotor`), margin persen (`margin_persen`), total pesanan (`total_pesanan`), dan rata-rata nilai pesanan (`aov`). Scope `reports:summary`. |
 | `GET` | `/reports/analytics` | Staff / Admin / Owner (JWT) | Analitik penjualan bulanan, tren produk terlaris, dan distribusi rating |
 
 ---
@@ -242,9 +243,11 @@ Backend FastAPI mengirimkan notifikasi HTTP asynchronous (fire-and-forget, non-b
 
 | Target Chatbot Endpoint | Pemicu (Trigger Event) | Header Autentikasi | Request Body | Deskripsi |
 | :--- | :--- | :--- | :--- | :--- |
-| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/ready` | Update status pesanan ke `ready` (`PATCH /orders/{order_id}/status`) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim pesan WA ke pelanggan bahwa pesanan kue sudah selesai dan siap diambil/dikirim. |
-| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/paid` | Transaksi pembayaran berhasil settlement DP / Lunas (`_apply_transaction_status` pada Midtrans webhook & status check) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim notifikasi konfirmasi pembayaran berhasil ke WhatsApp pelanggan. |
-| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/refunded` | **2 Sinyal Pemicu** (Lihat rincian di bawah):<br>1. Sinyal Auto Refund (QRIS API sukses)<br>2. Sinyal Manual Refund Completed (Admin mark as `refunded`) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot bahwa dana pesanan pelanggan telah berhasil direfund sehingga Chatbot dapat meneruskan notifikasi WhatsApp ke pelanggan. |
+| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/processing` | Pesanan mulai diproses (`in_process`) via update status atau auto-settlement | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim pesan WA ke pelanggan bahwa pesanan kue sedang diproses oleh dapur (`event: "processing"`). |
+| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/ready` | Update status pesanan ke `ready` (`PATCH /orders/{order_id}/status`) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim pesan WA ke pelanggan bahwa pesanan kue sudah selesai dan siap diambil/dikirim (`event: "ready"`). |
+| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/completed` | Update status pesanan ke `completed` (`PATCH /orders/{order_id}/status`) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot bahwa pesanan telah tuntas diselesaikan/diambil (`event: "completed"`). |
+| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/paid` | Transaksi pembayaran berhasil settlement DP / Lunas (`_apply_transaction_status` pada Midtrans webhook & status check) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot agar mengirim notifikasi konfirmasi pembayaran berhasil ke WhatsApp pelanggan (`event: "paid"`). |
+| `POST {CHATBOT_URL}/webhook/internal/orders/{order_id}/refunded` | **2 Sinyal Pemicu** (Lihat rincian di bawah):<br>1. Sinyal Auto Refund (QRIS API sukses)<br>2. Sinyal Manual Refund Completed (Admin mark as `refunded`) | `X-Internal-Key: <CHATBOT_INTERNAL_KEY>` | *(None / Empty)* | Memberitahu Chatbot bahwa dana pesanan pelanggan telah berhasil direfund sehingga Chatbot dapat meneruskan notifikasi WhatsApp ke pelanggan (`event: "refunded"`). |
 
 #### Skenario 2 Pemicu Webhook Refund (`/refunded`):
 1. **Sinyal 2.a: Auto Refund (QRIS Direct Refund Successful)**
@@ -293,7 +296,10 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
     "database": "disconnected"
   }
   ```
-### I. Wishlist (`/buyers/me/wishlist`)
+
+---
+
+### P. Wishlist (`/buyers/me/wishlist`)
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
@@ -303,7 +309,7 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
 
 ---
 
-### J. Manajemen Pembeli / Admin Buyer (`/admin/buyers`)
+### Q. Manajemen Pembeli / Admin Buyer (`/admin/buyers`)
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
@@ -313,7 +319,7 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
 
 ---
 
-### K. Manajemen WhatsApp Chatbot Admin (`/admin/whatsapp`)
+### R. Manajemen WhatsApp Chatbot Admin (`/admin/whatsapp`)
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
@@ -323,7 +329,7 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
 
 ---
 
-### L. Public Kontak & Toko (`/public`)
+### S. Public Kontak & Toko (`/public`)
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
