@@ -1,4 +1,4 @@
-"""Read-only preflight verification for adopting an existing database before stamping revision 20261005_01."""
+"""Read-only preflight verification before adopting a known Alembic baseline."""
 import argparse
 import asyncio
 import re
@@ -111,16 +111,24 @@ def _validate_stock_ledger(stock, movements) -> List[str]:
     return errors
 
 
-async def run_preflight_checks(target_engine: AsyncEngine) -> Tuple[bool, List[str], List[str]]:
+async def run_preflight_checks(
+    target_engine: AsyncEngine,
+    target_revision: str = "20261005_01",
+) -> Tuple[bool, List[str], List[str]]:
     """
     Run read-only inspection on the target database to verify all prerequisites
-    required before stamping Alembic revision 20261005_01.
+    required before stamping the requested Alembic baseline. Supported
+    baselines are 20261005_01 (before refund objects) and 20261008_01 (after
+    the refund migration, with its schema and data semantics verified).
 
     Returns:
         (is_valid, errors, notices)
     """
     errors: List[str] = []
     notices: List[str] = []
+
+    if target_revision not in {"20261005_01", "20261008_01"}:
+        return False, [f"Unsupported adoption revision: {target_revision}"], notices
 
     # 1. Verify dialect
     if target_engine.dialect.name != "postgresql":
@@ -139,22 +147,22 @@ async def run_preflight_checks(target_engine: AsyncEngine) -> Tuple[bool, List[s
             ))).scalars().all()
             errors.append(
                 f"Database already has an alembic_version table ({version_rows!r}). "
-                "Do not adopt with 'stamp 20261005_01'; inspect its revision history first."
+                f"Do not adopt with 'stamp {target_revision}'; inspect its revision history first."
             )
 
-        # Revision 20261008_01 unconditionally creates this table. Its enum is
-        # reused with checkfirst=True, but an existing type/table cannot be
-        # proven to have the migration's exact schema and data semantics here.
+        # Revision 20261008_01 creates refund objects and backfills legacy
+        # refunded payments. Never replay it over existing objects. A database
+        # adopted at that revision must match its schema and data semantics.
         refund_enum_exists = await connection.scalar(text(
             "SELECT EXISTS (SELECT 1 FROM pg_type t "
             "JOIN pg_namespace n ON n.oid = t.typnamespace "
             "WHERE n.nspname = current_schema() AND t.typname = 'refundstatusenum')"
         ))
-        if "refund_transactions" in tables or refund_enum_exists:
+        if target_revision == "20261005_01" and ("refund_transactions" in tables or refund_enum_exists):
             errors.append(
                 "Refund migration objects already exist (refund_transactions and/or refundstatusenum). "
-                "Their compatibility and legacy refund data cannot be proven safe for revision 20261008_01; "
-                "stop and reconcile them manually on a verified backup before adoption."
+                "Do not stamp 20261005_01 because revision 20261008_01 would be replayed; "
+                "audit the objects and adopt at 20261008_01 instead."
             )
 
         # 3. Check core tables through 20261005_01
@@ -303,22 +311,151 @@ async def run_preflight_checks(target_engine: AsyncEngine) -> Tuple[bool, List[s
                     "order IDs before status refresh or webhook processing."
                 )
 
+        if target_revision == "20261008_01":
+            # These objects belong to revisions after the requested adoption
+            # point. If any exist, stamping 20261008_01 would make Alembic
+            # replay their non-idempotent CREATE/ADD operations.
+            later_objects = {
+                "email_outbox": "table",
+                "email_outbox_audit": "table",
+                "order_accessories": "table",
+            }
+            present_later_tables = sorted(name for name in later_objects if name in tables)
+            if present_later_tables:
+                errors.append(
+                    "Schema contains tables from revisions after 20261008_01: "
+                    + ", ".join(present_later_tables)
+                    + "; do not stamp this baseline."
+                )
+            if "payments" in tables:
+                payment_columns_now = await connection.run_sync(
+                    lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("payments")}
+                )
+                if "pg_order_id" in payment_columns_now:
+                    errors.append("Column 'payments.pg_order_id' already exists beyond baseline 20261008_01.")
+            if "order_items" in tables:
+                order_item_columns = await connection.run_sync(
+                    lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("order_items")}
+                )
+                later_snapshot_columns = sorted(
+                    {"product_name_snapshot", "unit_price_snapshot"} & order_item_columns
+                )
+                if later_snapshot_columns:
+                    errors.append(
+                        "Columns from revisions after 20261008_01 already exist in 'order_items': "
+                        + ", ".join(later_snapshot_columns)
+                        + "; do not stamp this baseline."
+                    )
+
+            if "refund_transactions" not in tables or not refund_enum_exists:
+                errors.append(
+                    "Revision 20261008_01 requires both refund_transactions and refundstatusenum; "
+                    "the existing schema does not match this adoption point."
+                )
+            else:
+                refund_columns = await connection.run_sync(
+                    lambda sync_conn: inspect(sync_conn).get_columns("refund_transactions")
+                )
+                columns_by_name = {column["name"]: column for column in refund_columns}
+                required_refund_columns = {
+                    "id", "payment_id", "refund_amount", "status", "reason", "gateway_ref",
+                    "initiated_by", "initiated_source", "created_at", "completed_at",
+                }
+                missing_refund_columns = sorted(required_refund_columns - set(columns_by_name))
+                if missing_refund_columns:
+                    errors.append(
+                        "Missing columns in 'refund_transactions' for 20261008_01: "
+                        + ", ".join(missing_refund_columns)
+                    )
+                status_type = columns_by_name.get("status", {}).get("type")
+                if getattr(status_type, "name", None) != "refundstatusenum":
+                    errors.append("'refund_transactions.status' must use enum 'refundstatusenum'.")
+
+                refund_status_values = (await connection.execute(text(
+                    "SELECT e.enumlabel FROM pg_enum e "
+                    "JOIN pg_type t ON t.oid = e.enumtypid "
+                    "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                    "WHERE n.nspname = current_schema() AND t.typname = 'refundstatusenum' "
+                    "ORDER BY e.enumsortorder"
+                ))).scalars().all()
+                if refund_status_values != ["pending", "completed", "failed"]:
+                    errors.append(
+                        "Enum 'refundstatusenum' must contain exactly pending, completed, failed "
+                        f"in migration order; found {refund_status_values!r}."
+                    )
+
+                refund_indexes = await connection.run_sync(
+                    lambda sync_conn: inspect(sync_conn).get_indexes("refund_transactions")
+                )
+                index_names = {index["name"] for index in refund_indexes}
+                required_refund_indexes = {
+                    "ix_refund_transactions_id", "ix_refund_transactions_payment_id",
+                }
+                if not required_refund_indexes <= index_names:
+                    errors.append(
+                        "Missing 20261008_01 refund indexes: "
+                        + ", ".join(sorted(required_refund_indexes - index_names))
+                    )
+                if not any(
+                    index.get("unique") and index.get("column_names") == ["gateway_ref"]
+                    for index in refund_indexes
+                ):
+                    # PostgreSQL may expose a unique constraint as a constraint
+                    # rather than a standalone index, so check constraints too.
+                    uniques = await connection.run_sync(
+                        lambda sync_conn: inspect(sync_conn).get_unique_constraints("refund_transactions")
+                    )
+                    if not any(unique.get("column_names") == ["gateway_ref"] for unique in uniques):
+                        errors.append("'refund_transactions.gateway_ref' must have a unique constraint/index.")
+
+                refund_fks = await connection.run_sync(
+                    lambda sync_conn: inspect(sync_conn).get_foreign_keys("refund_transactions")
+                )
+                fk_pairs = {
+                    (tuple(fk.get("constrained_columns") or ()), fk.get("referred_table"))
+                    for fk in refund_fks
+                }
+                if (("payment_id",), "payments") not in fk_pairs or (("initiated_by",), "users") not in fk_pairs:
+                    errors.append("Refund foreign keys to payments and users must match revision 20261008_01.")
+
+                if "payments" in tables and {"id", "jumlah_bayar", "payment_status"} <= payment_cols:
+                    refunded_mismatch_count = await connection.scalar(text("""
+                        SELECT count(*) FROM payments p
+                        WHERE lower(CAST(p.payment_status AS TEXT)) = 'refunded'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM refund_transactions r
+                              WHERE r.payment_id = p.id
+                                AND r.status = 'completed'
+                              GROUP BY r.payment_id
+                              HAVING sum(r.refund_amount) = p.jumlah_bayar
+                          )
+                    """))
+                    if refunded_mismatch_count:
+                        errors.append(
+                            f"{refunded_mismatch_count} refunded payment(s) lack completed refund rows "
+                            "totalling their payment amount; reconcile before adopting 20261008_01."
+                        )
+
     is_valid = len(errors) == 0
     return is_valid, errors, notices
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Verify existing PostgreSQL database prerequisites before stamping revision 20261005_01"
+        description="Verify existing PostgreSQL database prerequisites before stamping a known baseline"
+    )
+    parser.add_argument(
+        "--target-revision", choices=("20261005_01", "20261008_01"), default="20261005_01",
+        help="known schema revision to adopt (default: 20261005_01, before refund objects)",
     )
     parser.add_argument(
         "--stamp", action="store_true",
-        help="if all preflight checks pass with 0 errors, execute 'alembic stamp 20261005_01'",
+        help="if all preflight checks pass with 0 errors, stamp the selected target revision",
     )
     args = parser.parse_args()
 
-    print("Running read-only preflight verification for 20261005_01 adoption...\n")
-    is_valid, errors, notices = asyncio.run(run_preflight_checks(engine))
+    print(f"Running read-only preflight verification for {args.target_revision} adoption...\n")
+    is_valid, errors, notices = asyncio.run(run_preflight_checks(engine, args.target_revision))
     asyncio.run(engine.dispose())
 
     if notices:
@@ -334,18 +471,21 @@ def main() -> None:
         print("\nAdoption preflight failed. Stamping stopped without modifying the database.")
         raise SystemExit(1)
 
-    print("[PASS] All schema and data prerequisites for revision 20261005_01 are met.")
+    print(f"[PASS] Schema and data checks for revision {args.target_revision} passed.")
 
     if args.stamp:
         from alembic import command
         from alembic.config import Config
 
         config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-        command.stamp(config, "20261005_01")
-        print("Database successfully stamped at Alembic revision 20261005_01.")
-        print("Next step: Run 'alembic upgrade head' to apply remaining revisions (20261008_01 through 20261015_01).")
+        command.stamp(config, args.target_revision)
+        print(f"Database successfully stamped at Alembic revision {args.target_revision}.")
+        print(f"Next step: Run 'alembic upgrade head' to apply revisions after {args.target_revision}.")
     else:
-        print("Dry-run preflight successful. Run with --stamp to apply Alembic stamp 20261005_01.")
+        print(
+            f"Dry-run preflight successful. Add --stamp to adopt {args.target_revision}; "
+            "otherwise this check made no database changes."
+        )
 
 
 if __name__ == "__main__":

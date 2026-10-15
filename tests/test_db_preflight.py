@@ -24,6 +24,17 @@ async def test_preflight_rejects_non_postgresql_engine():
     assert any("only PostgreSQL is supported" in err for err in errors)
 
 
+@pytest.mark.asyncio
+async def test_preflight_rejects_unverified_adoption_revision():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    is_valid, errors, notices = await run_preflight_checks(engine, "head")
+    await engine.dispose()
+
+    assert not is_valid
+    assert errors == ["Unsupported adoption revision: head"]
+    assert notices == []
+
+
 def test_stock_name_index_accepts_postgres_deparsed_migration_expression():
     row = SimpleNamespace(
         access_method="btree", is_unique=True, is_valid=True, is_ready=True,

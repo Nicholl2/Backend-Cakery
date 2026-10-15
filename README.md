@@ -104,20 +104,23 @@ python -m app.db_bootstrap --confirm-empty
 
 This command refuses any database that already has tables or custom enum types. It creates the schema from the current SQLAlchemy models, applies extensions/indexes, and stamps Alembic at the current head (`20261015_01`). Do not run `alembic upgrade head` directly against a blank database: the historical migration chain starts from an existing application schema, not from a blank PostgreSQL database.
 
-For a database that already has an `alembic_version` row, back it up and use `alembic upgrade head` after reviewing the pending revisions. For an existing application database without an Alembic revision, do not run `upgrade head` or blindly stamp head. Run the read-only preflight tool to verify schema and data prerequisites, including the exact unique stock-name index and ledger balances. It fails closed if refund migration objects already exist because their schema/data cannot safely be adopted by the historical refund revision:
+For a database that already has an `alembic_version` row, back it up and use `alembic upgrade head` after reviewing the pending revisions. For an existing application database without an Alembic revision, do not run `upgrade head` or blindly stamp head. First take a verified backup and rehearse on a restored clone. The read-only preflight checks schema/data prerequisites, including the exact unique stock-name index and ledger balances. If the database already includes the refund migration, adopt that exact revision instead of replaying it:
 
 ```bash
-# 1. Read-only audit (stops if any prerequisite is unmet):
+# Choose exactly one baseline, run its read-only audit, then stamp with the same target.
+# For a schema before refund_transactions:
 python -m app.db_preflight
-
-# 2. Stamp 20261005_01 (only if preflight passes with 0 errors):
 python -m app.db_preflight --stamp
 
-# 3. Apply subsequent revisions (refund transactions, outbox, and payment order references):
+# Or, if the schema already matches 20261008_01:
+python -m app.db_preflight --target-revision 20261008_01
+python -m app.db_preflight --target-revision 20261008_01 --stamp
+
+# Apply revisions after the adopted baseline:
 alembic upgrade head
 ```
 
-If the baseline comparison fails, stop and prepare a database-specific reconciliation plan; never reset the existing database.
+The 20261008_01 audit requires the refund table, enum, indexes, foreign keys, and refund totals to match that migration, and rejects objects introduced by later revisions to prevent duplicate DDL. If the audit or baseline comparison fails, stop and prepare a database-specific reconciliation plan; never reset the existing database. After 20261014_03, reconcile pending Midtrans payments using exact trusted gateway references because `pg_order_id` is nullable and historical values are not backfilled automatically.
 
 API startup note: The API lifespan no longer performs runtime DDL migrations during startup. It verifies connectivity and schema presence, and only runs idempotent initial master data seeding if the `roles` table is empty. Critical initialization failures cause the API to fail fast rather than starting in a degraded state.
 

@@ -222,8 +222,8 @@ async def test_postgres_adoption_preflight_blocks_invalid_database():
 
 @pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.parametrize(("case", "expected_error"), [
-    ("refund_objects", "Refund migration objects already exist"),
-    ("refund_enum_only", "Refund migration objects already exist"),
+    ("refund_objects", "Do not stamp 20261005_01"),
+    ("refund_enum_only", "Do not stamp 20261005_01"),
     ("missing_stock_index", "does not match the required valid UNIQUE btree expression"),
     ("nonunique_stock_index", "does not match the required valid UNIQUE btree expression"),
     ("wrong_stock_index_expression", "does not match the required valid UNIQUE btree expression"),
@@ -308,5 +308,68 @@ async def test_postgres_preflight_invalid_state_fails_before_stamp(case, expecte
             "SELECT to_regclass('alembic_version') IS NOT NULL"
         ))
     assert not version_table_exists, "failed preflight must not stamp or create alembic_version"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_postgres_adopts_verified_refund_revision_then_upgrades_to_head():
+    """A schema at 20261008_01 can be adopted without replaying that revision."""
+    url = _test_url("TEST_POSTGRES_UPGRADE_URL")
+    engine = create_async_engine(url)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.drop_all)
+        await connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        await connection.run_sync(Base.metadata.create_all)
+        # Base.metadata reflects the current schema. Revert only later-revision
+        # objects to represent the database immediately after 20261008_01.
+        await connection.execute(text("DROP TABLE email_outbox_audit"))
+        await connection.execute(text("DROP TABLE email_outbox"))
+        await connection.execute(text("DROP TABLE order_accessories"))
+        await connection.execute(text("ALTER TABLE payments DROP COLUMN pg_order_id"))
+        await connection.execute(text("ALTER TABLE order_items DROP COLUMN unit_price_snapshot"))
+        await connection.execute(text("ALTER TABLE order_items DROP COLUMN product_name_snapshot"))
+        await connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        await connection.execute(text(
+            "CREATE UNIQUE INDEX uq_stock_items_normalized_name "
+            "ON stock_items (lower(trim(nama_item)))"
+        ))
+
+    child_env = os.environ.copy()
+    child_env.update({
+        "DATABASE_URL": url,
+        "SECRET_KEY": "local-test-only",
+        "SERVICE_API_KEY": "local-test-only",
+        "ENVIRONMENT": "test",
+    })
+    preflight = subprocess.run(
+        [sys.executable, "-m", "app.db_preflight", "--target-revision", "20261008_01"],
+        cwd=os.getcwd(), env=child_env, capture_output=True, text=True, check=False,
+    )
+    assert preflight.returncode == 0, preflight.stdout + preflight.stderr
+
+    stamp = subprocess.run(
+        [sys.executable, "-m", "app.db_preflight", "--target-revision", "20261008_01", "--stamp"],
+        cwd=os.getcwd(), env=child_env, capture_output=True, text=True, check=False,
+    )
+    assert stamp.returncode == 0, stamp.stdout + stamp.stderr
+    upgrade = subprocess.run(
+        [sys.executable, "-c", "from alembic.config import main; main()", "upgrade", "head"],
+        cwd=os.getcwd(), env=child_env, capture_output=True, text=True, check=False,
+    )
+    assert upgrade.returncode == 0, upgrade.stdout + upgrade.stderr
+
+    async with engine.connect() as connection:
+        revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
+        payment_columns = {column["name"] for column in await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("payments")
+        )}
+        order_item_columns = {column["name"] for column in await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("order_items")
+        )}
+        tables = set(await connection.run_sync(lambda sync_conn: inspect(sync_conn).get_table_names()))
+    assert revision == "20261015_01"
+    assert "pg_order_id" in payment_columns
+    assert {"product_name_snapshot", "unit_price_snapshot"} <= order_item_columns
+    assert {"email_outbox", "email_outbox_audit", "order_accessories"} <= tables
     await engine.dispose()
 
