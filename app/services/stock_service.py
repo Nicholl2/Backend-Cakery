@@ -42,7 +42,22 @@ async def update_stock(db: AsyncSession, stock_id: int, data: StockUpdate) -> St
             func.lower(func.trim(StockItem.nama_item)) == changes["nama_item"].strip().lower()))
         if result.scalars().first():
             raise HTTPException(409, "Material dengan nama tersebut sudah terdaftar.")
-    return await stock_repo.update(db, item, data)
+    updated_item = await stock_repo.update(db, item, data, commit=False)
+
+    if changes.get("harga_per_satuan") is not None:
+        rows = await db.execute(
+            select(Recipe.product_id)
+            .where(Recipe.stock_item_id == item.id)
+            .distinct()
+        )
+        for (product_id,) in rows.all():
+            await product_repo.calculate_and_update_product_price(
+                db, product_id, commit=False
+            )
+
+    await db.commit()
+    await db.refresh(updated_item)
+    return updated_item
 
 
 async def adjust_stock(db: AsyncSession, stock_id: int, data: StockAdjustmentCreate, user_id: int) -> StockItem:

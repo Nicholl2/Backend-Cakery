@@ -42,13 +42,21 @@ async def get_all(db: AsyncSession, kategori: Optional[str] = None) -> list[Stoc
     return result.scalars().all()
 
 
-async def update(db: AsyncSession, item: StockItem, data: StockUpdate) -> StockItem:
+async def update(
+    db: AsyncSession,
+    item: StockItem,
+    data: StockUpdate,
+    commit: bool = True,
+) -> StockItem:
     for field, value in data.model_dump(exclude_unset=True).items():
-        if field == "alert_min_stok" and value is None:
+        if value is None:
             continue
         setattr(item, field, value)
-    await db.commit()
-    await db.refresh(item)
+    if commit:
+        await db.commit()
+        await db.refresh(item)
+    else:
+        await db.flush()
     return item
 
 

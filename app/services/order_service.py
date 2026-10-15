@@ -341,22 +341,25 @@ async def create_new_order(
         )
         committed_order_id = order_obj.id
 
-        # Persist seller in-app notifications in the same transaction as the order.
-        # Notifications and email outbox entries are best effort. Keep failures
-        # inside a savepoint so they cannot invalidate the order transaction.
+        # Persist seller in-app notifications in their own savepoint so an
+        # email outbox failure cannot roll them back.
         try:
             async with db.begin_nested():
                 from app.services.notification_service import notify_order_created
                 await notify_order_created(db, order_obj, actor_buyer=actor_buyer)
+        except Exception:
+            logger.exception("Order notification persistence failed for order %s", committed_order_id)
 
-                if email_seller_on_commit:
+        if email_seller_on_commit:
+            try:
+                async with db.begin_nested():
                     customer = await db.get(Customer, customer_id)
                     if customer is not None:
                         order_obj.customer = customer
                     from app.services.email_outbox_service import enqueue_new_order_for_sellers
                     await enqueue_new_order_for_sellers(db, order_obj)
-        except Exception:
-            logger.exception("Order notification/outbox enqueue failed for order %s", committed_order_id)
+            except Exception:
+                logger.exception("Order email outbox enqueue failed for order %s", committed_order_id)
 
         # ── 7. Commit & return dengan relasi ter-load ─────────────────────────
         await db.commit()
@@ -682,6 +685,20 @@ async def get_customer_latest_order(db: AsyncSession, nomor_wa: str) -> Order:
     return await _attach_payment_amounts(db, order)
 
 
+async def _enqueue_order_status_email_best_effort(
+    db: AsyncSession,
+    order: Order,
+    new_status: str,
+) -> None:
+    """Keep a missing or unavailable email outbox from blocking order status changes."""
+    try:
+        async with db.begin_nested():
+            from app.services.email_outbox_service import enqueue_order_status_for_buyer
+            await enqueue_order_status_for_buyer(db, order, new_status)
+    except Exception:
+        logger.exception("Order status email enqueue failed for order %s", order.id)
+
+
 async def get_or_create_customer_for_buyer(db: AsyncSession, buyer: Buyer) -> Customer:
     """
     Retrieve existing Customer by buyer's phone (matching across all common format variants),
@@ -807,8 +824,9 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
         await _rollback_order_stock(db, order)
 
         order.status = OrderStatusEnum.cancelled
-        from app.services.email_outbox_service import enqueue_order_status_for_buyer
-        await enqueue_order_status_for_buyer(db, order, OrderStatusEnum.cancelled.value)
+        await _enqueue_order_status_email_best_effort(
+            db, order, OrderStatusEnum.cancelled.value
+        )
         await db.commit()
         return {"status": "success", "message": "Pesanan berhasil dibatalkan"}
 
@@ -948,8 +966,7 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
     if new_status_enum != OrderStatusEnum.refunded or order.invoice.status == InvoiceStatusEnum.refunded:
         order.status = new_status_enum
     if new_status_enum != OrderStatusEnum.refunded or order.invoice.status == InvoiceStatusEnum.refunded:
-        from app.services.email_outbox_service import enqueue_order_status_for_buyer
-        await enqueue_order_status_for_buyer(db, order, new_status_enum.value)
+        await _enqueue_order_status_email_best_effort(db, order, new_status_enum.value)
         from app.services.notification_service import notify_order_status_updated
         await notify_order_status_updated(db, order, old_status_val, new_status_enum.value)
     await db.commit()

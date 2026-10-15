@@ -36,7 +36,7 @@ async def get_stock(stock_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.put("/{stock_id}", response_model=StockOut,
             dependencies=[Depends(require_admin_or_owner)],
-            summary="Edit data bahan (nama, satuan, kategori, harga, stok)")
+            summary="Edit data bahan (nama, satuan, kategori, harga per satuan, batas minimum stok)")
 async def update_stock(stock_id: int, data: StockUpdate, db: AsyncSession = Depends(get_db)):
     return await stock_service.update_stock(db, stock_id, data)
 

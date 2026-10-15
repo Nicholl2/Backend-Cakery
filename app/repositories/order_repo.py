@@ -83,6 +83,7 @@ async def get_latest_order_by_wa(db: AsyncSession, nomor_wa: str) -> Optional[Or
             selectinload(Order.customer),
             selectinload(Order.invoice).selectinload(Invoice.payments),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.accessories),
         )
         .limit(1)
     )
