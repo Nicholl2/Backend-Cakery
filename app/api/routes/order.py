@@ -131,7 +131,7 @@ async def get_buyer_order_detail(
             dependencies=[Depends(require_internal_user)],
             summary="List seluruh pesanan toko (Khusus Staff/Admin/Owner)")
 async def list_seller_orders(
-    status: Optional[OrderStatusEnum] = Query(None, description="Filter status pesanan"),
+    order_status: Optional[OrderStatusEnum] = Query(None, alias="status", description="Filter status pesanan"),
     limit: int = Query(100, ge=1, le=500, description="Jumlah data per halaman"),
     offset: int = Query(0, ge=0, description="Offset pagination"),
     db: AsyncSession = Depends(get_db),
@@ -144,7 +144,7 @@ async def list_seller_orders(
             db,
             limit=limit,
             offset=offset,
-            status=status.value if status else None,
+            status=order_status.value if order_status else None,
         )
         return [OrderOut.model_validate(o) for o in orders]
     except HTTPException:

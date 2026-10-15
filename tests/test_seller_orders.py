@@ -239,6 +239,17 @@ async def run_seller_order_tests():
         assert len(orders_list[0]["order_items"]) == 2
         print(f"✓ GET /orders returned {len(orders_list)} order with nested customer & items")
 
+        res_pending_filter = await client.get(
+            "/orders?status=pending", headers={"Authorization": f"Bearer {token_admin}"}
+        )
+        assert res_pending_filter.status_code == 200, res_pending_filter.text
+        assert [order["id"] for order in res_pending_filter.json()] == [custom_order_id]
+        res_ready_filter = await client.get(
+            "/orders?status=ready", headers={"Authorization": f"Bearer {token_admin}"}
+        )
+        assert res_ready_filter.status_code == 200, res_ready_filter.text
+        assert res_ready_filter.json() == []
+
         res_detail = await client.get(f"/orders/{custom_order_id}", headers={"Authorization": f"Bearer {token_admin}"})
         assert res_detail.status_code == 200
         detail_data = res_detail.json()

@@ -6,6 +6,12 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### Seller Order Filter & Payment Migration Audit — 2026-10-16
+- Parameter internal filter pada `GET /orders` kini bernama `order_status`, sedangkan alias query tetap `status`. Ini mencegah parameter menutupi modul `fastapi.status` di exception handler; request dengan atau tanpa `?status=` tetap kompatibel.
+- Helper test `_revision_metadata` memvalidasi deklarasi `revision` dan `down_revision`, menolak metadata hilang/duplikat/tidak literal, dan memeriksa graph migrasi lokal untuk parent hilang, root/head ambigu, siklus, atau revisi tak terjangkau.
+- Audit menemukan `payments.pg_order_id` sudah disediakan oleh migration `20261014_03_payment_midtrans_order_id` (nullable `String(100)`, unique index `uq_payments_pg_order_id`). Model `Payment` cocok; tidak dibuat migration baru. Pemeriksaan ini membandingkan source migration dan metadata model, bukan skema database aktual.
+- Regression test mempertahankan kompatibilitas query `status` dan menambahkan audit statis migration. Verifikasi lokal: `venv/bin/pytest -q tests/test_seller_orders.py tests/test_payment_migration_chain.py` — **4 passed**; tidak ada migration atau perubahan database yang dijalankan.
+
 ### Seller Custom Order Inventory Flow — 2026-10-15
 - `/orders/custom` sekarang mewajibkan tanggal pemenuhan, menerima `product_id` katalog dan aksesoris melalui `stock_item_id`/kuantitas; harga produk dan nama/harga/satuan stok disimpan sebagai snapshot.
 - Penyimpanan order mengunci stok bahan resep dan aksesoris bersama, memvalidasi saldo, lalu mengurangi stok dan membuat movement `ORDER` dalam transaksi order/invoice. Aksesoris ditagihkan sebesar biaya satuan stok yang berlaku saat order disimpan, tanpa markup.
