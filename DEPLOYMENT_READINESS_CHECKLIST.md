@@ -46,15 +46,14 @@ Create all three databases first. The readiness and upgrade fixtures drop/recrea
 5. Compare row counts, payment totals/statuses, stock balances/movements, and outbox status counts before/after. Review PostgreSQL logs and lock duration, especially the unique index creation on `payments.pg_order_id`.
 6. Do not downgrade as routine rollback. The `20261014_03` downgrade drops the `pg_order_id` column and its stored references. Require a verified backup and a tested restore/data-reconciliation plan before any downgrade.
 
-## GitHub Actions worker check
+## Docker email worker check
 
-The scheduled workflow runs every 15 minutes with `python -m app.services.email_worker --once --limit 20`. Before enabling it:
+The worker is disabled by default and starts inside the API process only when `EMAIL_WORKER_ENABLED=true`. Before enabling it on the lab Docker server:
 
-- Configure `DATABASE_URL`, `SECRET_KEY`, `SERVICE_API_KEY`, `SMTP_HOST`, and `SMTP_FROM_EMAIL` as Actions secrets. Configure `SMTP_USERNAME` and `SMTP_PASSWORD` when required by the relay. Configure `SMTP_PORT`, `SMTP_FROM_NAME`, `SMTP_USE_TLS`, `EMAIL_OUTBOX_MAX_ATTEMPTS`, and `EMAIL_OUTBOX_LEASE_SECONDS` as Actions variables as appropriate.
-- Confirm the `Validate required worker secrets` step succeeds without printing secret values.
-- Dispatch the workflow against a dedicated staging database and SMTP sink/test mailbox. Confirm exit status 0 when delivery succeeds and nonzero after a controlled SMTP rejection; the failed event must remain retryable with its attempt/error recorded.
-- Correct the SMTP failure, make the event due in the disposable test database, and confirm the next run sends it and marks it `sent`.
-- Confirm aggregate monitoring reports pending/sending/failed counts, pending and failed ages, `expired_sending`, and `oldest_expired_lease_age_seconds`. Alert on nonzero failed/expired leases and on missing or failed workflow runs.
+- Confirm the database migrations and SMTP configuration are ready using the procedures above and in `EMAIL_OUTBOX_OPERATIONS.md`.
+- Validate the worker against a staging database and SMTP sink/test mailbox before using production SMTP.
+- Set `EMAIL_WORKER_ENABLED=true` only in the lab API container environment, then recreate the container. Keep it false in tests and any deployment without a persistent process lifecycle.
+- Confirm the API container is healthy and review aggregate outbox status for pending/sending/failed counts, pending and failed ages, `expired_sending`, and `oldest_expired_lease_age_seconds`.
 - Keep `EMAIL_OUTBOX_ADMIN_TOKEN` restricted to authorized operator environments. Use the local CLI for event details and audited retry; never expose recipient, payload, or SMTP error through public endpoints/logs.
 
-Do not mark the worker rollout ready until the PostgreSQL integration workflow, populated-data migration rehearsal, and staging worker dispatch have completed with recorded evidence.
+Do not mark the worker rollout ready until the PostgreSQL integration workflow and populated-data migration rehearsal have completed with recorded evidence, and the staging worker has been validated.

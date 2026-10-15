@@ -2,15 +2,11 @@
 
 ## Deployment model
 
-`vercel.json` sends HTTP traffic to `api/index.py`; this is a serverless API deployment and does not provide an always-running process. Do not start the infinite polling worker inside an API function. This repository now supports a bounded invocation (`python -m app.services.email_worker --once --limit 20`) and includes `.github/workflows/email-outbox.yml`, which runs that batch every 15 minutes and can also be started manually. It connects directly to the same database and SMTP service; no public worker endpoint is added.
-
-The repo also has a Docker image whose default command runs Uvicorn. On an always-on Docker host, deploy a second container from the same image with the worker command and `--restart unless-stopped`. Do not assume the Vercel runtime provides that process lifecycle. If GitHub Actions is unavailable, use another external scheduler that can run this bounded command with the required secrets; on Vercel Cron, first verify the account plan and function duration limits, and configure a protected invocation mechanism before using it.
-
-Vercel's current Cron limits vary by plan (Hobby is daily; Pro and Enterprise can run as often as once per minute), and scheduled functions remain subject to function duration limits. See [Cron usage and pricing](https://vercel.com/docs/cron-jobs/usage-and-pricing) and [Function limits](https://vercel.com/docs/functions/limitations).
+The lab server runs the API in Docker and has access to the production database. The email worker runs as a background task in the API process when `EMAIL_WORKER_ENABLED=true`. It is disabled by default, including in tests. Do not enable it in serverless deployments that do not provide a persistent process lifecycle. The worker uses the API container's existing database and SMTP environment; no public worker endpoint or scheduled batch workflow is used.
 
 ## Configuration
 
-Configure SMTP/application values in the API deployment and the corresponding GitHub repository Actions secrets/variables. `EMAIL_OUTBOX_ADMIN_TOKEN` belongs only in the restricted operator environment used for the CLI; it is not needed by API requests or the scheduled worker. Never put credentials in this file or workflow source.
+Configure SMTP/application values in the API container's restricted environment file. `EMAIL_OUTBOX_ADMIN_TOKEN` belongs only in the restricted operator environment used for the CLI; it is not needed by API requests or the background worker. Never put credentials in this file or source control.
 
 | Variable | Purpose |
 | --- | --- |
@@ -20,10 +16,11 @@ Configure SMTP/application values in the API deployment and the corresponding Gi
 | `SMTP_HOST`, `SMTP_PORT` | SMTP server and port; workflow defaults port to 587 |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | SMTP authentication |
 | `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` | Sender identity; production requires sender email |
-| `SMTP_USE_TLS` | Whether SMTP STARTTLS is enabled; defaults to true in workflow |
+| `SMTP_USE_TLS` | Whether SMTP STARTTLS is enabled; defaults to true |
 | `SMTP_OPERATIONAL_INBOX` | Optional operational seller inbox where configured by the existing event producer |
-| `EMAIL_OUTBOX_MAX_ATTEMPTS` | Attempts before an event becomes `failed`; workflow defaults to 10 |
-| `EMAIL_OUTBOX_POLL_SECONDS` | Delay for the continuous worker only; bounded batch mode does not poll |
+| `EMAIL_WORKER_ENABLED` | Set to `true` on the lab Docker API deployment to start the background worker; defaults to `false` |
+| `EMAIL_OUTBOX_MAX_ATTEMPTS` | Attempts before an event becomes `failed`; defaults to 10 |
+| `EMAIL_OUTBOX_POLL_SECONDS` | Delay between checks when no event is ready; defaults to 5 seconds |
 | `EMAIL_OUTBOX_LEASE_SECONDS` | Claim lease lifetime; defaults to 300 seconds and must exceed expected SMTP send duration |
 | `EMAIL_OUTBOX_ADMIN_TOKEN` | Required by the local operations CLI; store in the operator secret manager, not in API routes |
 
@@ -37,18 +34,7 @@ The complete revision chain creates the outbox and audit tables, adds worker lea
 
 ## Start and restart
 
-For the configured Vercel-style deployment, place the `Email outbox batch` workflow on the default branch, enable Actions, and set its required Actions secrets and variables. Each run processes no more than 20 due events and exits. Failed sends are recorded by the worker and retried according to the existing backoff; a subsequent scheduled run can pick them up when due. Actions scheduling is best-effort, so monitor workflow run failures and schedule delays.
-
-For a persistent Docker host, use the same built image and inject the same runtime environment as the API. Example (replace the image reference with the deployed image):
-
-```sh
-docker run -d --name toti-email-worker --restart unless-stopped \
-  --env-file /secure/path/toti-backend.env \
-  ghcr.io/your-org/toti-backend:release \
-  python -m app.services.email_worker
-```
-
-The existing image's healthcheck targets the API, so it is not a worker healthcheck. Monitor the worker container process and database backlog separately. Do not publish the operations CLI or outbox details as an HTTP endpoint.
+On the lab Docker deployment, add `EMAIL_WORKER_ENABLED=true` to the API container's environment file and recreate/redeploy that container. The existing image starts Uvicorn; the worker is started and stopped with the API application's lifecycle. Keep the flag unset or `false` in tests and other deployments. After deployment, monitor container health and outbox backlog through the restricted operator CLI. Do not publish the operations CLI or outbox details as an HTTP endpoint.
 
 ## Backlog monitoring and controlled recovery
 
@@ -63,7 +49,7 @@ python -m app.services.email_outbox_cli retry-failed --id 123 --reason "SMTP cre
 
 The `failed` command reveals recipient, payload, and the stored delivery error, so use it only in a restricted terminal and avoid copying its output into public logs/tickets. `retry-failed` only accepts an event currently in `failed`; the status reset and audit record commit together. The CLI does not accept retry requests over HTTP. Keep the audit table under normal database access controls and periodically review retry actor/reason entries.
 
-Alert on nonzero failed count, pending count exceeding the normal delivery rate, nonzero `expired_sending` or increasing `oldest_expired_lease_age_seconds`, oldest pending age exceeding the scheduler interval plus expected SMTP delay, and oldest failed age increasing. `oldest_sending_age_seconds` is event age; use expired lease metrics to detect stuck claims. Also alert on a missing/failed scheduled workflow run. Do not use recipient, payload, or SMTP error text as metric labels.
+Alert on nonzero failed count, pending count exceeding the normal delivery rate, nonzero `expired_sending` or increasing `oldest_expired_lease_age_seconds`, oldest pending age exceeding expected SMTP delay, and oldest failed age increasing. `oldest_sending_age_seconds` is event age; use expired lease metrics to detect stuck claims. Also monitor the API container and confirm the worker flag is enabled in its deployed environment. Do not use recipient, payload, or SMTP error text as metric labels.
 
 ## Delivery semantics
 

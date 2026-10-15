@@ -58,6 +58,7 @@ from app.api.routes import admin_buyer, admin_whatsapp, public
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
     import logging
     main_logger = logging.getLogger(__name__)
 
@@ -98,7 +99,20 @@ async def lifespan(app: FastAPI):
         main_logger.critical(f"Critical initialization failure during startup: {e}")
         raise
 
-    yield
+    email_worker_task = None
+    if settings.email_worker_enabled:
+        from app.services.email_worker import run_email_worker
+
+        email_worker_task = asyncio.create_task(
+            run_email_worker(), name="email-outbox-worker"
+        )
+
+    try:
+        yield
+    finally:
+        if email_worker_task is not None:
+            email_worker_task.cancel()
+            await asyncio.gather(email_worker_task, return_exceptions=True)
 
 
 app = FastAPI(

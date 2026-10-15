@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     smtp_operational_inbox: str = ""
     email_outbox_poll_seconds: int = 5
+    email_worker_enabled: bool = False
     email_outbox_max_attempts: int = 10
     email_outbox_lease_seconds: int = Field(default=300, ge=3)
     email_outbox_admin_token: str = ""
