@@ -35,11 +35,11 @@ export SERVICE_API_KEY='local-test-only'
 venv/bin/pytest -q tests/integration/
 ```
 
-Create all three databases first. The readiness and upgrade fixtures drop/recreate application tables in their dedicated `*_test` databases; the bootstrap test requires its database to be empty. Never use a shared, staging, or production database for these commands. CI creates separate databases in its PostgreSQL 16 service and runs the integration directory explicitly.
+Create all three databases first. The readiness and upgrade fixtures drop/recreate application tables in their dedicated `*_test` databases; the bootstrap test requires its database to be empty. Never use a shared, staging, or production database for these commands. CI creates separate databases in its PostgreSQL 17 service and runs the integration directory explicitly.
 
 ## Migration rehearsal
 
-1. For an empty database, run `python -m app.db_bootstrap --confirm-empty`; verify `alembic current` reports `20261014_03` and inspect the payment/outbox lease columns.
+1. For an empty database, run `python -m app.db_bootstrap --confirm-empty`; verify `alembic current` reports `20261015_01` and inspect the payment/outbox lease columns and custom-order snapshot/accessory schema.
 2. For an existing database with an Alembic revision, use a disposable clone and run `alembic upgrade head`; compare row counts and key financial/inventory/outbox data.
 3. For an existing database with tables but no revision, do not run `upgrade head` or stamp blindly. On a clone only, run `python -m app.db_preflight` to verify schema, exact inventory indexes/ledger balances, duplicate materials, and payment references. Preflight fails closed if `refund_transactions` or `refundstatusenum` already exists; reconcile those objects manually on a verified backup before retrying. Only if preflight passes with 0 errors, execute `python -m app.db_preflight --stamp` (or `alembic stamp 20261005_01`) followed by `alembic upgrade head`. The later revisions must run so legacy refund rows and outbox tables are migrated. If verification is incomplete, stop without stamping.
 4. Verify existing pending payments remain pending until exact Midtrans `transaction_id`, `order_id`, and `gross_amount` are reconciled. Backfill only an exact `order_id` obtained from a trusted Midtrans record. Otherwise resolve the payment manually; never synthesize the value from its expected format.

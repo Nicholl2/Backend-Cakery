@@ -95,7 +95,7 @@ async def test_postgres_empty_database_bootstrap_creates_current_schema_and_stam
     assert trigram["predicate"] is None
     assert trigram["operator_class"] == "gin_trgm_ops"
     assert "email gin_trgm_ops" in trigram["definition"]
-    assert revision == "20261014_03"
+    assert revision == "20261015_01"
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -136,7 +136,7 @@ async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_a
         await db.commit()
         payment_id, stock_id, movement_id, event_id = payment.id, stock.id, movement.id, event.id
 
-    # Model a database already tracked at 20261013_01, before the three new revisions.
+    # Model a database already tracked at 20261013_01, before the later revisions.
     # This is a disposable *_test database; it does not run Alembic downgrade.
     async with engine.begin() as connection:
         await connection.execute(text("DROP TABLE email_outbox_audit"))
@@ -145,6 +145,12 @@ async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_a
         await connection.execute(text("ALTER TABLE email_outbox DROP COLUMN lease_token"))
         await connection.execute(text("DROP INDEX uq_payments_pg_order_id"))
         await connection.execute(text("ALTER TABLE payments DROP COLUMN pg_order_id"))
+        # Base.metadata.create_all above reflects the current models. Remove objects
+        # introduced by the custom-order revision so this fixture represents the
+        # older schema that Alembic is about to upgrade.
+        await connection.execute(text("DROP TABLE IF EXISTS order_accessories"))
+        await connection.execute(text("ALTER TABLE order_items DROP COLUMN IF EXISTS unit_price_snapshot"))
+        await connection.execute(text("ALTER TABLE order_items DROP COLUMN IF EXISTS product_name_snapshot"))
         await connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
         await connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20261013_01')"))
 
@@ -175,7 +181,7 @@ async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_a
         assert event.status == "pending"
         assert event.attempts == 1
         assert event.payload_json == json.dumps({"payment_status": "Pending"})
-        assert revision == "20261014_03"
+        assert revision == "20261015_01"
 
     await engine.dispose()
 

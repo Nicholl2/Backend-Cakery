@@ -343,7 +343,7 @@ def main() -> None:
         config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
         command.stamp(config, "20261005_01")
         print("Database successfully stamped at Alembic revision 20261005_01.")
-        print("Next step: Run 'alembic upgrade head' to apply remaining revisions (20261008_01 through 20261014_03).")
+        print("Next step: Run 'alembic upgrade head' to apply remaining revisions (20261008_01 through 20261015_01).")
     else:
         print("Dry-run preflight successful. Run with --stamp to apply Alembic stamp 20261005_01.")
 

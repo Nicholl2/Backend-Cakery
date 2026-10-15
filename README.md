@@ -102,7 +102,7 @@ For a newly created, empty database, set `DATABASE_URL` in `.env` and initialize
 python -m app.db_bootstrap --confirm-empty
 ```
 
-This command refuses any database that already has tables or custom enum types. It creates the schema from the current SQLAlchemy models, applies extensions/indexes, and stamps Alembic at the current head (`20261014_03`). Do not run `alembic upgrade head` directly against a blank database: the historical migration chain starts from an existing application schema, not from a blank PostgreSQL database.
+This command refuses any database that already has tables or custom enum types. It creates the schema from the current SQLAlchemy models, applies extensions/indexes, and stamps Alembic at the current head (`20261015_01`). Do not run `alembic upgrade head` directly against a blank database: the historical migration chain starts from an existing application schema, not from a blank PostgreSQL database.
 
 For a database that already has an `alembic_version` row, back it up and use `alembic upgrade head` after reviewing the pending revisions. For an existing application database without an Alembic revision, do not run `upgrade head` or blindly stamp head. Run the read-only preflight tool to verify schema and data prerequisites, including the exact unique stock-name index and ledger balances. It fails closed if refund migration objects already exist because their schema/data cannot safely be adopted by the historical refund revision:
 
