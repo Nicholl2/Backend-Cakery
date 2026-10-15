@@ -54,6 +54,9 @@ async def test_postgres_empty_database_bootstrap_creates_current_schema_and_stam
         payment_columns = await connection.run_sync(
             lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("payments")}
         )
+        payment_indexes = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_indexes("payments")
+        )
         outbox_columns = await connection.run_sync(
             lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("email_outbox")}
         )
@@ -83,6 +86,11 @@ async def test_postgres_empty_database_bootstrap_creates_current_schema_and_stam
     assert {"users", "orders", "payments", "stock_movements", "refund_transactions",
             "email_outbox", "email_outbox_audit"}.issubset(tables)
     assert "pg_order_id" in payment_columns
+    payment_order_index = next(
+        index for index in payment_indexes if index["name"] == "uq_payments_pg_order_id"
+    )
+    assert payment_order_index["unique"] is True
+    assert payment_order_index["column_names"] == ["pg_order_id"]
     assert {"lease_token", "lease_expires_at"}.issubset(outbox_columns)
     assert "ix_email_outbox_lease_expiry" in outbox_indexes
     email_indexes = {index["name"]: index for index in email_indexes}

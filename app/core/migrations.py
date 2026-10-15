@@ -293,7 +293,7 @@ def _payment_order_id_index_is_compatible(index) -> bool:
 
 async def _get_payment_order_id_index(conn: AsyncConnection):
     return (await conn.execute(text("""
-        SELECT idx.relkind,
+        SELECT idx.relkind::text AS relkind,
                tbl.relname AS table_name,
                am.amname AS access_method,
                i.indisunique AS is_unique,
