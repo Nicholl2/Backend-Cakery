@@ -22,6 +22,7 @@ from app.models.order import OrderItem
 from app.services.payment_service import (
     create_midtrans_charge, process_manual_payment, process_midtrans_webhook, refresh_if_pending,
 )
+from app.services.order_service import cancel_order_by_customer
 
 
 @pytest.fixture
@@ -279,6 +280,53 @@ async def test_charge_persists_exact_midtrans_order_id_and_amount(db_session, mo
 
 
 @pytest.mark.asyncio
+async def test_uncertain_charge_keeps_reservation_and_retry_does_not_charge_again(db_session, monkeypatch):
+    db, order, _, _ = db_session
+    calls = 0
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def post(self, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise httpx.TimeoutException("response lost")
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    with pytest.raises(HTTPException) as exc:
+        await create_midtrans_charge(db, order.id, "qris", "full", Decimal("500000"))
+    assert exc.value.status_code == 502
+    pending = (await db.execute(select(Payment).where(Payment.invoice_id == order.invoice.id))).scalars().all()
+    assert len(pending) == 2
+    reserved_id = next(p.id for p in pending if p.pg_order_id)
+    reused = await create_midtrans_charge(db, order.id, "qris", "full", Decimal("500000"))
+    assert reused["payment_id"] == reserved_id
+    assert reused["pg_order_id"]
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_and_manual_payment_are_blocked_while_online_charge_pending(db_session):
+    db, order, invoice, _ = db_session
+    order_id = order.id
+    invoice.status = InvoiceStatusEnum.unpaid
+    pending = Payment(invoice_id=invoice.id, pg_order_id="pending-midtrans-order",
+                      jumlah_bayar=Decimal("500000"), payment_method="qris",
+                      payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
+    db.add(pending)
+    await db.commit()
+    with pytest.raises(HTTPException) as cancel_exc:
+        await cancel_order_by_customer(db, order_id)
+    assert cancel_exc.value.status_code == 409
+    with pytest.raises(HTTPException) as manual_exc:
+        await process_manual_payment(db, order_id, Decimal("100000"), "CASH")
+    assert manual_exc.value.status_code == 409
+    await db.refresh(order)
+    assert order.status == OrderStatusEnum.pending
+
+
+@pytest.mark.asyncio
 async def test_charge_rejects_fractional_rupiah_before_calling_midtrans(db_session, monkeypatch):
     db, order, invoice, _ = db_session
     invoice.total_tagihan = Decimal("1000001.00")
@@ -408,6 +456,77 @@ async def test_status_refresh_valid_payload_updates_payment_and_enqueues(db_sess
     assert payment.payment_status == PaymentStatusEnum.success
     event = (await db.execute(select(EmailOutbox))).scalar_one()
     assert event.event_type == "payment_status_updated"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fraud_status", [None, "challenge", "deny", "accept"])
+async def test_status_refresh_capture_requires_accepted_fraud_status(db_session, monkeypatch, fraud_status):
+    db, order, invoice, _ = db_session
+    customer = await db.get(Customer, order.customer_id)
+    db.add(Buyer(name="Capture buyer", email="capture@example.test", phone=customer.nomor_wa,
+                 password_hash="hash", is_active=True))
+    payment = Payment(invoice_id=invoice.id, pg_transaction_id="refresh-capture-txn",
+                      pg_order_id="INV-INTEGRITY-PAY-CAPTURE", jumlah_bayar=Decimal("500000"),
+                      payment_method="credit_card", payment_status=PaymentStatusEnum.pending,
+                      payment_type=PaymentTypeEnum.final)
+    db.add(payment)
+    await db.commit()
+    payload = {"transaction_id": payment.pg_transaction_id, "order_id": payment.pg_order_id,
+               "gross_amount": "500000.00", "transaction_status": "capture"}
+    if fraud_status is not None:
+        payload["fraud_status"] = fraud_status
+
+    class FakeResponse:
+        status_code = 200
+        def json(self): return payload
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, *args, **kwargs): return FakeResponse()
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    await refresh_if_pending(db, payment)
+    await db.refresh(payment)
+    if fraud_status == "accept":
+        assert payment.payment_status == PaymentStatusEnum.success
+        assert await db.scalar(select(EmailOutbox.id).limit(1)) is not None
+    else:
+        assert payment.payment_status == PaymentStatusEnum.pending
+        assert await db.scalar(select(EmailOutbox.id).limit(1)) is None
+
+
+@pytest.mark.asyncio
+async def test_status_refresh_recovers_reserved_charge_by_midtrans_order_id(db_session, monkeypatch):
+    db, _, invoice, _ = db_session
+    payment = Payment(invoice_id=invoice.id, pg_order_id="INV-INTEGRITY-PAY-RECOVERY",
+                      jumlah_bayar=Decimal("500000"), payment_method="qris",
+                      payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
+    db.add(payment)
+    await db.commit()
+    payload = {"transaction_id": "recovered-midtrans-txn", "order_id": payment.pg_order_id,
+               "gross_amount": "500000.00", "transaction_status": "settlement",
+               "actions": [{"name": "generate-qr-code", "url": "https://midtrans.example/qr"}]}
+    requested_urls = []
+
+    class FakeResponse:
+        status_code = 200
+        def json(self): return payload
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, url, **kwargs):
+            requested_urls.append(url)
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    await refresh_if_pending(db, payment)
+    await db.refresh(payment)
+    assert requested_urls[0].endswith("/INV-INTEGRITY-PAY-RECOVERY/status")
+    assert payment.pg_transaction_id == "recovered-midtrans-txn"
+    assert payment.payment_status == PaymentStatusEnum.success
+    assert payment.qris_url == "https://midtrans.example/qr"
 
 
 @pytest.mark.asyncio

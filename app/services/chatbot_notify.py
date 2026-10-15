@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import httpx
 from app.core.config import settings
@@ -7,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 async def notify_chatbot_order_event(order_id: int, event: str) -> None:
     """
-    Send async fire-and-forget HTTP POST notification to Chatbot internal webhook.
+    Send an async HTTP POST notification to Chatbot with bounded retries.
     Supported events: 'created', 'paid', 'refunded', 'ready', 'processing', 'completed'
     Target URL: {settings.chatbot_url}/webhook/internal/orders/{order_id}/{event}
     Header: X-Internal-Key: {settings.chatbot_internal_key}
@@ -21,17 +22,34 @@ async def notify_chatbot_order_event(order_id: int, event: str) -> None:
     headers = {}
     if settings.chatbot_internal_key:
         headers["X-Internal-Key"] = settings.chatbot_internal_key
+    headers["Idempotency-Key"] = f"order:{order_id}:{event}"
 
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(url, headers=headers)
-            logger.info(
-                f"[CHATBOT_WEBHOOK] Successfully notified chatbot: event='{event}', order_id={order_id}, url='{url}', status={resp.status_code}"
-            )
-    except Exception as e:
-        logger.error(
-            f"[CHATBOT_WEBHOOK_ERROR] Failed notifying chatbot for order {order_id} (event: '{event}'): {e}"
-        )
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(url, headers=headers)
+            if 200 <= resp.status_code < 300:
+                logger.info(
+                    "[CHATBOT_WEBHOOK] Notified chatbot: event='%s', order_id=%s, status=%s",
+                    event, order_id, resp.status_code,
+                )
+                return
+            last_error = RuntimeError(f"Chatbot returned HTTP {resp.status_code}")
+            # Client errors are not transient; retrying them cannot repair the
+            # request and may amplify a bad payload or credentials issue.
+            if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                break
+        except Exception as exc:
+            last_error = exc
+
+        if attempt < 3:
+            await asyncio.sleep(0.2 * (2 ** (attempt - 1)))
+
+    logger.error(
+        "[CHATBOT_WEBHOOK_ERROR] Failed notifying chatbot for order %s (event '%s') after bounded retries: %s",
+        order_id, event, last_error,
+    )
 
 
 async def notify_order_processing(order_id: int) -> None:

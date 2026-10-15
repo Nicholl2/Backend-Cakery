@@ -33,7 +33,7 @@ async def _validate_midtrans_payment_payload(
     """Reconcile gateway status data to the persisted payment and invoice."""
     transaction_id = str(payload.get("transaction_id") or "").strip()
     expected_transaction_id = str(payment.pg_transaction_id or "").strip()
-    if not expected_transaction_id or transaction_id != expected_transaction_id:
+    if not transaction_id or (expected_transaction_id and transaction_id != expected_transaction_id):
         raise ValueError("Midtrans transaction_id mismatch")
 
     invoice = await db.get(Invoice, payment.invoice_id)
@@ -55,7 +55,25 @@ async def _validate_midtrans_payment_payload(
         raise ValueError("Invalid Midtrans gross_amount") from exc
     if gross_amount != expected_amount:
         raise ValueError("Midtrans gross_amount mismatch")
+    # A reserved charge can receive a callback before the original /charge
+    # response is persisted. Bind its transaction id only after every signed /
+    # authenticated reference and amount has matched the local reservation.
+    if not expected_transaction_id:
+        payment.pg_transaction_id = transaction_id
     return invoice
+
+
+def _apply_midtrans_payment_instructions(payment: Payment, payload: dict) -> None:
+    """Recover payment instructions when the initial charge response was lost."""
+    if payment.payment_method == "bank_transfer":
+        va_numbers = payload.get("va_numbers") or []
+        if va_numbers and va_numbers[0].get("va_number"):
+            payment.va_number = str(va_numbers[0]["va_number"])
+    elif payment.payment_method == "qris":
+        for action in payload.get("actions") or []:
+            if action.get("name") == "generate-qr-code" and action.get("url"):
+                payment.qris_url = str(action["url"])
+                break
 
 async def create_midtrans_charge(
     db: AsyncSession,
@@ -114,11 +132,37 @@ async def create_midtrans_charge(
             logger.info("[PAYMENT_AUDIT] existing_pending | payment_id=%s | order_id=%s", ep.id, order_id)
             return {"payment_id": ep.id, "pg_transaction_id": ep.pg_transaction_id, "va_number": ep.va_number,
                     "qris_url": ep.qris_url, "status": ep.payment_status, "midtrans_response": None,
+                    "pg_order_id": ep.pg_order_id,
                     "message": "Tagihan pembayaran sudah ada dan masih aktif."}
 
-    # 2b. Buat request payload HTTP POST ke Midtrans API Charge (/charge)
-    # Order ID di Midtrans dikombinasikan dengan suffix agar unik
+    # Persist a local reservation before calling Midtrans. A timeout after the
+    # gateway accepted the charge must not make a retry create a second charge.
     order_id_midtrans = f"{invoice.nomor_invoice}-PAY-{int(time.time() * 1000)}-{secrets.token_hex(2).upper()}"
+    model_payment_type = PaymentTypeEnum.dp if payment_type == "dp" else PaymentTypeEnum.final
+    payment_obj = Payment(
+        invoice_id=invoice.id, pg_order_id=order_id_midtrans,
+        jumlah_bayar=amount_rounded, payment_method=payment_method,
+        payment_status=PaymentStatusEnum.pending, payment_type=model_payment_type,
+    )
+    db.add(payment_obj)
+    await db.flush()
+
+    # DP settlement logic is persisted with the reservation as well.
+    if payment_type == "dp" and order.fulfillment_date:
+        from datetime import timedelta, timezone as tz
+        wib_tz = tz(timedelta(hours=7))
+        f_dt = order.fulfillment_date
+        if f_dt.tzinfo is None:
+            f_dt = f_dt.replace(tzinfo=tz.utc)
+        f_wib = f_dt.astimezone(wib_tz)
+        h_minus_1_wib = f_wib.date() - timedelta(days=1)
+        settlement_due_wib = datetime(h_minus_1_wib.year, h_minus_1_wib.month, h_minus_1_wib.day, 18, 0, 0, tzinfo=wib_tz)
+        order.settlement_due_date = settlement_due_wib.astimezone(tz.utc)
+    elif payment_type == "full":
+        order.settlement_due_date = None
+    await db.commit()
+
+    # 2b. Buat request payload HTTP POST ke Midtrans API Charge (/charge)
     
     payload = {
         "payment_type": payment_method,
@@ -144,12 +188,16 @@ async def create_midtrans_charge(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, json=payload, headers=headers)
-            res_json = response.json()
+            try:
+                res_json = response.json()
+            except Exception:
+                res_json = {}
     except Exception as e:
         logger.error(f"Failed to charge via Midtrans: {e}")
+        # Keep the pending reservation: gateway acceptance is uncertain.
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Gagal memproses pembayaran ke Midtrans: {str(e)}"
+            detail="Status charge belum dapat dipastikan. Periksa status pembayaran sebelum mencoba kembali."
         )
     
     # 2c. Validasi status_code dari body JSON Midtrans
@@ -162,10 +210,12 @@ async def create_midtrans_charge(
             "status_message=%s | order_id=%s",
             midtrans_status_code, status_msg, order_id,
         )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Gagal membuat tagihan pembayaran: {status_msg}"
-        )
+        if response.status_code < 500 and midtrans_status_code and midtrans_status_code[0] in "45":
+            payment_obj.payment_status = PaymentStatusEnum.failed
+            await db.commit()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Gagal membuat tagihan pembayaran: {status_msg}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail="Status charge belum dapat dipastikan. Periksa status pembayaran sebelum mencoba kembali.")
         
     # 3. Ekstrak nomor VA atau QRIS URL dari respons
     va_number = None
@@ -183,42 +233,9 @@ async def create_midtrans_charge(
             
     pg_transaction_id = res_json.get("transaction_id")
     
-    # Tentukan tipe pembayaran (DP/Final) berdasarkan perbandingan tagihan
-    model_payment_type = PaymentTypeEnum.dp if payment_type == "dp" else PaymentTypeEnum.final
-    
-    # 4. Simpan record baru di tabel payments dengan status "Pending"
-    payment_obj = Payment(
-        invoice_id=invoice.id,
-        pg_transaction_id=pg_transaction_id,
-        pg_order_id=order_id_midtrans,
-        jumlah_bayar=amount_rounded,
-        payment_method=payment_method,
-        payment_status=PaymentStatusEnum.pending,
-        payment_type=model_payment_type,
-        va_number=va_number,
-        qris_url=qris_url
-    )
-    
-    await payment_repo.create_payment(db, payment_obj)
-
-    # DP settlement logic
-    if payment_type == "dp":
-        if order.fulfillment_date:
-            from datetime import timedelta, timezone as tz
-            wib_tz = tz(timedelta(hours=7))
-            f_dt = order.fulfillment_date
-            if f_dt.tzinfo is None:
-                f_dt = f_dt.replace(tzinfo=tz.utc)
-            f_wib = f_dt.astimezone(wib_tz)
-            h_minus_1_wib = f_wib.date() - timedelta(days=1)
-            settlement_due_wib = datetime(
-                h_minus_1_wib.year, h_minus_1_wib.month, h_minus_1_wib.day,
-                18, 0, 0, tzinfo=wib_tz
-            )
-            order.settlement_due_date = settlement_due_wib.astimezone(tz.utc)
-    elif payment_type == "full":
-        order.settlement_due_date = None
-
+    payment_obj.pg_transaction_id = pg_transaction_id
+    payment_obj.va_number = va_number
+    payment_obj.qris_url = qris_url
     await db.commit()
     
     logger.info(
@@ -231,6 +248,7 @@ async def create_midtrans_charge(
     return {
         "payment_id": payment_obj.id,
         "pg_transaction_id": pg_transaction_id,
+        "pg_order_id": payment_obj.pg_order_id,
         "va_number": va_number,
         "qris_url": qris_url,
         "status": payment_obj.payment_status,
@@ -405,7 +423,13 @@ async def _apply_transaction_status(
                     .with_for_update()
                 )
                 order = order_res.scalars().first()
-                if order and order.status == OrderStatusEnum.pending:
+                other_pending = await db.scalar(select(Payment.id).where(
+                    Payment.invoice_id == invoice.id,
+                    Payment.id != payment.id,
+                    Payment.payment_status == PaymentStatusEnum.pending,
+                    Payment.pg_order_id.is_not(None),
+                ).limit(1))
+                if order and order.status == OrderStatusEnum.pending and not other_pending:
                     from app.services.order_service import _rollback_order_stock
                     await _rollback_order_stock(db, order)
                     order.status = OrderStatusEnum.cancelled
@@ -584,7 +608,11 @@ async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
     if payment.payment_status != PaymentStatusEnum.pending:
         return payment  # Sudah terminal, skip
         
-    url = f"{settings.midtrans_api_url}/{payment.pg_transaction_id}/status"
+    status_reference = payment.pg_transaction_id or payment.pg_order_id
+    if not status_reference:
+        logger.warning("[PAYMENT_AUDIT] status_refresh_missing_reference | payment_id=%s", payment.id)
+        return payment
+    url = f"{settings.midtrans_api_url}/{status_reference}/status"
     encoded_key = base64.b64encode(f"{settings.midtrans_server_key}:".encode()).decode()
     headers = {
         "Authorization": f"Basic {encoded_key}",
@@ -600,6 +628,12 @@ async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
                 except ValueError as exc:
                     logger.warning("[PAYMENT_AUDIT] status_refresh_mismatch | payment_id=%s | reason=%s",
                                    payment.id, exc)
+                    return payment
+                _apply_midtrans_payment_instructions(payment, midtrans_payload)
+                if (midtrans_payload.get("transaction_status") == "capture"
+                        and str(midtrans_payload.get("fraud_status") or "").lower() != "accept"):
+                    logger.info("[PAYMENT_AUDIT] refresh_capture_not_accepted | payment_id=%s | fraud_status=%s",
+                                payment.id, midtrans_payload.get("fraud_status"))
                     return payment
                 # Commit DB terlebih dahulu sebelum memicu webhook Chatbot
                 await _apply_transaction_status(db, payment, midtrans_payload, commit=True)
@@ -848,6 +882,14 @@ async def process_manual_payment(
         db.add(invoice)
         await db.flush()
 
+    pending_online = await db.scalar(select(Payment.id).where(
+        Payment.invoice_id == invoice.id,
+        Payment.payment_status == PaymentStatusEnum.pending,
+        Payment.pg_order_id.is_not(None),
+    ).limit(1))
+    if pending_online:
+        raise HTTPException(status_code=409, detail="Pembayaran online masih pending; tunggu status gateway sebelum mencatat pembayaran manual")
+
     totals = await invoice_payment_totals(db, invoice.id)
     remaining = Decimal(str(invoice.total_tagihan)) - totals["net_paid"]
     amount = Decimal(str(amount)).quantize(Decimal("0.01"))
@@ -967,6 +1009,13 @@ async def check_expired_settlements(db: AsyncSession) -> int:
                         continue
                     # Only cancel if invoice is partial (DP paid, remaining not paid)
                     if order.invoice.status != InvoiceStatusEnum.partial:
+                        continue
+                    pending_online = await order_db.scalar(select(Payment.id).where(
+                        Payment.invoice_id == order.invoice.id,
+                        Payment.payment_status == PaymentStatusEnum.pending,
+                        Payment.pg_order_id.is_not(None),
+                    ).limit(1))
+                    if pending_online:
                         continue
 
                     await _rollback_order_stock(order_db, order)

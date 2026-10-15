@@ -12,6 +12,7 @@ from app.main import app
 from app.models.user import User
 from app.models.role import Role
 from app.models.customer import Customer
+from app.models.buyer import Buyer
 from app.models.order import Order, OrderItem, Invoice, OrderStatusEnum, InvoiceStatusEnum, MetodePengirimanEnum
 from app.models.product import Product
 from app.models.stock_item import StockItem, StockMovement, SatuanEnum, KategoriEnum
@@ -190,6 +191,27 @@ async def test_chatbot_webhooks_for_processing_and_completed(audit_test_session)
                 await order_service.update_order_status(db, 101, OrderStatusEnum.completed.value)
                 assert mock_client.post.called
                 assert "/webhook/internal/orders/101/completed" in mock_client.post.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_status_change_rolls_back_when_in_app_notification_cannot_be_persisted(audit_test_session, monkeypatch):
+    SessionLocal = audit_test_session
+    async with SessionLocal() as db:
+        db.add(Buyer(name="Buyer Budi", email="budi@example.test", phone="08123456789",
+                     password_hash="hash", is_active=True))
+        await db.commit()
+
+        async def fail_create_notification(**kwargs):
+            raise RuntimeError("notification storage unavailable")
+
+        monkeypatch.setattr("app.services.notification_service.notification_repo.create_notification",
+                            fail_create_notification)
+        with pytest.raises(RuntimeError, match="notification storage unavailable"):
+            await order_service.update_order_status(db, 101, OrderStatusEnum.in_process.value)
+
+        await db.rollback()
+        order = await db.get(Order, 101)
+        assert order.status == OrderStatusEnum.pending
 
 
 @pytest.mark.asyncio

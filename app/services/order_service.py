@@ -160,6 +160,7 @@ async def create_new_order(
             res = await db.execute(
                 select(StockItem)
                 .where(StockItem.id.in_(sorted_stock_ids))
+                .order_by(StockItem.id)
                 .with_for_update()
             )
             locked_stock_items = {s.id: s for s in res.scalars().all()}
@@ -683,6 +684,20 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Pesanan yang sudah dibayar atau dicicil tidak dapat dibatalkan secara otomatis",
             )
+
+        pending_online = await db.scalar(select(Payment.id).where(
+            Payment.invoice_id == order.invoice.id,
+            Payment.payment_status == PaymentStatusEnum.pending,
+            Payment.pg_order_id.is_not(None),
+        ).limit(1))
+        if pending_online:
+            raise HTTPException(status_code=409, detail="Pembayaran online masih pending; order tidak dapat dibatalkan sebelum status gateway dipastikan")
+        successful_payment = await db.scalar(select(Payment.id).where(
+            Payment.invoice_id == order.invoice.id,
+            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.refunded]),
+        ).limit(1))
+        if successful_payment:
+            raise HTTPException(status_code=409, detail="Pembayaran sudah diterima; gunakan alur refund untuk membatalkan order")
             
         await _rollback_order_stock(db, order)
 
@@ -743,6 +758,21 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
             detail=f"Transisi status tidak valid: '{order.status.value}' → '{new_status}'. "
                    f"Pesanan sudah dalam status '{order.status.value}'.",
         )
+
+    if new_status_enum == OrderStatusEnum.cancelled and order.invoice:
+        pending_online = await db.scalar(select(Payment.id).where(
+            Payment.invoice_id == order.invoice.id,
+            Payment.payment_status == PaymentStatusEnum.pending,
+            Payment.pg_order_id.is_not(None),
+        ).limit(1))
+        if pending_online:
+            raise HTTPException(status_code=409, detail="Pembayaran online masih pending; order tidak dapat dibatalkan sebelum status gateway dipastikan")
+        successful_payment = await db.scalar(select(Payment.id).where(
+            Payment.invoice_id == order.invoice.id,
+            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.refunded]),
+        ).limit(1))
+        if successful_payment:
+            raise HTTPException(status_code=409, detail="Pembayaran sudah diterima; gunakan alur refund untuk membatalkan order")
 
     # Jika status diubah menjadi 'cancelled' atau 'refunded' dari status sebelumnya yang bukan cancelled/refunded
     if new_status in [OrderStatusEnum.cancelled.value, OrderStatusEnum.refunded.value] and order.status not in [OrderStatusEnum.cancelled, OrderStatusEnum.refunded]:
@@ -815,15 +845,14 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
     if new_status_enum != OrderStatusEnum.refunded or order.invoice.status == InvoiceStatusEnum.refunded:
         from app.services.email_outbox_service import enqueue_order_status_for_buyer
         await enqueue_order_status_for_buyer(db, order, new_status_enum.value)
+        from app.services.notification_service import notify_order_status_updated
+        await notify_order_status_updated(db, order, old_status_val, new_status_enum.value)
     await db.commit()
 
     # Re-query order with details to avoid lazy loading issues
     order_refetched = await order_repo.get_order_with_details(db, order_id)
     await _attach_payment_amounts(db, order_refetched)
     actual_status = order_refetched.status.value if hasattr(order_refetched.status, "value") else str(order_refetched.status)
-
-    from app.services.notification_service import notify_order_status_updated
-    await notify_order_status_updated(db, order_refetched, old_status_val, actual_status)
 
     if actual_status == "ready":
         from app.services.chatbot_notify import notify_chatbot_order_event
@@ -978,6 +1007,14 @@ async def cancel_and_refund_order(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Hanya pesanan dengan status pembayaran DP/Lunas yang dapat diproses refund. Gunakan cancel biasa."
         )
+
+    pending_online = await db.scalar(select(Payment.id).where(
+        Payment.invoice_id == order.invoice.id,
+        Payment.payment_status == PaymentStatusEnum.pending,
+        Payment.pg_order_id.is_not(None),
+    ).limit(1))
+    if pending_online:
+        raise HTTPException(status_code=409, detail="Pembayaran online masih pending; pastikan status gateway sebelum refund atau pembatalan")
 
     # Panggil payment_service untuk eksekusi API Midtrans, commit DB, dan kirim webhook post-commit (jika auto)
     refund_mode = await process_refund(
