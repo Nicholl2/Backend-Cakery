@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request, status, HTTPException
+from fastapi import APIRouter, Depends, Query, Request, status, HTTPException, Header
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
@@ -164,6 +164,7 @@ async def list_seller_orders(
 async def create_order(
     request: Request,
     data: OrderCreate,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", min_length=1, max_length=200),
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
     order = await order_service.create_new_order(
@@ -176,6 +177,7 @@ async def create_order(
         due_date=data.due_date,
         fulfillment_date=data.fulfillment_date,
         payment_method_preference=data.payment_method_preference,
+        idempotency_key=idempotency_key,
     )
     return OrderOut.model_validate(order)
 

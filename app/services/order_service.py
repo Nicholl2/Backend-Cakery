@@ -6,6 +6,10 @@ from typing import Optional
 import logging
 import httpx
 import secrets
+import hashlib
+import hmac
+import json
+import re
 
 from fastapi import HTTPException, status
 from app.core.config import settings
@@ -30,6 +34,29 @@ from app.models.buyer import Buyer
 from app.schemas.order import BuyerOrderCreate, CustomOrderCreate
 
 
+_ORDER_IDEMPOTENCY_MARKER = re.compile(
+    r"\x1eorder-idempotency-v1:([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64})\x1e$"
+)
+
+
+def _order_idempotency_signature(customer_id: int, key_hash: str, fingerprint: str) -> str:
+    message = f"order-idempotency-v1:{customer_id}:{key_hash}:{fingerprint}".encode()
+    return hmac.new(settings.secret_key.encode(), message, hashlib.sha256).hexdigest()
+
+
+def _read_order_idempotency_marker(notes: Optional[str], customer_id: int):
+    if not notes:
+        return None
+    match = _ORDER_IDEMPOTENCY_MARKER.search(notes)
+    if not match:
+        return None
+    key_hash, fingerprint, signature = match.groups()
+    expected = _order_idempotency_signature(customer_id, key_hash, fingerprint)
+    if not hmac.compare_digest(signature, expected):
+        return None
+    return key_hash, fingerprint, notes[:match.start()]
+
+
 async def create_new_order(
     db: AsyncSession,
     customer_id: int,
@@ -42,10 +69,44 @@ async def create_new_order(
     payment_method_preference: Optional[str] = None,
     email_seller_on_commit: bool = True,
     actor_buyer: Optional[Buyer] = None,
+    idempotency_key: Optional[str] = None,
 ) -> Order:
     try:
         # ── 1. Cek tagihan aktif ─────────────────────────────────────────────
         await order_repo.lock_customer_for_order_creation(db, customer_id)
+
+        # Persist an authenticated marker in the existing notes column; the
+        # HMAC prevents ordinary user notes from impersonating idempotency data.
+        request_fingerprint = hashlib.sha256(json.dumps({
+            "customer_id": customer_id,
+            "items": items,
+            "metode_pengiriman": metode_pengiriman,
+            "created_via": created_via,
+            "notes": notes,
+            "due_date": due_date.isoformat() if due_date else None,
+            "fulfillment_date": fulfillment_date.isoformat() if fulfillment_date else None,
+            "payment_method_preference": payment_method_preference,
+        }, sort_keys=True, default=str, separators=(",", ":")).encode()).hexdigest()
+        key_marker = None
+        if idempotency_key:
+            key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+            signature = _order_idempotency_signature(customer_id, key_hash, request_fingerprint)
+            key_marker = f"\x1eorder-idempotency-v1:{key_hash}:{request_fingerprint}:{signature}\x1e"
+            previous_result = await db.execute(
+                select(Order).where(
+                    Order.customer_id == customer_id,
+                    Order.notes.contains(key_hash),
+                ).order_by(Order.id.desc())
+            )
+            for previous in previous_result.scalars().all():
+                marker = _read_order_idempotency_marker(previous.notes, customer_id)
+                if not marker or marker[0] != key_hash:
+                    continue
+                if marker[1] != request_fingerprint:
+                    raise HTTPException(status_code=409, detail="Idempotency-Key sudah digunakan untuk request berbeda.")
+                order = await order_repo.get_order_with_details(db, previous.id)
+                return await _attach_payment_amounts(db, order)
+
         has_active = await order_repo.check_active_unpaid_order(db, customer_id)
         if has_active:
             raise HTTPException(
@@ -68,12 +129,14 @@ async def create_new_order(
         total_harga_pesanan = Decimal("0.00")
         item_data_list: list[dict] = []
         stock_item_requirements = {}
+        stock_checked_products: dict[int, dict] = {}
 
         for item in items:
             result = await db.execute(
                 select(Product)
                 .where(Product.id == item["product_id"])
                 .options(selectinload(Product.recipes).selectinload(Recipe.stock_item))
+                .execution_options(populate_existing=True)
             )
             product = result.scalars().first()
 
@@ -100,22 +163,19 @@ async def create_new_order(
                     detail=f"Jumlah pesanan untuk '{product.nama_produk}' minimal {product.minimum_order} pcs.",
                 )
 
-            # Validasi ketersediaan manual & stok fisik produk
+            # Validate catalog flags now; physical stock is checked against the
+            # refreshed, locked stock rows below.
             if not product.is_available:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Produk '{product.nama_produk}' sedang tidak tersedia.",
                 )
-            if not product.is_in_stock or product.stock_quantity <= 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Stok produk '{product.nama_produk}' sedang habis.",
-                )
-            if jumlah > product.stock_quantity:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Jumlah pesanan ({jumlah}) melebihi stok yang tersedia ({product.stock_quantity}) untuk produk '{product.nama_produk}'.",
-                )
+            if not product.recipes:
+                raise HTTPException(status_code=400, detail=f"Stok produk '{product.nama_produk}' sedang habis.")
+            stock_checked_products[product.id] = {
+                "product": product,
+                "jumlah": stock_checked_products.get(product.id, {}).get("jumlah", 0) + jumlah,
+            }
 
             decoration_charge = Decimal(str(item.get("custom_decoration_charge", "0.00")))
             subtotal = (Decimal(str(product.harga_jual)) * jumlah) + decoration_charge
@@ -162,8 +222,37 @@ async def create_new_order(
                 .where(StockItem.id.in_(sorted_stock_ids))
                 .order_by(StockItem.id)
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
             locked_stock_items = {s.id: s for s in res.scalars().all()}
+
+            # Preserve product-level stock errors, but calculate availability
+            # from the refreshed locked stock snapshot rather than stale ORM data.
+            for product_data in stock_checked_products.values():
+                product = product_data["product"]
+                available = None
+                for recipe in product.recipes:
+                    recipe_qty = Decimal(str(recipe.jumlah_dibutuhkan or 0))
+                    if not recipe_qty.is_finite() or recipe_qty <= 0:
+                        continue
+                    stock_item = locked_stock_items.get(recipe.stock_item_id)
+                    if stock_item is None:
+                        continue  # The missing stock row receives a 422 below.
+                    recipe_available = int(Decimal(str(stock_item.stok_tersedia or 0)) // recipe_qty)
+                    available = recipe_available if available is None else min(available, recipe_available)
+
+                if available is None or available <= 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Stok produk '{product.nama_produk}' sedang habis.",
+                    )
+                if product_data["jumlah"] > available:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(f"Jumlah pesanan ({product_data['jumlah']}) melebihi stok yang tersedia "
+                                f"({available}) untuk produk '{product.nama_produk}'."),
+                    )
+
             for stock_id in sorted_stock_ids:
                 req = stock_item_requirements[stock_id]
                 total_needed = req["total_needed"]
@@ -182,16 +271,24 @@ async def create_new_order(
                         detail=f"Bahan baku ID {stock_id} tidak ditemukan.",
                     )
 
-                # Validasi stok bahan baku terkini di bawah row lock
-                if stock_item.stok_tersedia < total_needed:
+                # Conditional UPDATE is the final oversell guard. FOR UPDATE
+                # serializes PostgreSQL writers; this predicate also protects
+                # backends that ignore row locks (including SQLite tests).
+                deduction = await db.execute(
+                    update(StockItem)
+                    .where(StockItem.id == stock_id, StockItem.stok_tersedia >= total_needed)
+                    .values(
+                        stok_tersedia=StockItem.stok_tersedia - total_needed,
+                        version=StockItem.version + 1,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if deduction.rowcount != 1:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Stok bahan baku tidak mencukupi untuk memproses pesanan {product_name}",
                     )
-
-                # Kurangi stok bahan baku secara atomik
-                stock_item.stok_tersedia = stock_item.stok_tersedia - total_needed
-                stock_item.version += 1
+                await db.refresh(stock_item)
                 req["stock_item_obj"] = stock_item
 
         # ── 4. Buat Order ────────────────────────────────────────────────────
@@ -201,7 +298,7 @@ async def create_new_order(
             metode_pengiriman=MetodePengirimanEnum(metode_pengiriman),
             total_harga_pesanan=total_harga_pesanan,
             created_via=created_via,
-            notes=notes,
+            notes=(notes or "") + key_marker if key_marker else notes,
             due_date=due_date,
             fulfillment_date=fulfillment_date,
             payment_method_preference=payment_method_preference,
@@ -242,17 +339,24 @@ async def create_new_order(
                 status=InvoiceStatusEnum.unpaid,
             ),
         )
+        committed_order_id = order_obj.id
 
         # Persist seller in-app notifications in the same transaction as the order.
-        from app.services.notification_service import notify_order_created
-        await notify_order_created(db, order_obj, actor_buyer=actor_buyer)
+        # Notifications and email outbox entries are best effort. Keep failures
+        # inside a savepoint so they cannot invalidate the order transaction.
+        try:
+            async with db.begin_nested():
+                from app.services.notification_service import notify_order_created
+                await notify_order_created(db, order_obj, actor_buyer=actor_buyer)
 
-        if email_seller_on_commit:
-            customer = await db.get(Customer, customer_id)
-            if customer is not None:
-                order_obj.customer = customer
-            from app.services.email_outbox_service import enqueue_new_order_for_sellers
-            await enqueue_new_order_for_sellers(db, order_obj)
+                if email_seller_on_commit:
+                    customer = await db.get(Customer, customer_id)
+                    if customer is not None:
+                        order_obj.customer = customer
+                    from app.services.email_outbox_service import enqueue_new_order_for_sellers
+                    await enqueue_new_order_for_sellers(db, order_obj)
+        except Exception:
+            logger.exception("Order notification/outbox enqueue failed for order %s", committed_order_id)
 
         # ── 7. Commit & return dengan relasi ter-load ─────────────────────────
         await db.commit()
@@ -260,9 +364,12 @@ async def create_new_order(
         # Notifikasi WhatsApp pesanan baru ke seller via Chatbot (padanan email order_created).
         # Dikirim sesudah commit karena chatbot langsung membaca detail order lewat GET /orders/{id}.
         from app.services.chatbot_notify import notify_chatbot_order_event
-        await notify_chatbot_order_event(order_obj.id, "created")
+        try:
+            await notify_chatbot_order_event(committed_order_id, "created")
+        except Exception:
+            logger.exception("Chatbot notification failed for committed order %s", committed_order_id)
 
-        order = await order_repo.get_order_with_details(db, order_obj.id)
+        order = await order_repo.get_order_with_details(db, committed_order_id)
         return await _attach_payment_amounts(db, order)
 
     except HTTPException:
@@ -271,10 +378,8 @@ async def create_new_order(
     except Exception as e:
         await db.rollback()
         logger.error(f"DETAIL ERROR: {repr(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Gagal membuat order: {str(e)}",
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Terjadi kesalahan saat memproses pesanan.") from e
 
 
 async def create_custom_order(

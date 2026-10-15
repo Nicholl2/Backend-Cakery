@@ -2,6 +2,10 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from datetime import datetime
+import hashlib
+import hmac
+import re
+from pydantic import ValidationInfo
 from app.utils.sanitize import sanitize_text
 
 
@@ -301,6 +305,24 @@ class OrderOut(BaseModel):
     @classmethod
     def round_amounts(cls, v):
         return _round2(v)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def hide_order_idempotency_marker(cls, v, info: ValidationInfo):
+        if isinstance(v, str):
+            marker = re.search(
+                r"\x1eorder-idempotency-v1:([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64})\x1e$",
+                v,
+            )
+            customer_id = (info.data or {}).get("customer_id")
+            if marker and customer_id is not None:
+                from app.core.config import settings
+                key_hash, fingerprint, signature = marker.groups()
+                message = f"order-idempotency-v1:{customer_id}:{key_hash}:{fingerprint}".encode()
+                expected = hmac.new(settings.secret_key.encode(), message, hashlib.sha256).hexdigest()
+                if hmac.compare_digest(signature, expected):
+                    return v[:marker.start()] or None
+        return v
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
