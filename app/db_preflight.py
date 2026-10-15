@@ -16,8 +16,10 @@ def _normalized_index_expression(expression: str | None) -> str | None:
     """Normalize PostgreSQL's deparsed spelling of the migration expression."""
     if expression is None:
         return None
-    normalized = re.sub(r'[\s"]+', "", expression.lower())
-    # PostgreSQL deparses SQL trim(x) as btrim(x) in pg_get_expr.
+    # PostgreSQL may deparse SQL TRIM(x) as btrim(x), or retain the standard
+    # TRIM(BOTH FROM x) spelling depending on server/version.
+    normalized = re.sub(r'trim\s*\(\s*both\s+from\s+', "btrim(", expression.lower())
+    normalized = re.sub(r'[\s"]+', "", normalized)
     return normalized.replace("btrim(", "trim(")
 
 
@@ -168,7 +170,7 @@ async def run_preflight_checks(
         # 3. Check core tables through 20261005_01
         required_tables = {
             "users", "roles", "categories", "products", "product_images",
-            "recipes", "stock_items", "stock_movements", "price_history",
+            "recipes", "stock_items", "stock_movements", "price_histories",
             "suppliers", "purchases", "purchase_items", "faq_items", "expenses",
             "customers", "orders", "order_items", "invoices", "payments",
             "reviews", "review_images", "buyers", "otp_codes", "notifications",
@@ -455,8 +457,14 @@ def main() -> None:
     args = parser.parse_args()
 
     print(f"Running read-only preflight verification for {args.target_revision} adoption...\n")
-    is_valid, errors, notices = asyncio.run(run_preflight_checks(engine, args.target_revision))
-    asyncio.run(engine.dispose())
+
+    async def run_and_dispose():
+        try:
+            return await run_preflight_checks(engine, args.target_revision)
+        finally:
+            await engine.dispose()
+
+    is_valid, errors, notices = asyncio.run(run_and_dispose())
 
     if notices:
         print("[NOTICES / MIGRATION REQUIREMENTS]")

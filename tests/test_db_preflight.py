@@ -45,6 +45,15 @@ def test_stock_name_index_accepts_postgres_deparsed_migration_expression():
     assert _stock_name_index_is_compatible(row)
 
 
+@pytest.mark.parametrize("expression", [
+    "lower(btrim(nama_item))",
+    "lower(trim(nama_item))",
+    "lower(TRIM(BOTH FROM nama_item))",
+])
+def test_stock_name_index_normalizes_postgres_trim_spellings(expression):
+    assert _normalized_index_expression(expression) == "lower(trim(nama_item))"
+
+
 @pytest.mark.parametrize("overrides", [
     {"is_unique": False},
     {"expression": "lower(nama_item)"},
