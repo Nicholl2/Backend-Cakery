@@ -48,7 +48,7 @@ async def test_ensure_order_status_enum():
 
 @pytest.mark.asyncio
 async def test_ensure_payment_columns():
-    """Verify ensure_payment_columns adds notes and settled_at columns on PostgreSQL."""
+    """Ensure PostgreSQL receives idempotent DDL on repeated repair calls."""
     from app.core.migrations import ensure_payment_columns
 
     # 1. Non-postgres -> skips gracefully
@@ -60,12 +60,139 @@ async def test_ensure_payment_columns():
     # 2. Mock PostgreSQL dialect
     mock_conn = AsyncMock()
     mock_conn.dialect.name = "postgresql"
+    mock_conn.scalar.return_value = True
+    index_exists = False
+    index_definition = {
+        "relkind": "i", "table_name": "payments", "access_method": "btree",
+        "is_unique": True, "is_valid": True, "is_ready": True,
+        "has_no_predicate": True, "has_no_expressions": True,
+        "key_count": 1, "total_count": 1, "first_key": "pg_order_id",
+    }
+
+    async def execute_without_duplicates(statement):
+        nonlocal index_exists
+        statement = str(statement)
+        if "pg_class idx" in statement:
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(
+                first=lambda: index_definition if index_exists else None,
+            ))
+        if "CREATE UNIQUE INDEX" in statement:
+            index_exists = True
+        return SimpleNamespace(all=lambda: [])
+
+    mock_conn.execute.side_effect = execute_without_duplicates
 
     await ensure_payment_columns(mock_conn)
+    # This mock verifies repeatable statements, not the physical PostgreSQL schema.
+    await ensure_payment_columns(mock_conn)
+    mock_conn.scalar.assert_awaited()
+    assert "information_schema.columns" in str(mock_conn.scalar.await_args.args[0])
     executed_statements = [str(call[0][0]) for call in mock_conn.execute.call_args_list]
     assert any("ALTER TABLE payments ADD COLUMN IF NOT EXISTS notes TEXT;" in s for s in executed_statements)
     assert any("ALTER TABLE payments ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;" in s for s in executed_statements)
     assert any("ALTER TABLE payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;" in s for s in executed_statements)
+    assert any("ALTER TABLE payments ADD COLUMN IF NOT EXISTS pg_order_id VARCHAR(100);" in s for s in executed_statements)
+    assert any(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_pg_order_id ON payments (pg_order_id);" in s
+        for s in executed_statements
+    )
+    assert any("WHERE pg_order_id IS NOT NULL" in s and "HAVING count(*) > 1" in s for s in executed_statements)
+
+
+@pytest.mark.asyncio
+async def test_ensure_payment_columns_refuses_duplicate_midtrans_order_ids():
+    from app.core.migrations import ensure_payment_columns
+
+    mock_conn = AsyncMock()
+    mock_conn.dialect.name = "postgresql"
+    mock_conn.scalar.return_value = True
+
+    async def execute_with_duplicates(statement):
+        if "pg_class idx" in str(statement):
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(first=lambda: None))
+        return SimpleNamespace(all=lambda: [
+            SimpleNamespace(pg_order_id="duplicate-order", cnt=2),
+        ])
+
+    mock_conn.execute.side_effect = execute_with_duplicates
+
+    with pytest.raises(RuntimeError, match="duplicate non-NULL payments.pg_order_id") as exc_info:
+        await ensure_payment_columns(mock_conn)
+
+    assert "'duplicate-order' (2x)" in str(exc_info.value)
+    executed_statements = [str(call[0][0]) for call in mock_conn.execute.call_args_list]
+    assert not any("CREATE UNIQUE INDEX" in statement for statement in executed_statements)
+
+
+@pytest.mark.parametrize("index_overrides", [
+    {"is_unique": False},
+    {"first_key": "id"},
+    {"table_name": "orders"},
+])
+@pytest.mark.asyncio
+async def test_ensure_payment_columns_rejects_wrong_named_index_definition(index_overrides):
+    from app.core.migrations import ensure_payment_columns
+
+    mock_conn = AsyncMock()
+    mock_conn.dialect.name = "postgresql"
+    mock_conn.scalar.return_value = True
+    wrong_index = {
+        "relkind": "i", "table_name": "payments", "access_method": "btree",
+        "is_unique": True, "is_valid": True, "is_ready": True,
+        "has_no_predicate": True, "has_no_expressions": True,
+        "key_count": 1, "total_count": 1, "first_key": "pg_order_id",
+    }
+    wrong_index.update(index_overrides)
+
+    async def execute_with_wrong_index(statement):
+        if "pg_class idx" in str(statement):
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(first=lambda: wrong_index))
+        return SimpleNamespace(all=lambda: [])
+
+    mock_conn.execute.side_effect = execute_with_wrong_index
+
+    with pytest.raises(RuntimeError, match="already exists but is not a valid unique btree"):
+        await ensure_payment_columns(mock_conn)
+
+    statements = [str(call[0][0]) for call in mock_conn.execute.call_args_list]
+    assert not any("CREATE UNIQUE INDEX" in statement for statement in statements)
+    assert not any("GROUP BY pg_order_id" in statement for statement in statements)
+
+
+@pytest.mark.asyncio
+async def test_ensure_payment_columns_fails_clearly_without_created_at():
+    from app.core.migrations import ensure_payment_columns
+
+    mock_conn = AsyncMock()
+    mock_conn.dialect.name = "postgresql"
+    mock_conn.scalar.return_value = False
+
+    with pytest.raises(RuntimeError, match="required column payments.created_at is missing"):
+        await ensure_payment_columns(mock_conn)
+
+    mock_conn.scalar.assert_awaited_once()
+    mock_conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_auto_migrations_calls_payment_schema_repair(monkeypatch):
+    import app.core.migrations as migrations
+
+    migration_names = (
+        "ensure_product_columns", "ensure_buyer_columns", "ensure_stock_item_columns",
+        "ensure_stock_master_name_constraint", "ensure_recipe_columns", "ensure_otp_columns",
+        "ensure_user_columns", "ensure_order_columns", "ensure_fulfillment_columns",
+        "ensure_order_accessories_table", "ensure_payment_columns", "ensure_review_columns",
+        "ensure_trigram_and_schema_optimizations", "ensure_product_images_table",
+        "ensure_notification_table", "ensure_review_images_table", "ensure_email_outbox_indexes",
+    )
+    replacements = {name: AsyncMock() for name in migration_names}
+    for name, replacement in replacements.items():
+        monkeypatch.setattr(migrations, name, replacement)
+
+    await migrations.run_auto_migrations(SimpleNamespace())
+
+    replacements["ensure_payment_columns"].assert_awaited_once()
 
 
 @pytest.mark.asyncio

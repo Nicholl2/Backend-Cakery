@@ -273,21 +273,111 @@ async def ensure_order_status_enum(conn: AsyncConnection):
             pass
 
 
+def _payment_order_id_index_is_compatible(index) -> bool:
+    """Return whether the named index is a valid unique btree on one plain column."""
+    return bool(
+        index
+        and index.get("relkind") == "i"
+        and index.get("table_name") == "payments"
+        and index.get("access_method") == "btree"
+        and index.get("is_unique")
+        and index.get("is_valid")
+        and index.get("is_ready")
+        and index.get("has_no_predicate")
+        and index.get("has_no_expressions")
+        and index.get("key_count") == 1
+        and index.get("total_count") == 1
+        and index.get("first_key") == "pg_order_id"
+    )
+
+
+async def _get_payment_order_id_index(conn: AsyncConnection):
+    return (await conn.execute(text("""
+        SELECT idx.relkind,
+               tbl.relname AS table_name,
+               am.amname AS access_method,
+               i.indisunique AS is_unique,
+               i.indisvalid AS is_valid,
+               i.indisready AS is_ready,
+               i.indpred IS NULL AS has_no_predicate,
+               i.indexprs IS NULL AS has_no_expressions,
+               i.indnkeyatts AS key_count,
+               i.indnatts AS total_count,
+               CASE WHEN i.indexrelid IS NOT NULL
+                    THEN pg_get_indexdef(idx.oid, 1, true)
+               END AS first_key
+        FROM pg_class idx
+        JOIN pg_namespace ns ON ns.oid = idx.relnamespace
+        LEFT JOIN pg_index i ON i.indexrelid = idx.oid
+        LEFT JOIN pg_class tbl ON tbl.oid = i.indrelid
+        LEFT JOIN pg_am am ON am.oid = idx.relam
+        WHERE ns.nspname = current_schema()
+          AND idx.relname = 'uq_payments_pg_order_id'
+    """))).mappings().first()
+
+
 async def ensure_payment_columns(conn: AsyncConnection):
     """
-    Ensure settled_at, updated_at, and notes columns are present in the 'payments' table on PostgreSQL database.
+    Ensure payment compatibility columns and the Midtrans order ID index exist
+    in the PostgreSQL payments table.
     Backfills existing payments with created_at if settled_at is NULL.
     """
     if conn.dialect.name != "postgresql":
         return
 
+    has_created_at = await conn.scalar(text(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = current_schema() "
+        "AND table_name = 'payments' AND column_name = 'created_at')"
+    ))
+    if not has_created_at:
+        raise RuntimeError(
+            "Cannot backfill payments.settled_at: required column "
+            "payments.created_at is missing. Restore or reconcile the schema "
+            "before running payment schema repair."
+        )
+
     await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS notes TEXT;"))
     await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;"))
     await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;"))
-    try:
-        await conn.execute(text("UPDATE payments SET settled_at = created_at WHERE settled_at IS NULL;"))
-    except Exception:
-        pass
+    await conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS pg_order_id VARCHAR(100);"))
+
+    order_id_index = await _get_payment_order_id_index(conn)
+    if order_id_index is not None and not _payment_order_id_index_is_compatible(order_id_index):
+        raise RuntimeError(
+            "Index name uq_payments_pg_order_id already exists but is not a valid "
+            "unique btree index on payments(pg_order_id). Inspect and reconcile the "
+            "index manually; bootstrap will not drop or replace it."
+        )
+
+    if order_id_index is None:
+        duplicate_rows = (await conn.execute(text(
+            "SELECT pg_order_id, count(*) AS cnt FROM payments "
+            "WHERE pg_order_id IS NOT NULL GROUP BY pg_order_id HAVING count(*) > 1 "
+            "ORDER BY pg_order_id LIMIT 10"
+        ))).all()
+        if duplicate_rows:
+            duplicates = ", ".join(
+                f"'{row.pg_order_id}' ({row.cnt}x)" for row in duplicate_rows
+            )
+            raise RuntimeError(
+                "Cannot create unique index uq_payments_pg_order_id: duplicate non-NULL "
+                f"payments.pg_order_id values exist: {duplicates}. Reconcile these payment "
+                "records manually before retrying; no payment data was changed."
+            )
+
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_pg_order_id ON payments (pg_order_id);"
+        ))
+        order_id_index = await _get_payment_order_id_index(conn)
+        if not _payment_order_id_index_is_compatible(order_id_index):
+            raise RuntimeError(
+                "Index uq_payments_pg_order_id was not created with the required "
+                "unique btree definition on payments(pg_order_id). Inspect the schema "
+                "manually before retrying."
+            )
+
+    await conn.execute(text("UPDATE payments SET settled_at = created_at WHERE settled_at IS NULL;"))
 
 
 async def ensure_review_columns(conn: AsyncConnection):

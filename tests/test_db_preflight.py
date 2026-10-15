@@ -9,6 +9,7 @@ from app.core.database import Base
 from app.db_preflight import (
     _stock_name_index_is_compatible,
     _normalized_index_expression,
+    _payment_columns_after_20261008,
     _validate_stock_ledger,
     run_preflight_checks,
 )
@@ -33,6 +34,11 @@ async def test_preflight_rejects_unverified_adoption_revision():
     assert not is_valid
     assert errors == ["Unsupported adoption revision: head"]
     assert notices == []
+
+
+def test_preflight_identifies_pg_order_id_as_later_than_20261008_baseline():
+    assert _payment_columns_after_20261008({"id", "created_at"}) == []
+    assert _payment_columns_after_20261008({"id", "created_at", "pg_order_id"}) == ["pg_order_id"]
 
 
 def test_stock_name_index_accepts_postgres_deparsed_migration_expression():

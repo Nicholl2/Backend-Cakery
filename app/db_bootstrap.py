@@ -10,6 +10,8 @@ from app.core.database import Base, engine
 from app.core.migrations import run_auto_migrations
 from app import models  # noqa: F401 - register every mapped table
 
+_SCHEMA_BOOTSTRAP_ADVISORY_LOCK_KEY = 731942611
+
 
 async def _verify_user_email_indexes(connection) -> None:
     """Require the lookup and trigram indexes with their actual PostgreSQL definitions."""
@@ -65,6 +67,16 @@ async def create_empty_database_schema(target_engine: AsyncEngine) -> None:
         raise RuntimeError("Database bootstrap only supports PostgreSQL")
 
     async with target_engine.begin() as connection:
+        # A waiting bootstrap must see the transaction that held the lock first.
+        # READ COMMITTED takes a fresh snapshot for the schema check after the wait.
+        await connection.execute(text("SET TRANSACTION ISOLATION LEVEL READ COMMITTED"))
+        # Serialize bootstrap attempts before inspecting the schema. This
+        # transaction-scoped lock is held through create_all and auto-migrations.
+        await connection.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": _SCHEMA_BOOTSTRAP_ADVISORY_LOCK_KEY},
+        )
+
         existing_tables = await connection.run_sync(
             lambda sync_connection: inspect(sync_connection).get_table_names()
         )

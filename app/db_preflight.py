@@ -37,6 +37,11 @@ def _stock_name_index_is_compatible(row) -> bool:
     )
 
 
+def _payment_columns_after_20261008(payment_columns: set[str]) -> List[str]:
+    """Return payment columns introduced after the supported 20261008 baseline."""
+    return sorted({"pg_order_id"} & payment_columns)
+
+
 def _validate_stock_ledger(stock, movements) -> List[str]:
     """Compare exact NUMERIC ledger quantities and replay weighted-average costs."""
     label = f"Stock item #{stock.id} '{stock.nama_item}'"
@@ -292,6 +297,11 @@ async def run_preflight_checks(
             payment_cols = set(await connection.run_sync(
                 lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("payments")}
             ))
+            if "created_at" not in payment_cols:
+                errors.append(
+                    "Missing required column 'payments.created_at'; payment schema repair "
+                    "cannot backfill settled_at without it."
+                )
             if "pg_order_id" in payment_cols:
                 duplicate_pg_orders = (await connection.execute(text(
                     "SELECT pg_order_id, count(*) AS cnt FROM payments "
@@ -333,8 +343,15 @@ async def run_preflight_checks(
                 payment_columns_now = await connection.run_sync(
                     lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("payments")}
                 )
-                if "pg_order_id" in payment_columns_now:
-                    errors.append("Column 'payments.pg_order_id' already exists beyond baseline 20261008_01.")
+                # The 20261014_03 migration adds pg_order_id. Reject it here so
+                # adopting at 20261008_01 cannot replay that non-idempotent add.
+                later_payment_columns = _payment_columns_after_20261008(payment_columns_now)
+                if later_payment_columns:
+                    errors.append(
+                        "Columns in 'payments' from revisions after 20261008_01 already exist: "
+                        + ", ".join(later_payment_columns)
+                        + "; do not stamp this baseline."
+                    )
             if "order_items" in tables:
                 order_item_columns = await connection.run_sync(
                     lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("order_items")}
