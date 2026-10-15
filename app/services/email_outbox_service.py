@@ -67,8 +67,8 @@ async def enqueue_new_order_for_sellers(db: AsyncSession, order: Order) -> None:
 
 
 async def buyer_email_for_order(db: AsyncSession, order: Order) -> str | None:
-    customer = order.customer
-    if not customer and order.customer_id:
+    customer = inspect(order).attrs.customer.loaded_value
+    if customer is NO_VALUE and order.customer_id:
         customer = await db.get(Customer, order.customer_id)
     if not customer or not customer.nomor_wa:
         return None

@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -127,6 +128,88 @@ async def test_webhook_valid_signature_processes_transaction(db_session):
     assert result["status"] == "success"
     await db.refresh(payment)
     assert payment.payment_status == PaymentStatusEnum.success
+
+
+@pytest.mark.asyncio
+async def test_capture_only_succeeds_after_midtrans_fraud_accept(db_session):
+    db, _, invoice, _ = db_session
+    payment = Payment(invoice_id=invoice.id, pg_transaction_id="capture-txn",
+                      pg_order_id="INV-INTEGRITY-PAY-1700000000000-ABCD",
+                      jumlah_bayar=Decimal("500000"), payment_method="credit_card",
+                      payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
+    db.add(payment)
+    await db.commit()
+
+    for fraud_status in (None, "challenge", "deny"):
+        body = await _payload("500000.00")
+        body.update(transaction_id="capture-txn", transaction_status="capture", fraud_status=fraud_status)
+        body["signature_key"] = hashlib.sha512(
+            f"{body['order_id']}{body['status_code']}{body['gross_amount']}{settings.midtrans_server_key}".encode()
+        ).hexdigest()
+        result = await process_midtrans_webhook(db, body)
+        assert result["status"] == "skipped"
+        await db.refresh(payment)
+        assert payment.payment_status == PaymentStatusEnum.pending
+
+    body["fraud_status"] = "accept"
+    body["signature_key"] = hashlib.sha512(
+        f"{body['order_id']}{body['status_code']}{body['gross_amount']}{settings.midtrans_server_key}".encode()
+    ).hexdigest()
+    result = await process_midtrans_webhook(db, body)
+    assert result["status"] == "success"
+    await db.refresh(payment)
+    assert payment.payment_status == PaymentStatusEnum.success
+
+
+@pytest.mark.asyncio
+async def test_webhook_propagates_transient_processing_failure(db_session, monkeypatch):
+    db, _, invoice, _ = db_session
+    payment = Payment(invoice_id=invoice.id, pg_transaction_id="retry-txn",
+                      pg_order_id="INV-INTEGRITY-PAY-1700000000000-ABCD",
+                      jumlah_bayar=Decimal("500000"), payment_method="qris",
+                      payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
+    db.add(payment)
+    await db.commit()
+    body = await _payload("500000.00")
+    body["transaction_id"] = "retry-txn"
+
+    async def fail_processing(*_args, **_kwargs):
+        raise RuntimeError("temporary database failure")
+
+    monkeypatch.setattr("app.services.payment_service._apply_transaction_status", fail_processing)
+    with pytest.raises(RuntimeError, match="temporary database failure"):
+        await process_midtrans_webhook(db, body)
+
+
+@pytest.mark.asyncio
+async def test_webhook_endpoint_returns_5xx_for_transient_processing_failure(db_session, monkeypatch):
+    from app.core.database import get_db
+    from app.main import app
+
+    db, *_ = db_session
+
+    async def fail_processing(*_args, **_kwargs):
+        raise RuntimeError("temporary database failure")
+
+    async def override_db():
+        yield db
+
+    previous = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = override_db
+    monkeypatch.setattr("app.api.routes.payment.payment_service.process_midtrans_webhook", fail_processing)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as client:
+            response = await client.post("/payments/notify", json={})
+    finally:
+        if previous is None:
+            app.dependency_overrides.pop(get_db, None)
+        else:
+            app.dependency_overrides[get_db] = previous
+
+    assert response.status_code == 500
 
 
 @pytest.mark.asyncio
@@ -389,6 +472,8 @@ async def test_failed_initial_payment_cancels_order_and_reverses_stock_once(db_s
     await db.flush()
     db.add(Recipe(product_id=product.id, stock_item_id=stock.id, jumlah_dibutuhkan=Decimal("2")))
     db.add(OrderItem(order_id=order.id, product_id=product.id, jumlah=1, subtotal=Decimal("1000000")))
+    db.add(StockMovement(stock_item_id=stock.id, movement_type="ORDER", quantity=Decimal("-2"),
+                         reference_type="order", reference_id=order.id, reason="fixture consumption"))
     pending = Payment(invoice_id=invoice.id, pg_transaction_id="initial-txn",
                       pg_order_id="INV-INTEGRITY-PAY-1700000000000-ABCD", jumlah_bayar=Decimal("1000000"),
                       payment_method="qris", payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
@@ -407,6 +492,8 @@ async def test_failed_initial_payment_cancels_order_and_reverses_stock_once(db_s
     body["transaction_status"] = "expire"
     await process_midtrans_webhook(db, body)
     await db.refresh(stock)
-    movements = (await db.execute(select(StockMovement).where(StockMovement.reference_id == order.id))).scalars().all()
+    reversals = (await db.execute(select(StockMovement).where(
+        StockMovement.reference_id == order.id, StockMovement.movement_type == "REVERSAL"
+    ))).scalars().all()
     assert Decimal(str(stock.stok_tersedia)) == Decimal("7")
-    assert len(movements) == 1
+    assert len(reversals) == 1

@@ -67,15 +67,14 @@ class BuyerOrderCreate(BaseModel):
 
 
 class CustomOrderItemCreate(BaseModel):
-    custom_product_name: str = Field(..., min_length=1, max_length=100)
-    price: Decimal = Field(..., gt=0, decimal_places=2)
+    product_id: int = Field(..., gt=0)
     qty: int = Field(default=1, gt=0)
     custom_decoration_charge: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
 
-    @field_validator("custom_product_name", mode="after")
-    @classmethod
-    def sanitize_product_name(cls, v):
-        return sanitize_text(v)
+
+class CustomOrderAccessoryCreate(BaseModel):
+    stock_item_id: int = Field(..., gt=0)
+    quantity: Decimal = Field(..., gt=0, decimal_places=4)
 
 
 class CustomOrderCreate(BaseModel):
@@ -85,9 +84,10 @@ class CustomOrderCreate(BaseModel):
     metode_pengiriman: str = Field(default="pickup", pattern="^(pickup|delivery)$")
     notes: Optional[str] = Field(None, max_length=500)
     due_date: Optional[datetime] = None
-    fulfillment_date: Optional[datetime] = None
+    fulfillment_date: datetime
     payment_method_preference: Optional[str] = Field(None, max_length=50)
     items: list[CustomOrderItemCreate] = Field(..., min_length=1)
+    accessories: list[CustomOrderAccessoryCreate] = Field(default_factory=list)
 
     @field_validator("customer_name", mode="after")
     @classmethod
@@ -97,8 +97,6 @@ class CustomOrderCreate(BaseModel):
     @field_validator("fulfillment_date", mode="after")
     @classmethod
     def validate_fulfillment_date(cls, v):
-        if v is None:
-            return v
         from app.utils.business_date import validate_fulfillment_date as _validate
         return _validate(v)
 
@@ -192,6 +190,7 @@ class OrderItemOut(BaseModel):
     product_id: Optional[int] = None
     custom_product_name: Optional[str] = None
     product_name: Optional[str] = None
+    unit_price_snapshot: Optional[Decimal] = None
     jumlah: int = 1
     custom_decoration_charge: Optional[Decimal] = Decimal("0.00")
     subtotal: Optional[Decimal] = Decimal("0.00")
@@ -219,6 +218,18 @@ class OrderItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OrderAccessoryOut(BaseModel):
+    id: int
+    stock_item_id: int
+    stock_item_name: str
+    unit: str
+    quantity: Decimal
+    unit_cost_snapshot: Decimal
+    subtotal: Decimal
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # Aliases for compatibility
 OrderItemRead = OrderItemOut
 OrderItemResponse = OrderItemOut
@@ -242,6 +253,7 @@ class OrderOut(BaseModel):
     customer: Optional[CustomerOrderOut] = None
     order_items: list[OrderItemOut] = Field(default_factory=list)
     items: Optional[list[OrderItemOut]] = Field(default=None, validation_alias="order_items")
+    accessories: list[OrderAccessoryOut] = Field(default_factory=list)
     invoice: Optional[InvoiceOut] = None
     amount_paid: Optional[Decimal] = None
     amount_due: Optional[Decimal] = None

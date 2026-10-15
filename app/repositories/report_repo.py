@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 from app.models.payment import Payment, PaymentStatusEnum, RefundTransaction, RefundStatusEnum
 from app.models.expense import Expense
-from app.models.order import Order, OrderItem, OrderStatusEnum, Invoice, InvoiceStatusEnum
+from app.models.order import Order, OrderItem, OrderAccessory, OrderStatusEnum, Invoice, InvoiceStatusEnum
 from app.models.product import Product
 from app.models.review import Review
 from app.models.purchasing import Supplier, Purchase
@@ -113,7 +113,13 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
             OrderItem.order_id.in_(paid_order_ids_in_period)
         )
     )
-    total_hpp_cost = hpp_query.scalar() or Decimal("0.00")
+    accessory_hpp_query = await _execute_readonly(
+        db,
+        select(func.sum(OrderAccessory.subtotal)).where(
+            OrderAccessory.order_id.in_(paid_order_ids_in_period)
+        )
+    )
+    total_hpp_cost = (hpp_query.scalar() or Decimal("0.00")) + (accessory_hpp_query.scalar() or Decimal("0.00"))
 
     gross_profit = total_revenue - total_hpp_cost
 

@@ -63,6 +63,7 @@ class Order(Base):
 
     customer = relationship("Customer", back_populates="orders")
     order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+    accessories = relationship("OrderAccessory", back_populates="order", cascade="all, delete-orphan")
     invoice = relationship("Invoice", back_populates="order", uselist=False, cascade="all, delete-orphan", lazy="selectin")
 
     @property
@@ -88,6 +89,8 @@ class OrderItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    product_name_snapshot = Column(String(255), nullable=True)
+    unit_price_snapshot = Column(Numeric(10, 2), nullable=True)
     custom_product_name = Column(String(255), nullable=True)
     jumlah = Column(Integer, nullable=False)
     custom_decoration_charge = Column(Numeric(10, 2), nullable=False, default=Decimal("0.00"))
@@ -101,6 +104,8 @@ class OrderItem(Base):
     def product_name(self) -> Optional[str]:
         if hasattr(self, "_product_name") and self._product_name is not None:
             return self._product_name
+        if self.product_name_snapshot:
+            return self.product_name_snapshot
         if self.custom_product_name:
             return self.custom_product_name
         if self.product:
@@ -113,6 +118,23 @@ class OrderItem(Base):
 
     def __repr__(self):
         return f"<OrderItem(id={self.id}, order_id={self.order_id}, product_id={self.product_id})>"
+
+
+class OrderAccessory(Base):
+    """Inventory accessories recorded and priced at their cost when a seller saves an order."""
+    __tablename__ = "order_accessories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    stock_item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False, index=True)
+    stock_item_name = Column(String(100), nullable=False)
+    unit = Column(String(20), nullable=False)
+    quantity = Column(Numeric(10, 4), nullable=False)
+    unit_cost_snapshot = Column(Numeric(10, 4), nullable=False)
+    subtotal = Column(Numeric(10, 2), nullable=False)
+
+    order = relationship("Order", back_populates="accessories")
+    stock_item = relationship("StockItem")
 
 
 class Invoice(Base):

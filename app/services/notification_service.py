@@ -15,39 +15,36 @@ logger = logging.getLogger(__name__)
 
 async def notify_order_created(db: AsyncSession, order: Order, actor_buyer: Optional[Buyer] = None):
     """
-    Generated after a Buyer successfully creates an order.
+    Generated in the order transaction for customer-originated orders.
     Recipients: active internal Seller users (Staff/Admin/Owner).
     """
-    try:
-        # Find active internal seller users
-        result = await db.execute(
-            select(User).where(User.is_active.is_(True))
+    # Find active internal seller users. The caller owns the transaction so these
+    # notifications commit atomically with order creation.
+    result = await db.execute(
+        select(User).where(User.is_active.is_(True))
+    )
+    seller_users = result.scalars().all()
+
+    order_number = f"ORDER-{order.id}"
+    metadata = json.dumps({
+        "order_id": order.id,
+        "order_number": order_number,
+        "total_price": float(order.total_harga_pesanan) if order.total_harga_pesanan else 0,
+    })
+
+    actor_id = actor_buyer.id if actor_buyer else None
+    actor_type = "buyer" if actor_buyer else "system"
+
+    for user in seller_users:
+        await notification_repo.create_notification(
+            db=db,
+            type="order_created",
+            recipient_user_id=user.id,
+            order_id=order.id,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            metadata_json=metadata,
         )
-        seller_users = result.scalars().all()
-
-        order_number = f"ORDER-{order.id}"
-        metadata = json.dumps({
-            "order_id": order.id,
-            "order_number": order_number,
-            "total_price": float(order.total_harga_pesanan) if order.total_harga_pesanan else 0,
-        })
-
-        actor_id = actor_buyer.id if actor_buyer else None
-        actor_type = "buyer" if actor_buyer else "system"
-
-        for user in seller_users:
-            await notification_repo.create_notification(
-                db=db,
-                type="order_created",
-                recipient_user_id=user.id,
-                order_id=order.id,
-                actor_type=actor_type,
-                actor_id=actor_id,
-                metadata_json=metadata,
-            )
-        await db.commit()
-    except Exception as e:
-        logger.error(f"[NOTIFICATION_ERROR] Failed to create order_created notifications for order {order.id}: {e}", exc_info=True)
 
 
 async def notify_order_status_updated(

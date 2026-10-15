@@ -410,6 +410,8 @@ async def _apply_transaction_status(
                     await _rollback_order_stock(db, order)
                     order.status = OrderStatusEnum.cancelled
                     invoice.status = InvoiceStatusEnum.unpaid
+                    from app.services.email_outbox_service import enqueue_order_status_for_buyer
+                    await enqueue_order_status_for_buyer(db, order, OrderStatusEnum.cancelled.value)
                     events_to_notify.append((order.id, "cancelled"))
 
     # Jika commit diminta, commit transaksi database TERLEBIH DAHULU,
@@ -534,6 +536,16 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
                 await notify_refund_status(invoice.order_id)
             return {"status": "success", "payment_status": payment.payment_status}
 
+        # Midtrans capture is only a successful payment when fraud screening accepts it.
+        # Challenge/deny/missing values remain pending for a later authoritative callback.
+        if txn_status == "capture" and str(payload.get("fraud_status") or "").lower() != "accept":
+            await db.commit()
+            logger.info(
+                "[PAYMENT_AUDIT] capture_not_accepted | payment_id=%s | fraud_status=%s",
+                payment.id, payload.get("fraud_status"),
+            )
+            return {"status": "skipped", "payment_status": payment.payment_status}
+
         # 3. IDEMPOTENCY GUARD — skip jika payment sudah di terminal state
         # Pengecualian: webhook 'refund' atau 'partial_refund' boleh diproses dari state 'success'
         is_refund_webhook = txn_status in ["refund", "partial_refund"]
@@ -558,7 +570,7 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
     except Exception as e:
         await db.rollback()
         logger.error(f"Midtrans notification error: {e}", exc_info=True)
-        return {"status": "error_handled"}
+        raise
 
 
 async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
@@ -959,6 +971,10 @@ async def check_expired_settlements(db: AsyncSession) -> int:
 
                     await _rollback_order_stock(order_db, order)
                     order.status = OrderStatusEnum.cancelled_settlement_expired
+                    from app.services.email_outbox_service import enqueue_order_status_for_buyer
+                    await enqueue_order_status_for_buyer(
+                        order_db, order, OrderStatusEnum.cancelled_settlement_expired.value
+                    )
         except Exception as e:
             logger.error(f"Failed to process expired settlement for order {order_id}: {e}", exc_info=True)
             continue

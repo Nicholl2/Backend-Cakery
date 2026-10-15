@@ -205,13 +205,21 @@ pytest tests/test_imports.py
 ### Struktur Pengujian (`tests/`)
 
 * `test_hardening.py`: Pengujian Concurrency, Optimistic Locking auto-retry, Idempotency webhook Midtrans, Row-Level Locking (`FOR UPDATE`), dan State Machine.
-* `test_seller_orders.py`: Pengujian Seller Orders, Custom Orders tanpa master produk, kalkulasi tagihan/pembayaran, dan auto-restorasi stok bahan baku saat dibatalkan.
+* `test_seller_orders.py`: Pengujian Seller Orders, custom order dari katalog dengan aksesoris stok, kalkulasi tagihan/pembayaran, dan pemulihan stok bahan serta aksesoris saat dibatalkan.
 * `test_avatar_upload.py`: Pengujian upload gambar ke Cloudinary via direct memory stream, validasi MIME/ekstensi, dan batasan ukuran 5 MB.
 * `test_master_data.py`: Pengujian CRUD Supplier, StockItem, Product, Recipe, Review, dan seeder akun Buyer.
 * `test_buyer_orders_payments.py`: Pengujian checkout pesanan Buyer dan validasi alur pembayaran via JWT & Service Key.
 * `test_imports.py`: Verifikasi integritas registrasi seluruh model, schema, service, dan 90+ router endpoint.
 
 ---
+
+## Order, payment, and refund lifecycle
+
+- New customer orders start as `pending`; creating an order records each ingredient deduction as an `ORDER` stock movement. Seller in-app notifications and seller email outbox entries are committed with supported customer order creation paths.
+- Midtrans `settlement` updates the payment to `Success` and the invoice to `partial` or `paid`; the order remains `pending` until a seller starts production. Midtrans `capture` counts as success only when `fraud_status` is `accept`.
+- An unpaid order cancellation changes the order to `cancelled`. Stock is reversed from its original `ORDER` movements, and a `REVERSAL` movement prevents repeat cancellation/refund paths from restoring it twice. Current recipes are not used for reversal.
+- A refund request cancels the order while refund confirmation is pending. The invoice/order become `refunded` when all settled funds are refunded, or when a seller records a completed manual refund. Failed internal Midtrans webhook processing returns 5xx so the gateway can retry; invalid signatures and unknown test orders are acknowledged without applying changes.
+- Important buyer email events are written to the transactional email outbox and retried by the email worker. Keep `EMAIL_WORKER_ENABLED=false` by default; enable it only on a persistent deployment after SMTP and database readiness checks.
 
 ## 📚 API Documentation
 

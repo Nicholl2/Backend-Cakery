@@ -9,7 +9,7 @@ from .user import User
 from .faq_item import FaqItem
 from .expense import Expense
 from .customer import Customer
-from .order import Order, OrderItem, Invoice
+from .order import Order, OrderItem, OrderAccessory, Invoice
 from .payment import Payment, RefundTransaction
 from .review import Review, ReviewImage
 from .buyer import Buyer
@@ -36,6 +36,7 @@ __all__ = [
     "Customer",
     "Order",
     "OrderItem",
+    "OrderAccessory",
     "Invoice",
     "Payment",
     "RefundTransaction",

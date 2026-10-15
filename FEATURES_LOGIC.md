@@ -53,6 +53,21 @@ Alur kerja saat endpoint `POST /orders` dipanggil oleh Chatbot atau Client:
    - Nilai HPP produk saat transaksi disimpan ke kolom `order_items.hpp_snapshot` untuk integritas audit laba kotor di masa mendatang.
    - Nomor invoice dibuat dengan format: `INV-YYYYMMDD-{order_id}-{suffix}` dengan status awal `unpaid`.
 
+### 1a. Flow Pesanan Manual Seller
+
+Pesanan kustom dibuat seller untuk mencatat pesanan manual yang sudah dikonfirmasi pelanggan. Karena seller yang membuatnya juga menangani pesanan, pembuatan pesanan ini **tidak mengirim email notifikasi otomatis**. Notifikasi internal tambahan juga tidak diperlukan selama order tampil pada daftar kerja seller.
+
+Implementasi `POST /orders/custom`:
+1. Seller memasukkan data pelanggan, memilih produk aktif dari katalog, lalu dapat menambahkan aksesoris dari `StockItem`. Nama produk, harga katalog, nama aksesoris, satuan, dan biaya stok disimpan sebagai snapshot untuk menjaga riwayat order.
+2. `fulfillment_date` wajib diisi dan mengikuti validasi tanggal pre-order. Ini terpisah dari `created_at`, yakni waktu order dicatat.
+3. Saat order disimpan, pelanggan dianggap sudah mengonfirmasi. Kebutuhan resep produk dan aksesoris dijumlahkan per `stock_item_id`, baris stok dikunci berurutan, ketersediaan divalidasi, lalu stok dikurangi dalam transaksi yang sama dengan order, invoice, dan ledger `ORDER`.
+4. Harga aksesoris dihitung dari `StockItem.harga_per_satuan` saat penyimpanan dan ditambahkan ke invoice. Aksesoris ditagihkan sebesar biaya stok tanpa markup; produk memakai harga katalog dan dekorasi memakai biaya yang dimasukkan seller.
+5. Pembatalan menggunakan ledger `ORDER` untuk memulihkan stok satu kali, sekalipun resep atau biaya stok berubah setelah order dibuat. Email otomatis tidak dikirim karena seller yang membuat dan menangani order tersebut.
+
+Request/response dan aturan validasi lengkap tersedia di [`CUSTOM_ORDER_API_CONTRACT.md`](CUSTOM_ORDER_API_CONTRACT.md).
+
+**Batasan saat ini:** endpoint belum menyediakan edit item/aksesoris pada order tersimpan. Dukungan edit harus menghitung selisih kebutuhan stok dan mencatat pergerakan koreksi secara atomik.
+
 ---
 
 ## 2. Pembatalan Order & Pemulihan Stok Bahan Baku
@@ -62,8 +77,8 @@ Alur kerja saat endpoint `POST /orders/{order_id}/cancel` dipanggil:
    - Query mengambil pesanan menggunakan `with_for_update()` untuk mencegah race condition double-cancellation oleh request simultan.
    - Hanya pesanan yang status invoice-nya masih murni `unpaid` yang dapat dibatalkan otomatis. Pesanan yang sudah dibayar penuh (`paid`) atau memiliki DP (`partial`) ditolak dengan HTTP `409 Conflict`.
 2. **Restorasi Stok Bahan Baku**:
-   - Sistem menghitung kembali kuantitas bahan baku dari resep produk yang ada di `order_items`.
-   - Mengembalikan kuantitas ke `stock_items.stok_tersedia` menggunakan Optimistic Locking (`version = version + 1`).
+   - Sistem mengambil jumlah dari movement `ORDER` milik order, termasuk kebutuhan resep dan aksesoris yang dicatat saat order dibuat; tidak membaca resep terkini.
+   - Mengembalikan kuantitas ke `stock_items.stok_tersedia` menggunakan optimistic locking. Lock order dan marker `REVERSAL` membuat pemulihan idempotent.
 3. **Pembaruan Status & State Machine**:
    Status order diubah menjadi `cancelled` setelah lolos validasi `is_valid_order_transition`.
 

@@ -2,6 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from decimal import Decimal
 from unittest.mock import patch
@@ -155,10 +156,10 @@ async def run_audit_tests():
             "customer_address": "Jl. Melati No. 5",
             "metode_pengiriman": "pickup",
             "notes": "Custom order dari staff",
+            "fulfillment_date": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
             "items": [
                 {
-                    "custom_product_name": "Kue Custom Unicorn 3D",
-                    "price": "250000.00",
+                    "product_id": 1,
                     "qty": 1,
                     "custom_decoration_charge": "25000.00"
                 }
@@ -199,11 +200,10 @@ async def run_audit_tests():
         res = await client.get(f"/orders/{custom_order_id}", headers={"Authorization": f"Bearer {token_staff}"})
         custom_items = res.json()["order_items"]
         assert len(custom_items) > 0
-        assert custom_items[0]["product_name"] == "Kue Custom Unicorn 3D", f"Expected 'Kue Custom Unicorn 3D', got {custom_items[0]['product_name']}"
+        assert custom_items[0]["product_name"] == "Black Forest Cake Deluxe", f"Unexpected catalog product name: {custom_items[0]['product_name']}"
         print(f"  ✓ Custom order item product_name populated: {custom_items[0]['product_name']}")
 
         # Buyer creates standard order from catalog
-        from datetime import datetime, timezone, timedelta
         future_fulfillment = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
         buyer_order_payload = {
             "metode_pengiriman": "pickup",

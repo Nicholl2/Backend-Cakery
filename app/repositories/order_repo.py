@@ -66,6 +66,7 @@ async def get_order_with_details(db: AsyncSession, order_id: int) -> Optional[Or
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.accessories),
             selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
@@ -95,6 +96,7 @@ async def get_order_by_id(db: AsyncSession, order_id: int) -> Optional[Order]:
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.accessories),
             selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
@@ -108,6 +110,7 @@ async def update_order_status(db: AsyncSession, order_id: int, status: str) -> O
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.accessories),
             selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
@@ -133,6 +136,7 @@ async def get_orders_by_customer_id(
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.accessories),
             selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
@@ -160,6 +164,7 @@ async def get_order_by_id_and_customer(db: AsyncSession, order_id: int, customer
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.accessories),
             selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )
@@ -179,6 +184,7 @@ async def get_all_orders(
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.accessories),
             selectinload(Order.invoice).selectinload(Invoice.payments),
         )
     )

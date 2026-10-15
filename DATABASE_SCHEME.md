@@ -218,11 +218,24 @@ Table order_items {
   id int [pk, increment]
   order_id int [ref: > orders.id, not null]
   product_id int [ref: > products.id, null, note: 'Null jika custom order item tanpa master product']
+  product_name_snapshot varchar(255) [null, note: 'Nama katalog saat order dibuat']
+  unit_price_snapshot decimal(10,2) [null, note: 'Harga katalog per item saat order dibuat']
   custom_product_name varchar(255) [null, note: 'Nama produk kustom seller']
   jumlah int [not null]
   custom_decoration_charge decimal(10,2) [default: 0, not null]
   subtotal decimal(10,2) [not null]
   hpp_snapshot decimal(10,2) [not null, note: 'Modal HPP kue saat transaksi terjadi (0 untuk custom)']
+}
+
+Table order_accessories {
+  id int [pk, increment]
+  order_id int [ref: > orders.id, not null]
+  stock_item_id int [ref: > stock_items.id, not null]
+  stock_item_name varchar(100) [not null, note: 'Nama material saat order dibuat']
+  unit varchar(20) [not null, note: 'Satuan stok saat order dibuat']
+  quantity decimal(10,4) [not null]
+  unit_cost_snapshot decimal(10,4) [not null, note: 'Biaya per satuan untuk harga aksesoris order']
+  subtotal decimal(10,2) [not null]
 }
 
 Table invoices {
@@ -295,15 +308,18 @@ Table faq_items {
 
 ## 2. Catatan Khusus Arsitektur Basis Data
 
-1. **Optimistic Locking pada Stok Bahan Baku**:
-   Kolom `version` pada tabel `stock_items` digunakan saat pengurangan stok pemesanan (`POST /orders`) maupun pemulihan stok saat pembatalan (`POST /orders/{order_id}/cancel`). Jika terjadi race condition / modifikasi bersamaan, update query mendeteksi versi yang tidak cocok dan membatalkan transaksi untuk mencegah inkonsistensi data stok.
+1. **Ledger Stok dan Pembatalan Order**:
+   Pemakaian bahan order dicatat sebagai `stock_movements` bertipe `ORDER` dengan referensi `order`. Pembatalan/refund memulihkan jumlah berdasarkan baris ledger ini, bukan resep yang mungkin sudah berubah. Baris `REVERSAL` dengan referensi order menjadikan pemulihan idempotent; status order dikunci saat pembatalan agar permintaan serentak tidak menggandakan pengembalian.
 
-2. **Partial Index & Constraints**:
+2. **Transisi Order dan Pembayaran**:
+   Pembayaran Midtrans `settlement` menandai payment sukses dan invoice `partial` atau `paid`; status order tetap `pending` sampai seller memulai produksi. `capture` diterima sebagai sukses hanya bila `fraud_status=accept`. Pembatalan order dengan invoice unpaid memulihkan stok dan mengubah order menjadi `cancelled`. Refund yang diajukan mengubah order ke `cancelled` sambil menunggu konfirmasi; order/invoice menjadi `refunded` setelah refund seluruh pembayaran terkonfirmasi atau seller mengonfirmasi refund manual. Pembayaran/email penting masuk ke email outbox dalam transaksi yang sama dan worker mengulang kegagalan kirim.
+
+3. **Partial Index & Constraints**:
    - `ix_products_slug`: Unique partial index pada `products(slug) WHERE slug IS NOT NULL`.
    - `ix_otp_codes_nonce`: Unique index pada `otp_codes(nonce) WHERE nonce IS NOT NULL`.
    - `ix_otp_codes_verify_token`: Unique index pada `otp_codes(verify_token) WHERE verify_token IS NOT NULL`.
 
-3. **Integritas Relasi & Cascade**:
+4. **Integritas Relasi & Cascade**:
    - Menghapus `products` otomatis menghapus resep (`recipes`) dan histori harga (`price_histories`) via `cascade="all, delete-orphan"`.
    - Menghapus `stock_items` diblokir jika ID bahan masih tercatat dalam tabel `recipes`.
    - Menghapus `suppliers` diblokir jika masih memiliki relasi transaksi pada tabel `purchases`.

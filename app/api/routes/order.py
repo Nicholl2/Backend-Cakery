@@ -182,7 +182,7 @@ async def create_order(
 
 @router.post("/custom", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_internal_user)],
-             summary="Buat custom order tanpa master produk (Khusus Staff/Admin/Owner)")
+             summary="Buat pesanan manual dari katalog dan stok (Khusus Staff/Admin/Owner)")
 @limiter.limit(RATE_ORDER_CREATE)
 async def create_custom_order(
     request: Request,
@@ -190,12 +190,11 @@ async def create_custom_order(
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
     """
-    Membuat pesanan custom baru tanpa master produk:
-    - Membuat/mengambil record Customer secara otomatis berdasarkan customer_phone & customer_name.
-    - Mengisi custom_product_name, price, dan qty tanpa master product_id.
-    - Bypassing pemotongan stok bahan baku/resep.
-    - Membuat Invoice otomatis dengan nomor unik.
-    - Menetapkan created_via = 'seller'.
+    Membuat pesanan manual terkonfirmasi:
+    - Memilih produk katalog dan aksesoris stok.
+    - Mencadangkan stok resep dan aksesoris secara atomik saat disimpan.
+    - Menghitung harga aksesoris dari biaya satuan stok saat order dibuat.
+    - Wajib menyertakan fulfillment_date dan membuat Invoice otomatis.
     """
     order = await order_service.create_custom_order(db, data)
     return OrderOut.model_validate(order)
@@ -279,7 +278,7 @@ async def update_order_status(
     Update status order oleh Seller (Staff/Admin/Owner). Nilai status: pending, in_process, ready, delivered, picked_up, cancelled, refunded.
     Jika status diubah menjadi 'ready', memicu push notification webhook ke Chatbot Service.
     Jika status diubah menjadi 'refunded', memicu push notification webhook /refunded ke Chatbot Service.
-    Jika status diubah menjadi 'cancelled', stok bahan baku pesanan biasa akan dikembalikan secara otomatis.
+    Jika status diubah menjadi 'cancelled', stok bahan dan aksesoris yang tercatat pada ledger order dikembalikan otomatis.
     """
     order = await order_service.update_order_status(db, order_id, data.status.value, updated_by=auth.user_id)
     return OrderOut.model_validate(order)

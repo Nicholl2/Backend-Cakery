@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.core.database import Base
-from app.models import Buyer, Customer, EmailOutbox, Invoice, Order, Payment, Role, User
+from app.models import Buyer, Customer, EmailOutbox, Invoice, Order, Payment, Role, User, Product, Recipe
 from app.models.order import InvoiceStatusEnum, MetodePengirimanEnum, OrderStatusEnum
 from app.models.payment import PaymentStatusEnum, PaymentTypeEnum
 from app.schemas.user import UserBootstrap
@@ -25,6 +25,9 @@ from app.services.payment_service import (
     process_midtrans_webhook,
     refresh_if_pending,
 )
+from app.services.order_service import cancel_order_by_customer, create_custom_order
+from app.schemas.order import CustomOrderCreate
+from app.models.stock_item import StockItem, StockMovement, KategoriEnum, SatuanEnum
 from app.services.user_service import bootstrap_owner
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")
@@ -123,6 +126,105 @@ async def test_postgres_concurrent_outbox_claim_sends_one_live_lease(pg_sessions
         assert sent_ids == [event.id]
         assert event.status == "sent"
         assert event.attempts == 1
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_postgres_concurrent_order_cancellation_reverses_stock_once(pg_sessions):
+    async with pg_sessions() as db:
+        customer = Customer(nama="Cancel race", nomor_wa="628123456700")
+        db.add(customer)
+        await db.flush()
+        order = Order(customer_id=customer.id, status=OrderStatusEnum.pending,
+                      metode_pengiriman=MetodePengirimanEnum.pickup,
+                      total_harga_pesanan=Decimal("10000"))
+        db.add(order)
+        await db.flush()
+        db.add(Invoice(order_id=order.id, nomor_invoice="INV-CANCEL-RACE",
+                       total_tagihan=Decimal("10000"), status=InvoiceStatusEnum.unpaid))
+        stock = StockItem(nama_item="Cancel race stock", satuan=SatuanEnum.gram,
+                          kategori=KategoriEnum.bahan_baku, harga_per_satuan=Decimal("1"),
+                          stok_tersedia=Decimal("9"), version=1)
+        db.add(stock)
+        await db.flush()
+        db.add(StockMovement(stock_item_id=stock.id, movement_type="ORDER",
+                             quantity=Decimal("-1"), reference_type="order", reference_id=order.id,
+                             reason="test order consumption"))
+        order_id, stock_id = order.id, stock.id
+        await db.commit()
+
+    barrier = asyncio.Barrier(2)
+
+    async def cancel_once():
+        async with pg_sessions() as db:
+            await barrier.wait()
+            try:
+                await cancel_order_by_customer(db, order_id)
+                return "cancelled"
+            except HTTPException as exc:
+                assert exc.status_code == 409
+                return "already_cancelled"
+
+    outcomes = await asyncio.gather(cancel_once(), cancel_once())
+    async with pg_sessions() as db:
+        stock = await db.get(StockItem, stock_id)
+        reversals = await db.scalar(select(func.count(StockMovement.id)).where(
+            StockMovement.reference_type == "order",
+            StockMovement.reference_id == order_id,
+            StockMovement.movement_type == "REVERSAL",
+        ))
+        assert sorted(outcomes) == ["already_cancelled", "cancelled"]
+        assert stock.stok_tersedia == Decimal("10.0000")
+        assert reversals == 1
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_postgres_concurrent_custom_orders_cannot_oversell_recipe_or_accessory_stock(pg_sessions):
+    async with pg_sessions() as db:
+        flour = StockItem(nama_item="Custom race flour", satuan=SatuanEnum.gram,
+                          kategori=KategoriEnum.bahan_baku, harga_per_satuan=Decimal("0.01"),
+                          stok_tersedia=Decimal("4"), version=0)
+        candle = StockItem(nama_item="Custom race candle", satuan=SatuanEnum.pcs,
+                           kategori=KategoriEnum.kemasan, harga_per_satuan=Decimal("100"),
+                           stok_tersedia=Decimal("2"), version=0)
+        product = Product(nama_produk="Custom race cake", harga_jual=Decimal("10000"),
+                          hpp_total=Decimal("1000"), is_active=True, is_available=True,
+                          minimum_order=1)
+        db.add_all([flour, candle, product])
+        await db.flush()
+        db.add(Recipe(product_id=product.id, stock_item_id=flour.id,
+                      jumlah_dibutuhkan=Decimal("4"), unit="gram"))
+        product_id, flour_id, candle_id = product.id, flour.id, candle.id
+        await db.commit()
+
+    barrier = asyncio.Barrier(2)
+    future = datetime.now(timezone.utc) + timedelta(days=2)
+
+    async def create_for(customer_no: int):
+        async with pg_sessions() as db:
+            await barrier.wait()
+            payload = CustomOrderCreate(
+                customer_name=f"Race Buyer {customer_no}",
+                customer_phone=f"+6281234500{customer_no:02d}",
+                fulfillment_date=future,
+                items=[{"product_id": product_id, "qty": 1}],
+                accessories=[{"stock_item_id": candle_id, "quantity": "2"}],
+            )
+            try:
+                order = await create_custom_order(db, payload)
+                return order.id
+            except HTTPException as exc:
+                assert exc.status_code == 400
+                return None
+
+    outcomes = await asyncio.gather(create_for(1), create_for(2))
+    async with pg_sessions() as db:
+        assert sum(order_id is not None for order_id in outcomes) == 1
+        assert await db.scalar(select(func.count(StockMovement.id)).where(
+            StockMovement.reference_type == "order",
+            StockMovement.movement_type == "ORDER",
+        )) == 2
+        assert (await db.get(StockItem, flour_id)).stok_tersedia == Decimal("0.0000")
+        assert (await db.get(StockItem, candle_id)).stok_tersedia == Decimal("0.0000")
 
 
 @pytest.mark.asyncio(loop_scope="function")

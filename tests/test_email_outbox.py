@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.database import Base
-from app.models import Buyer, Customer, EmailOutbox, Invoice, Order, Payment, Role, User
+from app.models import Buyer, Customer, EmailOutbox, Invoice, Notification, Order, Payment, Role, User
 from app.models.order import InvoiceStatusEnum, MetodePengirimanEnum, OrderStatusEnum
 from app.models.payment import PaymentStatusEnum, PaymentTypeEnum
 from app.models.product import Product
@@ -18,7 +18,7 @@ from app.models.stock_item import KategoriEnum, SatuanEnum, StockItem
 from app.schemas.order import BuyerOrderCreate, OrderItemCreate
 from app.services.email_outbox_service import enqueue_email, enqueue_new_order_for_sellers
 from app.services.email_worker import _message_id, _render_email, _send, process_one_email
-from app.services.order_service import create_buyer_order, update_order_status
+from app.services.order_service import cancel_order_by_customer, create_buyer_order, update_order_status
 from app.services.payment_service import _apply_transaction_status
 from app.services.payment_service import complete_refund_notification
 
@@ -104,6 +104,44 @@ async def test_buyer_order_and_outbox_commit_together(email_db):
     assert len(events) == 1
     assert events[0].recipient == "orders@example.test"
     assert json.loads(events[0].payload_json)["order_id"] == order.id
+    assert await email_db.scalar(select(func.count(Notification.id))) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_reverses_creation_time_consumption_once(email_db):
+    from app.models.stock_item import StockMovement
+
+    buyer, data = await _buyer_order_inputs(email_db)
+    order = await create_buyer_order(email_db, buyer, data)
+    order_id = order.id
+    stock = (await email_db.execute(select(StockItem))).scalar_one()
+    recipe = (await email_db.execute(select(Recipe))).scalar_one()
+    assert stock.stok_tersedia == Decimal("99.0000")
+    consumed = (await email_db.execute(select(StockMovement).where(
+        StockMovement.reference_id == order.id,
+        StockMovement.movement_type == "ORDER",
+    ))).scalar_one()
+    assert consumed.quantity == Decimal("-1.0000")
+
+    # Changing the recipe after order creation must not change reversal quantity.
+    recipe.jumlah_dibutuhkan = Decimal("20")
+    await email_db.commit()
+    await cancel_order_by_customer(email_db, order_id)
+    await email_db.refresh(stock)
+    assert stock.stok_tersedia == Decimal("100.0000")
+
+    with pytest.raises(HTTPException) as exc:
+        await cancel_order_by_customer(email_db, order_id)
+    assert exc.value.status_code == 409
+    await email_db.refresh(stock)
+    assert stock.stok_tersedia == Decimal("100.0000")
+    reversal = (await email_db.execute(select(StockMovement).where(
+        StockMovement.reference_type == "order",
+        StockMovement.reference_id == order_id,
+        StockMovement.movement_type == "REVERSAL",
+    ))).scalars().all()
+    assert len(reversal) == 1
+    assert reversal[0].quantity == Decimal("1.0000")
 
 
 @pytest.mark.asyncio

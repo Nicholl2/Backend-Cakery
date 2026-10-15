@@ -220,6 +220,16 @@ async def test_expired_settlement_orders_are_transactionally_isolated():
                 total_tagihan=Decimal("40"), status=InvoiceStatusEnum.partial,
             ),
         ])
+        db.add_all([
+            StockMovement(stock_item_id=201, movement_type="ORDER", quantity=Decimal("-1"),
+                          reference_type="order", reference_id=301, reason="fixture consumption"),
+            StockMovement(stock_item_id=202, movement_type="ORDER", quantity=Decimal("-1"),
+                          reference_type="order", reference_id=301, reason="fixture consumption"),
+            StockMovement(stock_item_id=203, movement_type="ORDER", quantity=Decimal("-1"),
+                          reference_type="order", reference_id=301, reason="fixture consumption"),
+            StockMovement(stock_item_id=204, movement_type="ORDER", quantity=Decimal("-1"),
+                          reference_type="order", reference_id=302, reason="fixture consumption"),
+        ])
         await db.commit()
 
         original_execute = AsyncSession.execute
@@ -281,10 +291,12 @@ async def test_expired_settlement_orders_are_transactionally_isolated():
             "cancelled_count": 1,
             "order_a_status": OrderStatusEnum.pending,
             "order_a_stock": (Decimal("10"), Decimal("20"), Decimal("30")),
-            "order_a_movements": [],
+            "order_a_movements": [
+                (201, Decimal("-1.0000")), (202, Decimal("-1.0000")), (203, Decimal("-1.0000")),
+            ],
             "order_b_status": OrderStatusEnum.cancelled_settlement_expired,
             "order_b_stock": Decimal("41"),
-            "order_b_movements": [(204, Decimal("1.0000"))],
+            "order_b_movements": [(204, Decimal("-1.0000")), (204, Decimal("1.0000"))],
             "conflict_attempts": 3,
             "successful_stock_updates": [201, 202, 204],
         }

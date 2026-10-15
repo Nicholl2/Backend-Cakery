@@ -219,8 +219,6 @@ async def get_order_payment_status(
         )
 
 # 3. Endpoint POST /payments/notify & /payments/notification (PUBLIC - webhook)
-from fastapi.responses import JSONResponse
-
 @router.post("/notify", status_code=status.HTTP_200_OK,
              summary="Midtrans Webhook Notification Listener")
 @router.post("/notification", status_code=status.HTTP_200_OK,
@@ -234,13 +232,9 @@ async def handle_midtrans_notification(
     """
     Webhook notification endpoint yang ditembak oleh server Midtrans secara otomatis.
     Memproses update status transaksi berdasarkan signature Midtrans.
-    Selalu mengembalikan HTTP 200 OK agar Midtrans menganggap webhook valid.
+    Mengembalikan 5xx untuk kegagalan internal agar Midtrans dapat melakukan retry.
     """
-    try:
-        return await payment_service.process_midtrans_webhook(db, payload)
-    except Exception as e:
-        logger.error(f"Midtrans notification error: {e}", exc_info=True)
-        return JSONResponse(status_code=200, content={"status": "error_handled"})
+    return await payment_service.process_midtrans_webhook(db, payload)
 
 
 # 4. Endpoint POST /payments/check-expired-settlements (Internal / Background task)

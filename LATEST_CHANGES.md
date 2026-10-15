@@ -6,6 +6,26 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### Seller Custom Order Inventory Flow — 2026-10-15
+- `/orders/custom` sekarang mewajibkan tanggal pemenuhan, menerima `product_id` katalog dan aksesoris melalui `stock_item_id`/kuantitas; harga produk dan nama/harga/satuan stok disimpan sebagai snapshot.
+- Penyimpanan order mengunci stok bahan resep dan aksesoris bersama, memvalidasi saldo, lalu mengurangi stok dan membuat movement `ORDER` dalam transaksi order/invoice. Aksesoris ditagihkan sebesar biaya satuan stok yang berlaku saat order disimpan, tanpa markup.
+- Pembatalan memakai ledger order yang sama untuk memulihkan stok satu kali. Order manual ini tidak mengirim email otomatis. Belum ada endpoint untuk mengedit item/aksesoris pada order tersimpan.
+- Migration Alembic `20261015_01_custom_order_accessories` menambahkan snapshot harga/nama produk dan tabel `order_accessories`.
+
+### Order, Payment, Inventory, and Notification Audit — 2026-10-15
+- **Idempotent stock reversal (`app/services/order_service.py`)**:
+  - Customer cancellation now rejects an order that is no longer `pending` and uses the shared reversal path.
+  - Cancellation/refund reversal reads the order's original `ORDER` stock movements, not the current product recipes. The order row is locked and an existing `REVERSAL` ledger entry prevents duplicate stock restoration. The existing stock version/retry guard is retained.
+- **Midtrans webhook handling (`app/services/payment_service.py`, `app/api/routes/payment.py`)**:
+  - A `capture` updates payment state to success only when `fraud_status` is `accept`; other/missing fraud statuses remain pending.
+  - Unexpected processing/database errors are re-raised through the route so the webhook responds with 5xx and can be retried. Invalid signatures and unknown orders remain safely acknowledged without a payment mutation.
+- **Order notifications and lifecycle docs (`app/services/notification_service.py`, `app/services/email_outbox_service.py`, `README.md`, `DATABASE_SCHEME.md`)**:
+  - Seller in-app notifications are inserted in the same transaction as supported customer-originated order creation. Seller email events are enqueued for standard orders; buyer email events are queued for order status changes, payment/refund, and automatic cancellation paths, using the existing retrying email outbox.
+  - Documented settlement, capture, cancellation, refund, and outbox behavior. No database schema migration was required.
+- **Regression coverage**:
+  - Added tests for repeated cancellation, recipe changes after order creation, capture fraud screening, webhook 5xx behavior, and PostgreSQL concurrent cancellation.
+  - Latest full-suite result: **239 passed, 22 skipped**. PostgreSQL integration tests were skipped because local test database URLs were not configured; the production database was not used.
+
 ### Inventory & Purchase Refactor — 2026-10-05
 - Memisahkan StockItem sebagai master material dari supplier dan harga tiap Purchase.
 - Menambahkan stock movement ledger dengan baseline saldo awal serta movement purchase, order, reversal, dan adjustment.

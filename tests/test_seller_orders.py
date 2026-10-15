@@ -2,6 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import httpx
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -96,7 +97,10 @@ async def run_seller_order_tests():
             alert_min_stok=Decimal("10.00"),
             version=0,
         )
-        db.add_all([tepung, telur])
+        lilin = StockItem(id=3, nama_item="Lilin", satuan=SatuanEnum.pcs,
+                          kategori=KategoriEnum.kemasan, harga_per_satuan=Decimal("1000.00"),
+                          stok_tersedia=Decimal("50.00"), alert_min_stok=Decimal("5.00"), version=0)
+        db.add_all([tepung, telur, lilin])
 
         cake_product = Product(
             id=1,
@@ -162,20 +166,20 @@ async def run_seller_order_tests():
             "metode_pengiriman": "delivery",
             "notes": "Tolong tuliskan 'Selamat Ulang Tahun Budi' dengan lilin angka 5",
             "payment_method_preference": "bank_transfer",
+            "fulfillment_date": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
             "items": [
                 {
-                    "custom_product_name": "Custom Cake Doraemon 2 Tingkat",
-                    "price": "350000.00",
+                    "product_id": 1,
                     "qty": 1,
                     "custom_decoration_charge": "50000.00"
                 },
                 {
-                    "custom_product_name": "Cupcake Custom Mini",
-                    "price": "25000.00",
-                    "qty": 4,
+                    "product_id": 1,
+                    "qty": 1,
                     "custom_decoration_charge": "0.00"
                 }
-            ]
+            ],
+            "accessories": [{"stock_item_id": 3, "quantity": "2"}]
         }
         res_custom = await client.post(
             "/orders/custom",
@@ -187,7 +191,7 @@ async def run_seller_order_tests():
         custom_order_id = custom_data["id"]
         print(f"✓ Custom order created successfully: ID={custom_order_id}")
 
-        assert custom_data["total_harga_pesanan"] == "500000.00"
+        assert custom_data["total_harga_pesanan"] == "252000.00"
         assert custom_data["created_via"] == "seller"
         assert custom_data["status"] == "pending"
         assert custom_data["notes"] == custom_payload["notes"]
@@ -196,23 +200,33 @@ async def run_seller_order_tests():
         assert custom_data["customer"]["nomor_wa"] == "6281234567890"
         assert custom_data["customer"]["alamat"] == "Jl. Mawar No. 12, Jakarta"
         assert len(custom_data["order_items"]) == 2
-        assert custom_data["order_items"][0]["custom_product_name"] == "Custom Cake Doraemon 2 Tingkat"
-        assert custom_data["order_items"][0]["product_id"] is None
+        assert custom_data["order_items"][0]["product_name"] == "Kue Coklat Spesial"
+        assert custom_data["order_items"][0]["product_id"] == 1
+        assert custom_data["order_items"][0]["unit_price_snapshot"] == "100000.00"
+        assert custom_data["accessories"][0]["stock_item_name"] == "Lilin"
+        assert custom_data["accessories"][0]["subtotal"] == "2000.00"
         assert custom_data["invoice"] is not None
         assert custom_data["invoice"]["nomor_invoice"].startswith("INV-")
-        assert custom_data["invoice"]["total_tagihan"] == "500000.00"
+        assert custom_data["invoice"]["total_tagihan"] == "252000.00"
         assert custom_data["invoice"]["status"] == "unpaid"
         assert custom_data["amount_paid"] == "0.00"
-        assert custom_data["amount_due"] == "500000.00"
+        assert custom_data["amount_due"] == "252000.00"
         print("✓ Custom Order fields, customer relation, invoice and calculations verified 100%")
 
-        # Verify stock was NOT deducted for custom order
+        # Verify recipe and accessory stock deductions were committed with the order.
         async with TestSessionLocal() as db:
             s_tepung = (await db.execute(select_stock(1))).scalar_one()
             s_telur = (await db.execute(select_stock(2))).scalar_one()
-            assert s_tepung.stok_tersedia == Decimal("1000.00"), f"Expected 1000.00, got {s_tepung.stok_tersedia}"
-            assert s_telur.stok_tersedia == Decimal("50.00"), f"Expected 50.00, got {s_telur.stok_tersedia}"
-        print("✓ Stock bypass verified: Ingredients stock remained intact!")
+            s_lilin = (await db.execute(select_stock(3))).scalar_one()
+            assert s_tepung.stok_tersedia == Decimal("600.00")
+            assert s_telur.stok_tersedia == Decimal("42.00")
+            assert s_lilin.stok_tersedia == Decimal("48.00")
+            order_movements = (await db.execute(select(StockMovement).where(
+                StockMovement.reference_type == "order", StockMovement.reference_id == custom_order_id,
+                StockMovement.movement_type == "ORDER",
+            ))).scalars().all()
+            assert len(order_movements) == 3
+        print("✓ Recipe and accessory stock deductions plus ledger verified")
 
         # ── Test 3: List Seller Orders (GET /orders) & Detail (GET /orders/{id}) ──
         print("\n3. Testing GET /orders and GET /orders/{order_id}...")
@@ -232,9 +246,27 @@ async def run_seller_order_tests():
         assert detail_data["customer"]["nomor_wa"] == "6281234567890"
         print("✓ GET /orders/{order_id} detail verified")
 
+        # Cancelling the custom order reverses the exact recipe and accessory
+        # movements recorded at creation.
+        res_custom_cancel = await client.patch(
+            f"/orders/{custom_order_id}/status",
+            json={"status": "cancelled"},
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert res_custom_cancel.status_code == 200, res_custom_cancel.text
+        async with TestSessionLocal() as db:
+            assert (await db.execute(select_stock(1))).scalar_one().stok_tersedia == Decimal("1000.00")
+            assert (await db.execute(select_stock(2))).scalar_one().stok_tersedia == Decimal("50.00")
+            assert (await db.execute(select_stock(3))).scalar_one().stok_tersedia == Decimal("50.00")
+            custom_movements = (await db.execute(select(StockMovement).where(
+                StockMovement.reference_type == "order", StockMovement.reference_id == custom_order_id,
+            ))).scalars().all()
+            assert sorted(m.movement_type for m in custom_movements) == [
+                "ORDER", "ORDER", "ORDER", "REVERSAL", "REVERSAL", "REVERSAL"
+            ]
+
         # ── Test 4: Buyer Order (POST /orders/buyer) with Stock Deduction ──
         print("\n4. Testing Buyer Order with Recipe Stock Deduction...")
-        from datetime import datetime, timezone, timedelta
         future_fulfillment = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
         buyer_order_payload = {
             "metode_pengiriman": "delivery",
@@ -255,15 +287,14 @@ async def run_seller_order_tests():
         print(f"✓ Buyer order created: ID={buyer_order_id}, Total={buyer_order_data['total_harga_pesanan']}")
 
         # Verify stock was deducted:
-        # 2 cakes * 200g = 400g tepung (1000 - 400 = 600)
-        # 2 cakes * 4 pcs = 8 pcs telur (50 - 8 = 42)
+        # Custom order stock was restored before this buyer order.
         async with TestSessionLocal() as db:
             s_tepung = (await db.execute(select_stock(1))).scalar_one()
             s_telur = (await db.execute(select_stock(2))).scalar_one()
             assert s_tepung.stok_tersedia == Decimal("600.00"), f"Expected 600.00, got {s_tepung.stok_tersedia}"
             assert s_telur.stok_tersedia == Decimal("42.00"), f"Expected 42.00, got {s_telur.stok_tersedia}"
-            assert s_tepung.version == 1
-            assert s_telur.version == 1
+            assert s_tepung.version == 3
+            assert s_telur.version == 3
             order_movements = (await db.execute(select(StockMovement).where(
                 StockMovement.reference_type == "order", StockMovement.reference_id == buyer_order_id
             ))).scalars().all()
@@ -293,15 +324,14 @@ async def run_seller_order_tests():
         print("✓ Order status updated to 'cancelled'")
 
         # Verify stock restored:
-        # Tepung restored back to 1000.00 (version 2)
-        # Telur restored back to 50.00 (version 2)
+        # Buyer order reversal restores stock to the initial balance.
         async with TestSessionLocal() as db:
             s_tepung = (await db.execute(select_stock(1))).scalar_one()
             s_telur = (await db.execute(select_stock(2))).scalar_one()
             assert s_tepung.stok_tersedia == Decimal("1000.00"), f"Expected 1000.00, got {s_tepung.stok_tersedia}"
             assert s_telur.stok_tersedia == Decimal("50.00"), f"Expected 50.00, got {s_telur.stok_tersedia}"
-            assert s_tepung.version == 2
-            assert s_telur.version == 2
+            assert s_tepung.version == 4
+            assert s_telur.version == 4
             movements = (await db.execute(select(StockMovement).where(
                 StockMovement.reference_type == "order", StockMovement.reference_id == buyer_order_id
             ))).scalars().all()

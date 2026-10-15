@@ -209,6 +209,8 @@ async def ensure_order_columns(conn: AsyncConnection):
 
     # OrderItem columns & nullable product_id
     await conn.execute(text("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS custom_product_name VARCHAR(255);"))
+    await conn.execute(text("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_name_snapshot VARCHAR(255);"))
+    await conn.execute(text("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS unit_price_snapshot NUMERIC(10, 2);"))
     await conn.execute(text("ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL;"))
 
     # Invoice column length
@@ -223,6 +225,26 @@ async def ensure_fulfillment_columns(conn: AsyncConnection):
 
     await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfillment_date TIMESTAMPTZ;"))
     await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS settlement_due_date TIMESTAMPTZ;"))
+
+
+async def ensure_order_accessories_table(conn: AsyncConnection):
+    """Create the snapshot table used by seller custom-order accessories."""
+    if conn.dialect.name != "postgresql":
+        return
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS order_accessories (
+            id SERIAL PRIMARY KEY,
+            order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+            stock_item_id INTEGER NOT NULL REFERENCES stock_items(id),
+            stock_item_name VARCHAR(100) NOT NULL,
+            unit VARCHAR(20) NOT NULL,
+            quantity NUMERIC(10, 4) NOT NULL,
+            unit_cost_snapshot NUMERIC(10, 4) NOT NULL,
+            subtotal NUMERIC(10, 2) NOT NULL
+        )
+    """))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_order_accessories_order_id ON order_accessories(order_id);"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_order_accessories_stock_item_id ON order_accessories(stock_item_id);"))
 
 
 async def ensure_order_status_enum(conn: AsyncConnection):
@@ -468,6 +490,7 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_user_columns(conn)
     await ensure_order_columns(conn)
     await ensure_fulfillment_columns(conn)
+    await ensure_order_accessories_table(conn)
     await ensure_payment_columns(conn)
     await ensure_review_columns(conn)
     await ensure_trigram_and_schema_optimizations(conn)

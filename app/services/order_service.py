@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, cast, String
 from sqlalchemy.orm import selectinload
 
-from app.models.order import Order, OrderItem, Invoice, MetodePengirimanEnum, OrderStatusEnum, InvoiceStatusEnum
+from app.models.order import Order, OrderItem, OrderAccessory, Invoice, MetodePengirimanEnum, OrderStatusEnum, InvoiceStatusEnum
 from app.models.product import Product
 from app.models.payment import Payment, PaymentStatusEnum
 from app.models.stock_item import StockItem, StockMovement
@@ -40,7 +40,8 @@ async def create_new_order(
     due_date: Optional[datetime] = None,
     fulfillment_date: Optional[datetime] = None,
     payment_method_preference: Optional[str] = None,
-    email_seller_on_commit: bool = False,
+    email_seller_on_commit: bool = True,
+    actor_buyer: Optional[Buyer] = None,
 ) -> Order:
     try:
         # ── 1. Cek tagihan aktif ─────────────────────────────────────────────
@@ -122,6 +123,8 @@ async def create_new_order(
 
             item_data_list.append({
                 "product_id": product.id,
+                "product_name_snapshot": product.nama_produk,
+                "unit_price_snapshot": Decimal(str(product.harga_jual)),
                 "jumlah": jumlah,
                 "hpp_snapshot": Decimal(str(product.hpp_total or 0)),
                 "subtotal": subtotal,
@@ -217,6 +220,8 @@ async def create_new_order(
                 OrderItem(
                     order_id=order_obj.id,
                     product_id=d["product_id"],
+                    product_name_snapshot=d["product_name_snapshot"],
+                    unit_price_snapshot=d["unit_price_snapshot"],
                     jumlah=d["jumlah"],
                     custom_decoration_charge=d["custom_decoration_charge"],
                     subtotal=d["subtotal"],
@@ -237,8 +242,14 @@ async def create_new_order(
             ),
         )
 
+        # Persist seller in-app notifications in the same transaction as the order.
+        from app.services.notification_service import notify_order_created
+        await notify_order_created(db, order_obj, actor_buyer=actor_buyer)
+
         if email_seller_on_commit:
-            order_obj.customer = await db.get(Customer, customer_id)
+            customer = await db.get(Customer, customer_id)
+            if customer is not None:
+                order_obj.customer = customer
             from app.services.email_outbox_service import enqueue_new_order_for_sellers
             await enqueue_new_order_for_sellers(db, order_obj)
 
@@ -264,11 +275,11 @@ async def create_custom_order(
     data: CustomOrderCreate,
 ) -> Order:
     """
-    Membuat pesanan kustom buatan seller tanpa master produk:
+    Membuat pesanan manual seller dari produk katalog dan aksesoris stok:
     1. Upsert Customer berdasarkan customer_phone dan customer_name.
-    2. Hitung total pesanan dari daftar item kustom (price * qty + custom_decoration_charge).
-    3. Bypass pemotongan stok bahan baku/recipe.
-    4. Buat Order & OrderItems dengan product_id = None dan custom_product_name.
+    2. Hitung harga produk dari katalog dan harga aksesoris dari biaya stok saat order.
+    3. Kunci dan kurangi stok resep serta aksesoris dalam transaksi yang sama.
+    4. Simpan snapshot pemakaian, harga, dan nama untuk histori/reversal.
     5. Buat Invoice otomatis dengan status 'unpaid'.
     """
     try:
@@ -304,34 +315,121 @@ async def create_custom_order(
                         detail=str(e),
                     )
 
-            # Kalkulasi item & total
+            # Resolve catalog products and collect recipe requirements. Stock is
+            # locked and checked below, in sorted ID order, before any write.
             total_harga_pesanan = Decimal("0.00")
             item_objects = []
+            stock_item_requirements: dict[int, dict] = {}
 
             for item in data.items:
+                product_result = await db.execute(
+                    select(Product)
+                    .where(Product.id == item.product_id)
+                    .options(selectinload(Product.recipes).selectinload(Recipe.stock_item))
+                )
+                product = product_result.scalars().first()
+                if not product:
+                    raise HTTPException(status_code=422, detail=f"Produk ID {item.product_id} tidak ditemukan.")
+                if not product.is_active or not product.is_available:
+                    raise HTTPException(status_code=400, detail=f"Produk '{product.nama_produk}' tidak tersedia.")
+                if product.harga_jual is None or Decimal(str(product.harga_jual)) <= 0:
+                    raise HTTPException(status_code=400, detail=f"Produk '{product.nama_produk}' belum memiliki harga jual.")
+                if product.minimum_order and item.qty < product.minimum_order:
+                    raise HTTPException(status_code=400, detail=f"Jumlah pesanan untuk '{product.nama_produk}' minimal {product.minimum_order} pcs.")
+                if not product.recipes:
+                    raise HTTPException(status_code=400, detail=f"Produk '{product.nama_produk}' belum memiliki resep stok.")
+
                 qty = item.qty
-                price = Decimal(str(item.price)) if item.price is not None else Decimal("0.00")
+                price = Decimal(str(product.harga_jual))
                 dec_charge = Decimal(str(item.custom_decoration_charge or "0.00"))
                 subtotal = (price * qty) + dec_charge
                 total_harga_pesanan += subtotal
-
-                custom_pname = str(item.custom_product_name).strip() if item.custom_product_name else "Custom Item"
-
                 item_objects.append({
-                    "product_id": None,
-                    "custom_product_name": custom_pname,
+                    "product_id": product.id,
+                    "product_name": product.nama_produk,
+                    "unit_price": price,
                     "jumlah": qty,
                     "custom_decoration_charge": dec_charge,
                     "subtotal": subtotal,
-                    "hpp_snapshot": Decimal("0.00"),
+                    "hpp_snapshot": Decimal(str(product.hpp_total or 0)),
                 })
 
-            # Spending Cap — proteksi transaksi anomali
+                for recipe in product.recipes:
+                    stock_item = recipe.stock_item
+                    if not stock_item:
+                        raise HTTPException(status_code=409, detail=f"Resep produk '{product.nama_produk}' memiliki bahan yang tidak tersedia.")
+                    needed = Decimal(str(recipe.jumlah_dibutuhkan)) * qty
+                    if not needed.is_finite() or needed <= 0:
+                        raise HTTPException(status_code=409, detail=f"Takaran resep produk '{product.nama_produk}' tidak valid.")
+                    req = stock_item_requirements.setdefault(stock_item.id, {
+                        "total_needed": Decimal("0"), "stock_item": stock_item,
+                        "reason": "Pemakaian resep produk",
+                    })
+                    req["total_needed"] += needed
+
+            # Accessory prices use the stock item's current unit cost, captured
+            # once for this order; no caller-supplied price is trusted.
+            accessory_objects = []
+            for accessory in data.accessories:
+                qty = Decimal(str(accessory.quantity))
+                accessory_objects.append({
+                    "stock_item_id": accessory.stock_item_id,
+                    "quantity": qty,
+                })
+                req = stock_item_requirements.setdefault(accessory.stock_item_id, {
+                    "total_needed": Decimal("0"), "stock_item": None,
+                    "reason": "Pemakaian aksesoris pesanan",
+                })
+                if req["reason"] == "Pemakaian resep produk":
+                    req["reason"] = "Pemakaian resep produk dan aksesoris pesanan"
+                req["total_needed"] += qty
+
+            # Serialize inventory deductions and prevent overselling across
+            # recipe ingredients and accessories, including repeated item IDs.
+            sorted_stock_ids = sorted(stock_item_requirements)
+            locked_result = await db.execute(
+                select(StockItem).where(StockItem.id.in_(sorted_stock_ids)).order_by(StockItem.id)
+                .with_for_update().execution_options(populate_existing=True)
+            ) if sorted_stock_ids else None
+            locked_items = {row.id: row for row in locked_result.scalars().all()} if locked_result else {}
+            for stock_id in sorted_stock_ids:
+                req = stock_item_requirements[stock_id]
+                stock_item = locked_items.get(stock_id)
+                if not stock_item:
+                    raise HTTPException(status_code=422, detail=f"Bahan stok ID {stock_id} tidak ditemukan.")
+                if stock_item.stok_tersedia < req["total_needed"]:
+                    raise HTTPException(status_code=400, detail=f"Stok '{stock_item.nama_item}' tidak mencukupi.")
+                req["stock_item"] = stock_item
+
+            # Price accessories from locked, current unit costs and save a
+            # historical snapshot. Decimal rounding uses standard rupiah cents.
+            from decimal import ROUND_HALF_UP
+            for accessory_data in accessory_objects:
+                stock_item = locked_items.get(accessory_data["stock_item_id"])
+                if not stock_item:
+                    raise HTTPException(status_code=422, detail=f"Aksesoris stok ID {accessory_data['stock_item_id']} tidak ditemukan.")
+                unit_cost = Decimal(str(stock_item.harga_per_satuan))
+                if not unit_cost.is_finite() or unit_cost < 0:
+                    raise HTTPException(status_code=409, detail=f"Biaya stok '{stock_item.nama_item}' tidak valid.")
+                subtotal = (accessory_data["quantity"] * unit_cost).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                accessory_data.update({
+                    "stock_item_name": stock_item.nama_item,
+                    "unit": stock_item.satuan.value if hasattr(stock_item.satuan, "value") else str(stock_item.satuan),
+                    "unit_cost_snapshot": unit_cost,
+                    "subtotal": subtotal,
+                })
+                total_harga_pesanan += subtotal
+
             if total_harga_pesanan > MAX_ORDER_AMOUNT:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Total pesanan Rp {total_harga_pesanan:,.0f} melebihi batas maksimal Rp {MAX_ORDER_AMOUNT:,.0f} per order.",
                 )
+
+            for stock_id in sorted_stock_ids:
+                stock_item = locked_items[stock_id]
+                stock_item.stok_tersedia -= stock_item_requirements[stock_id]["total_needed"]
+                stock_item.version += 1
 
             # Buat Order (created_via = "seller")
             order_obj = Order(
@@ -347,20 +445,32 @@ async def create_custom_order(
             )
             await order_repo.create_order(db, order_obj)
 
-            # Buat OrderItems kustom tanpa product_id (product_id = None)
+            for stock_id, req in stock_item_requirements.items():
+                db.add(StockMovement(
+                    stock_item_id=stock_id, movement_type="ORDER",
+                    quantity=-req["total_needed"],
+                    unit_cost=Decimal(str(req["stock_item"].harga_per_satuan or 0)),
+                    reference_type="order", reference_id=order_obj.id,
+                    reason=req["reason"],
+                ))
+
             for item_data in item_objects:
                 await order_repo.create_order_item(
                     db,
                     OrderItem(
                         order_id=order_obj.id,
-                        product_id=None,
-                        custom_product_name=item_data["custom_product_name"],
+                        product_id=item_data["product_id"],
+                        product_name_snapshot=item_data["product_name"],
+                        unit_price_snapshot=item_data["unit_price"],
                         jumlah=item_data["jumlah"],
                         custom_decoration_charge=item_data["custom_decoration_charge"],
                         subtotal=item_data["subtotal"],
                         hpp_snapshot=item_data.get("hpp_snapshot", Decimal("0.00")),
                     ),
                 )
+
+            for accessory_data in accessory_objects:
+                db.add(OrderAccessory(order_id=order_obj.id, **accessory_data))
 
             # Buat Invoice otomatis
             unique_suffix = secrets.token_hex(3).upper()
@@ -518,11 +628,9 @@ async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCre
             due_date=data.due_date,
             fulfillment_date=data.fulfillment_date,
             payment_method_preference=data.payment_method_preference,
-            email_seller_on_commit=True,
+            actor_buyer=buyer,
         )
         await _attach_payment_amounts(db, order)
-        from app.services.notification_service import notify_order_created
-        await notify_order_created(db, order, actor_buyer=buyer)
         return order
     except HTTPException:
         raise
@@ -557,6 +665,12 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Order tidak ditemukan",
             )
+
+        if order.status != OrderStatusEnum.pending:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Pesanan berstatus '{order.status.value}' tidak dapat dibatalkan kembali.",
+            )
             
         if not order.invoice or order.invoice.status != InvoiceStatusEnum.unpaid:
             raise HTTPException(
@@ -564,47 +678,11 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
                 detail="Pesanan yang sudah dibayar atau dicicil tidak dapat dibatalkan secara otomatis",
             )
             
-        # Restore stock items
-        stock_item_returns = {}
-        for item in order.order_items:
-            if item.product and item.product.recipes:
-                for recipe in item.product.recipes:
-                    stock_item = recipe.stock_item
-                    if not stock_item:
-                        continue
-                    kembalikan = Decimal(str(recipe.jumlah_dibutuhkan)) * Decimal(str(item.jumlah))
-                    if stock_item.id not in stock_item_returns:
-                        stock_item_returns[stock_item.id] = {
-                            "qty_return": Decimal("0.00"),
-                            "stock_item_obj": stock_item
-                        }
-                    stock_item_returns[stock_item.id]["qty_return"] += kembalikan
-
-        # Execute updates with optimistic locking check
-        for stock_id, data in stock_item_returns.items():
-            stock_item = data["stock_item_obj"]
-            qty_return = data["qty_return"]
-            
-            stmt = (
-                update(StockItem)
-                .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
-                .values(
-                    stok_tersedia=StockItem.stok_tersedia + qty_return,
-                    version=StockItem.version + 1
-                )
-            )
-            res = await db.execute(stmt)
-            if res.rowcount == 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Terjadi kegagalan pemulihan stok karena transaksi bersamaan. Silakan coba lagi.",
-                )
-            db.add(StockMovement(stock_item_id=stock_id, movement_type="REVERSAL",
-                                 quantity=qty_return, unit_cost=Decimal(str(stock_item.harga_per_satuan or 0)),
-                                 reference_type="order", reference_id=order.id,
-                                 reason="Pemulihan bahan karena pembatalan pesanan"))
+        await _rollback_order_stock(db, order)
 
         order.status = OrderStatusEnum.cancelled
+        from app.services.email_outbox_service import enqueue_order_status_for_buyer
+        await enqueue_order_status_for_buyer(db, order, OrderStatusEnum.cancelled.value)
         await db.commit()
         return {"status": "success", "message": "Pesanan berhasil dibatalkan"}
 
@@ -760,47 +838,60 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
 
 
 async def _rollback_order_stock(db: AsyncSession, order: Order) -> None:
-    from app.models.stock_item import StockItem
-    
-    stock_item_returns = {}
-    for item in order.order_items:
-        if item.product and item.product.recipes:
-            for recipe in item.product.recipes:
-                stock_item = recipe.stock_item
-                if not stock_item:
-                    continue
-                qty_to_return = Decimal(str(item.jumlah)) * Decimal(str(recipe.jumlah_dibutuhkan))
-                if stock_item.id not in stock_item_returns:
-                    stock_item_returns[stock_item.id] = Decimal("0")
-                stock_item_returns[stock_item.id] += qty_to_return
+    from app.models.stock_item import StockItem, StockMovement
 
-    MAX_STOCK_RETRY = 3
+    # Serialize every reversal path and make repeated calls idempotent.
+    await db.execute(select(Order.id).where(Order.id == order.id).with_for_update())
+    already_reversed = await db.execute(
+        select(StockMovement.id).where(
+            StockMovement.reference_type == "order",
+            StockMovement.reference_id == order.id,
+            StockMovement.movement_type == "REVERSAL",
+        ).limit(1)
+    )
+    if already_reversed.scalar_one_or_none() is not None:
+        return
+
+    # ORDER movements are the immutable record of the recipe quantities actually
+    # consumed at creation time. Current recipe rows may have changed since then.
+    consumed = await db.execute(
+        select(StockMovement.stock_item_id, func.sum(StockMovement.quantity))
+        .where(
+            StockMovement.reference_type == "order",
+            StockMovement.reference_id == order.id,
+            StockMovement.movement_type == "ORDER",
+        )
+        .group_by(StockMovement.stock_item_id)
+    )
+    stock_item_returns = {
+        stock_id: -Decimal(str(quantity))
+        for stock_id, quantity in consumed.all()
+        if quantity is not None and Decimal(str(quantity)) < 0
+    }
+
+    max_retries = 3
     for stock_id, qty_return in stock_item_returns.items():
-        for attempt in range(1, MAX_STOCK_RETRY + 1):
-            fresh_result = await db.execute(
-                select(StockItem).where(StockItem.id == stock_id)
-            )
-            stock_item = fresh_result.scalars().first()
+        for attempt in range(1, max_retries + 1):
+            stock_result = await db.execute(select(StockItem).where(StockItem.id == stock_id))
+            stock_item = stock_result.scalars().first()
             if not stock_item:
-                break
+                raise HTTPException(status_code=409, detail=f"Bahan baku {stock_id} untuk reversal tidak ditemukan")
 
-            stmt = (
+            result = await db.execute(
                 update(StockItem)
                 .where(StockItem.id == stock_id, StockItem.version == stock_item.version)
-                .values(
-                    stok_tersedia=StockItem.stok_tersedia + qty_return,
-                    version=StockItem.version + 1,
-                )
+                .values(stok_tersedia=StockItem.stok_tersedia + qty_return,
+                        version=StockItem.version + 1)
             )
-            res = await db.execute(stmt)
-            if res.rowcount > 0:
-                db.add(StockMovement(stock_item_id=stock_id, movement_type="REVERSAL",
-                                     quantity=qty_return, unit_cost=Decimal(str(stock_item.harga_per_satuan or 0)),
-                                     reference_type="order", reference_id=order.id,
-                                     reason="Pemulihan bahan karena pembatalan/refund"))
+            if result.rowcount == 1:
+                db.add(StockMovement(
+                    stock_item_id=stock_id, movement_type="REVERSAL", quantity=qty_return,
+                    unit_cost=Decimal(str(stock_item.harga_per_satuan or 0)),
+                    reference_type="order", reference_id=order.id,
+                    reason="Pemulihan bahan berdasarkan pemakaian saat order dibuat",
+                ))
                 break
-
-            if attempt == MAX_STOCK_RETRY:
+            if attempt == max_retries:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Terjadi kegagalan pemulihan stok karena transaksi bersamaan. Silakan coba lagi.",
@@ -894,6 +985,8 @@ async def cancel_and_refund_order(
     if order.status != OrderStatusEnum.cancelled:
         await _rollback_order_stock(db, order)
         order.status = OrderStatusEnum.cancelled
+        from app.services.email_outbox_service import enqueue_order_status_for_buyer
+        await enqueue_order_status_for_buyer(db, order, OrderStatusEnum.cancelled.value)
     await db.commit()
 
     return RefundResponse(
