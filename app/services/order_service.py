@@ -255,6 +255,12 @@ async def create_new_order(
 
         # ── 7. Commit & return dengan relasi ter-load ─────────────────────────
         await db.commit()
+
+        # Notifikasi WhatsApp pesanan baru ke seller via Chatbot (padanan email order_created).
+        # Dikirim sesudah commit karena chatbot langsung membaca detail order lewat GET /orders/{id}.
+        from app.services.chatbot_notify import notify_chatbot_order_event
+        await notify_chatbot_order_event(order_obj.id, "created")
+
         order = await order_repo.get_order_with_details(db, order_obj.id)
         return await _attach_payment_amounts(db, order)
 

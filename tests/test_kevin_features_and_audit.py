@@ -193,6 +193,38 @@ async def test_chatbot_webhooks_for_processing_and_completed(audit_test_session)
 
 
 @pytest.mark.asyncio
+async def test_chatbot_webhook_for_created_order(audit_test_session):
+    """Test outward chatbot webhook 'created' is sent after a new order is committed (WhatsApp notification to sellers)."""
+    SessionLocal = audit_test_session
+    async with SessionLocal() as db:
+        db.add(Customer(id=2, nama="Sari Customer", nomor_wa="08198765432", alamat="Jl. Melati No. 5"))
+        await db.commit()
+
+        with patch("app.services.chatbot_notify.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+            with patch.object(settings, "chatbot_url", "http://chatbot.local"), \
+                 patch.object(settings, "chatbot_internal_key", "secret-internal-key"):
+
+                order = await order_service.create_new_order(
+                    db,
+                    customer_id=2,
+                    items=[{"product_id": 1, "jumlah": 1}],
+                    metode_pengiriman="pickup",
+                    fulfillment_date=datetime.now(timezone.utc) + timedelta(days=3),
+                )
+
+                assert mock_client.post.called
+                post_url = mock_client.post.call_args[0][0]
+                assert post_url.endswith(f"/webhook/internal/orders/{order.id}/created")
+                assert mock_client.post.call_args[1]["headers"]["X-Internal-Key"] == "secret-internal-key"
+
+
+@pytest.mark.asyncio
 async def test_dp_order_status_transitions_without_enforcing_online_settlement(audit_test_session):
     """Ensure DP orders can transition to 'ready' and 'picked_up' without enforcing online settlement."""
     SessionLocal = audit_test_session
