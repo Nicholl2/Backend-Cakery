@@ -735,6 +735,11 @@ async def get_or_create_customer_for_buyer(db: AsyncSession, buyer: Buyer) -> Cu
     or create a new Customer if none exists.
     Prevents 409 Conflict / duplicate key errors.
     """
+    customer_result = await db.execute(select(Customer).where(Customer.buyer_id == buyer.id))
+    customer = customer_result.scalars().first()
+    if customer:
+        return customer
+
     customer = await customer_repo.get_by_nomor_wa(db, buyer.phone)
     if not customer:
         customer, _ = await customer_repo.upsert(
@@ -744,11 +749,29 @@ async def get_or_create_customer_for_buyer(db: AsyncSession, buyer: Buyer) -> Cu
             alamat=None,
         )
         await db.flush()
+    if customer.buyer_id not in (None, buyer.id):
+        raise HTTPException(status_code=409, detail="Data customer sudah terhubung ke akun buyer lain.")
+    customer.buyer_id = buyer.id
+    await db.flush()
     return customer
 
 
-async def get_buyer_orders(db: AsyncSession, buyer: Buyer) -> list[Order]:
+async def get_customer_for_buyer(db: AsyncSession, buyer: Buyer) -> Optional[Customer]:
+    """Resolve a buyer's stable customer record, linking legacy phone matches once."""
+    result = await db.execute(select(Customer).where(Customer.buyer_id == buyer.id))
+    customer = result.scalars().first()
+    if customer:
+        return customer
     customer = await customer_repo.get_by_nomor_wa(db, buyer.phone)
+    if customer and customer.buyer_id in (None, buyer.id):
+        customer.buyer_id = buyer.id
+        await db.flush()
+        return customer
+    return None
+
+
+async def get_buyer_orders(db: AsyncSession, buyer: Buyer) -> list[Order]:
+    customer = await get_customer_for_buyer(db, buyer)
     if not customer:
         return []
     orders = await order_repo.get_orders_by_customer_id(db, customer.id)
@@ -758,7 +781,7 @@ async def get_buyer_orders(db: AsyncSession, buyer: Buyer) -> list[Order]:
 
 
 async def get_buyer_order_by_id(db: AsyncSession, buyer: Buyer, order_id: int) -> Order:
-    customer = await customer_repo.get_by_nomor_wa(db, buyer.phone)
+    customer = await get_customer_for_buyer(db, buyer)
     if not customer:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -881,7 +904,7 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
         logger.error(f"DETAIL ERROR: {repr(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gagal membatalkan order: {str(e)}",
+            detail="Terjadi kesalahan saat membatalkan pesanan.",
         )
 
 

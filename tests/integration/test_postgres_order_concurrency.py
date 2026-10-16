@@ -14,16 +14,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.database import Base
 from app.models.customer import Customer
+from app.models.buyer import Buyer
 from app.models.order import Invoice, InvoiceStatusEnum, MetodePengirimanEnum, Order, OrderStatusEnum
 from app.models.payment import Payment, PaymentStatusEnum, PaymentTypeEnum
 from app.models.product import Product
 from app.models.recipe import Recipe
 from app.models.stock_item import KategoriEnum, SatuanEnum, StockItem
-from app.services.order_service import create_new_order
+from app.services.order_service import create_new_order, create_buyer_order
 from app.services.order_service import cancel_order_by_customer
+from app.services.buyer_auth_service import change_buyer_phone
 from app.services.payment_service import process_midtrans_webhook
 from app.services.payment_service import check_expired_settlements
 from app.core.config import settings
+from app.core.security import hash_password
+from app.schemas.order import BuyerOrderCreate, OrderItemCreate
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
@@ -96,6 +100,51 @@ async def test_postgres_concurrent_same_key_returns_one_order(pg_sessions, monke
     async with pg_sessions() as db:
         assert await db.scalar(select(func.count(Order.id))) == 1
         assert (await db.get(StockItem, 1)).stok_tersedia == Decimal("0.00")
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_postgres_checkout_racing_buyer_phone_change_keeps_customer_link(pg_sessions, monkeypatch):
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("app.services.notification_service.notify_order_created", noop)
+    monkeypatch.setattr("app.services.email_outbox_service.enqueue_new_order_for_sellers", noop)
+    monkeypatch.setattr("app.services.chatbot_notify.notify_chatbot_order_event", noop)
+    async with pg_sessions() as db:
+        buyer = Buyer(name="Phone race buyer", email="phone-race@example.test",
+                      phone="628123450001", password_hash=hash_password("buyer-password"),
+                      is_verified=True)
+        db.add(buyer)
+        await db.commit()
+        buyer_id = buyer.id
+
+    data = BuyerOrderCreate(
+        metode_pengiriman="pickup",
+        items=[OrderItemCreate(product_id=1, jumlah=1)],
+        fulfillment_date=datetime.now(timezone.utc) + timedelta(days=2),
+    )
+    barrier = asyncio.Barrier(2)
+
+    async def checkout():
+        async with pg_sessions() as db:
+            buyer = await db.get(Buyer, buyer_id)
+            await barrier.wait()
+            return await create_buyer_order(db, buyer, data)
+
+    async def change_phone():
+        async with pg_sessions() as db:
+            buyer = await db.get(Buyer, buyer_id)
+            await barrier.wait()
+            return await change_buyer_phone(db, buyer, "buyer-password", "628123459999")
+
+    order, _ = await asyncio.gather(checkout(), change_phone())
+    async with pg_sessions() as db:
+        buyer = await db.get(Buyer, buyer_id)
+        customer = (await db.execute(select(Customer).where(Customer.buyer_id == buyer_id))).scalar_one()
+        persisted_order = await db.get(Order, order.id)
+        assert buyer.phone == "628123459999"
+        assert customer.nomor_wa == buyer.phone
+        assert persisted_order.customer_id == customer.id
 
 
 @pytest.mark.asyncio(loop_scope="function")

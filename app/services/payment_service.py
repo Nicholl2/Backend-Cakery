@@ -153,6 +153,16 @@ async def create_midtrans_charge(
                     "pg_order_id": ep.pg_order_id,
                     "message": "Tagihan pembayaran sudah ada dan masih aktif."}
 
+    if payment_type == "dp" and any(
+        payment.payment_type == PaymentTypeEnum.dp
+        and payment.payment_status in (PaymentStatusEnum.success, PaymentStatusEnum.refunded)
+        for payment in existing_payments
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="DP sudah diterima untuk pesanan ini. Gunakan tipe pembayaran full untuk pelunasan.",
+        )
+
     # Persist a local reservation before calling Midtrans. A timeout after the
     # gateway accepted the charge must not make a retry create a second charge.
     order_id_midtrans = f"{invoice.nomor_invoice}-PAY-{int(time.time() * 1000)}-{secrets.token_hex(2).upper()}"

@@ -19,6 +19,7 @@ from app.api.dependencies import (
     require_service_scope,
 )
 from app.services import payment_service
+from app.services import order_service
 from app.repositories import order_repo, customer_repo
 from app.models.payment import PaymentStatusEnum
 from app.schemas.payment import ManualPaymentRequest, ManualPaymentResponse
@@ -61,7 +62,7 @@ async def create_midtrans_payment(
         raise HTTPException(status_code=404, detail="Order tidak ditemukan")
     # Jika diakses oleh Buyer JWT, validasi kepemilikan order
     if auth.is_buyer:
-        customer = await customer_repo.get_by_nomor_wa(db, auth.buyer.phone)
+        customer = await order_service.get_customer_for_buyer(db, auth.buyer)
         if not customer or order.customer_id != customer.id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -140,7 +141,7 @@ async def get_order_payment_status(
             )
 
         if auth.is_buyer:
-            customer = await customer_repo.get_by_nomor_wa(db, auth.buyer.phone)
+            customer = await order_service.get_customer_for_buyer(db, auth.buyer)
             if not customer or order.customer_id != customer.id:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -215,7 +216,7 @@ async def get_order_payment_status(
         logger.error(f"[PAYMENT_POLL_ERROR] Unexpected error on order {order_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gagal memeriksa status pembayaran: {str(e)}"
+            detail="Terjadi kesalahan saat memeriksa status pembayaran"
         )
 
 # 3. Endpoint POST /payments/notify & /payments/notification (PUBLIC - webhook)

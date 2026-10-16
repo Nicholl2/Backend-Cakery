@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.sql import func
 from app.core.database import Base
 from sqlalchemy.orm import relationship
@@ -9,6 +9,7 @@ class Customer(Base):
     __tablename__ = "customers"
 
     id = Column(Integer, primary_key=True, index=True)
+    buyer_id = Column(Integer, ForeignKey("buyers.id", ondelete="SET NULL"), nullable=True, unique=True, index=True)
     nama = Column(String(100), nullable=False)
     nomor_wa = Column(String(20), unique=True, nullable=False, index=True)
     alamat = Column(Text, nullable=True)

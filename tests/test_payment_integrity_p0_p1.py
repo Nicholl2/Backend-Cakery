@@ -121,6 +121,50 @@ async def test_active_pending_payment_conflicts_with_different_method_or_type(db
 
 
 @pytest.mark.asyncio
+async def test_retry_dp_after_successful_settlement_cannot_create_second_charge(db_session, monkeypatch):
+    db, order, invoice, _ = db_session
+    payment = (await db.execute(select(Payment).where(Payment.invoice_id == invoice.id))).scalars().one()
+    payment.pg_order_id = "INV-INTEGRITY-PAY-SETTLED-DP"
+    payment.pg_transaction_id = "settled-dp-transaction"
+    payment.payment_status = PaymentStatusEnum.pending
+    invoice.status = InvoiceStatusEnum.unpaid
+    await db.commit()
+
+    key = "settled-dp-webhook-test-key"
+    monkeypatch.setattr(settings, "midtrans_server_key", key)
+    async def noop(*args, **kwargs):
+        return None
+    monkeypatch.setattr("app.services.chatbot_notify.notify_payment_status", noop)
+    monkeypatch.setattr("app.services.email_outbox_service.enqueue_order_payment_event", noop)
+    monkeypatch.setattr("app.services.chatbot_notify.notify_chatbot_order_event", noop)
+    webhook = {
+        "order_id": payment.pg_order_id,
+        "status_code": "200",
+        "gross_amount": "500000.00",
+        "transaction_status": "settlement",
+        "transaction_id": payment.pg_transaction_id,
+    }
+    webhook["signature_key"] = hashlib.sha512(
+        f"{webhook['order_id']}{webhook['status_code']}{webhook['gross_amount']}{key}".encode()
+    ).hexdigest()
+    await process_midtrans_webhook(db, webhook)
+    await db.refresh(payment)
+    assert payment.payment_status == PaymentStatusEnum.success
+
+    async def unexpected_charge(*args, **kwargs):
+        pytest.fail("A settled DP retry must not create another Midtrans charge")
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", unexpected_charge)
+    with pytest.raises(HTTPException) as error:
+        await create_midtrans_charge(db, order.id, "qris", "dp", Decimal("500000"))
+
+    assert error.value.status_code == 409
+    payments = (await db.execute(select(Payment).where(Payment.invoice_id == invoice.id))).scalars().all()
+    assert payments == [await db.get(Payment, payments[0].id)]
+    assert payments[0].payment_status == PaymentStatusEnum.success
+
+
+@pytest.mark.asyncio
 async def test_order_cannot_enter_production_before_minimum_dp_is_received(db_session):
     db, order, invoice, dp = db_session
     dp.payment_status = PaymentStatusEnum.failed

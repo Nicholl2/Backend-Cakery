@@ -17,6 +17,8 @@ from app.models.recipe import Recipe
 from app.models.stock_item import KategoriEnum, SatuanEnum, StockItem
 from app.schemas.order import BuyerOrderCreate, OrderItemCreate, OrderOut
 from app.services import order_service
+from app.services.buyer_auth_service import change_buyer_phone
+from app.core.security import hash_password
 
 
 @pytest.fixture
@@ -128,6 +130,48 @@ async def test_customer_cancellation_reloads_order_after_waiting_on_lock(order_d
     assert error.value.status_code == 409
     await db.refresh(order)
     assert order.status.value == "in_process"
+    assert (await db.get(StockItem, 1)).stok_tersedia == Decimal("0.00")
+
+
+@pytest.mark.asyncio
+async def test_buyer_phone_change_preserves_order_and_payment_customer_link(order_db):
+    db, factory = order_db
+    order = await make_order(db)
+    customer_id = order.customer_id
+    order_id = order.id
+    buyer = Buyer(name="Order Buyer", email="buyer-link@example.test", phone="6281299900001",
+                  password_hash=hash_password("current-password"), is_verified=True)
+    db.add(buyer)
+    await db.commit()
+
+    await change_buyer_phone(db, buyer, "current-password", "6281299900009")
+
+    async with factory() as verify_db:
+        persisted_buyer = await verify_db.get(Buyer, buyer.id)
+        customer = await order_service.get_customer_for_buyer(verify_db, persisted_buyer)
+        assert customer is not None
+        assert customer.id == customer_id
+        assert customer.nomor_wa == "6281299900009"
+        assert [buyer_order.id for buyer_order in await order_service.get_buyer_orders(verify_db, persisted_buyer)] == [order_id]
+        assert (await order_service.get_buyer_order_by_id(verify_db, persisted_buyer, order_id)).id == order_id
+
+
+@pytest.mark.asyncio
+async def test_customer_cancellation_hides_internal_error_and_rolls_back(order_db, monkeypatch):
+    db, _ = order_db
+    order = await make_order(db)
+
+    async def fail_stock_rollback(*args, **kwargs):
+        raise RuntimeError("secret database connection string")
+
+    monkeypatch.setattr(order_service, "_rollback_order_stock", fail_stock_rollback)
+    with pytest.raises(HTTPException) as error:
+        await order_service.cancel_order_by_customer(db, order.id)
+
+    assert error.value.status_code == 500
+    assert "secret database connection string" not in error.value.detail
+    await db.refresh(order)
+    assert order.status.value == "pending"
     assert (await db.get(StockItem, 1)).stok_tersedia == Decimal("0.00")
 
 

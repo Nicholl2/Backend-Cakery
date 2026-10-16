@@ -10,6 +10,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.repositories import buyer_repo, otp_repo, user_repo
 from app.models.buyer import Buyer
+from app.models.customer import Customer
+from app.repositories import customer_repo
 from app.core.security import hash_password, verify_password, create_access_token
 from app.core.cache import app_cache
 from app.models.otp_code import OTPCode
@@ -684,6 +686,13 @@ async def change_buyer_phone(
     db: AsyncSession, buyer: Buyer, current_password: str, new_phone: str
 ) -> Buyer:
     """Change phone number for authenticated buyer — requires current password verification."""
+    buyer_result = await db.execute(
+        select(Buyer).where(Buyer.id == buyer.id).with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    buyer = buyer_result.scalars().first()
+    if not buyer:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Buyer tidak ditemukan.")
     if not verify_password(current_password, buyer.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -698,6 +707,27 @@ async def change_buyer_phone(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Nomor WhatsApp sudah terdaftar."
         )
+
+    # Preserve the stable Customer row (and therefore existing orders and
+    # invoices) when an authenticated buyer changes their contact number.
+    customer_result = await db.execute(
+        select(Customer).where(Customer.buyer_id == buyer.id).with_for_update()
+    )
+    linked_customer = customer_result.scalars().first()
+    if not linked_customer:
+        linked_customer = await customer_repo.get_by_nomor_wa(db, buyer.phone)
+    if linked_customer:
+        target_customer = await customer_repo.get_by_nomor_wa(db, normalized)
+        if target_customer and target_customer.id != linked_customer.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Nomor WhatsApp sudah digunakan pada data customer pesanan lain.",
+            )
+        if linked_customer.buyer_id not in (None, buyer.id):
+            raise HTTPException(status_code=409, detail="Data customer sudah terhubung ke akun buyer lain.")
+        linked_customer.buyer_id = buyer.id
+        linked_customer.nomor_wa = normalized
+        await db.flush()
 
     updated_buyer = await buyer_repo.update_buyer_phone(db, buyer, normalized)
     return updated_buyer
