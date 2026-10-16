@@ -40,6 +40,7 @@ async def _fetch_gateway_status(
         "reason": None,
         "gateway_status": None,
         "gateway_order_id": None,
+        "local_status": payment.payment_status.value,
     }
     if not transaction_id:
         result["reason"] = "missing local transaction_id"
@@ -100,7 +101,6 @@ async def _load_candidates(limit: int | None) -> list[tuple[Payment, Invoice]]:
             select(Payment, Invoice)
             .join(Invoice, Invoice.id == Payment.invoice_id)
             .where(
-                Payment.payment_status == PaymentStatusEnum.pending,
                 Payment.pg_order_id.is_(None),
                 Payment.pg_transaction_id.is_not(None),
             )
@@ -124,7 +124,7 @@ async def _apply_verified_reference(report: dict) -> dict:
             report["applied"] = False
             report["apply_result"] = "payment disappeared"
             return report
-        if payment.payment_status != PaymentStatusEnum.pending:
+        if payment.payment_status.value != report["local_status"]:
             report["applied"] = False
             report["apply_result"] = "payment status changed during reconciliation"
             return report
@@ -162,6 +162,11 @@ async def _refresh_backfilled_payment(report: dict) -> dict:
         if not payment:
             report["apply_result"] = "payment disappeared after reference backfill"
             return report
+        if payment.payment_status != PaymentStatusEnum.pending:
+            report["applied"] = True
+            report["local_status"] = payment.payment_status.value
+            report["apply_result"] = "verified reference backfilled; terminal status left unchanged"
+            return report
         refreshed = await refresh_if_pending(db, payment)
         report["applied"] = True
         report["local_status"] = refreshed.payment_status.value
@@ -197,11 +202,13 @@ async def run(*, apply: bool, limit: int | None) -> int:
         blocked_invoices = {
             report["invoice"]
             for report in reports
-            if not report.get("backfilled")
+            if report.get("local_status") == PaymentStatusEnum.pending.value
+            and not report.get("backfilled")
         }
         for report in reports:
             if report.get("backfilled"):
-                if report["invoice"] in blocked_invoices:
+                if (report.get("local_status") == PaymentStatusEnum.pending.value
+                        and report["invoice"] in blocked_invoices):
                     report["apply_result"] = (
                         "reference backfilled; status refresh held because another "
                         "pending charge for this invoice needs reconciliation"
@@ -224,9 +231,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--apply", action="store_true",
-        help="backfill only gateway-verified references and refresh their statuses",
+        help="backfill gateway-verified references for all payment states; refresh pending rows only",
     )
-    parser.add_argument("--limit", type=int, help="limit the number of pending payments checked")
+    parser.add_argument("--limit", type=int, help="limit the number of legacy payments checked")
     args = parser.parse_args()
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be a positive integer")
