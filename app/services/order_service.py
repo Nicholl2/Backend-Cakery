@@ -1045,13 +1045,38 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
             )
 
     old_status_val = order.status.value
+    counted_sale_statuses = {
+        OrderStatusEnum.delivered,
+        OrderStatusEnum.picked_up,
+        OrderStatusEnum.completed,
+    }
+    should_count_sale = (
+        order.status not in counted_sale_statuses
+        and new_status_enum in counted_sale_statuses
+    )
     if new_status_enum != OrderStatusEnum.refunded or order.invoice.status == InvoiceStatusEnum.refunded:
         order.status = new_status_enum
+    if should_count_sale:
+        quantities_by_product: dict[int, int] = {}
+        for item in order.order_items:
+            if item.product_id is not None:
+                quantities_by_product[item.product_id] = (
+                    quantities_by_product.get(item.product_id, 0) + item.jumlah
+                )
+        for product_id, quantity in quantities_by_product.items():
+            await db.execute(
+                update(Product)
+                .where(Product.id == product_id)
+                .values(sold_count=func.coalesce(Product.sold_count, 0) + quantity)
+            )
     if new_status_enum != OrderStatusEnum.refunded or order.invoice.status == InvoiceStatusEnum.refunded:
         await _enqueue_order_status_email_best_effort(db, order, new_status_enum.value)
         from app.services.notification_service import notify_order_status_updated
         await notify_order_status_updated(db, order, old_status_val, new_status_enum.value)
     await db.commit()
+    if should_count_sale:
+        from app.core.cache import app_cache
+        app_cache.invalidate_prefix("products:")
 
     # Re-query order with details to avoid lazy loading issues
     order_refetched = await order_repo.get_order_with_details(db, order_id)
