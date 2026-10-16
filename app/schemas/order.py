@@ -70,6 +70,11 @@ class BuyerOrderCreate(BaseModel):
         return sanitize_text(v)
 
 
+class BuyerOrderCancelResponse(BaseModel):
+    status: str
+    message: str
+
+
 class CustomOrderItemCreate(BaseModel):
     product_id: int = Field(..., gt=0)
     qty: int = Field(default=1, gt=0)

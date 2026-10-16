@@ -22,6 +22,7 @@ from app.models.order import OrderStatusEnum
 from app.schemas.order import (
     OrderCreate,
     BuyerOrderCreate,
+    BuyerOrderCancelResponse,
     CustomOrderCreate,
     OrderOut,
     OrderStatusUpdate,
@@ -118,6 +119,29 @@ async def get_buyer_order_detail(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Gagal memuat detail pesanan.",
         )
+
+
+@router.post("/buyer/{order_id}/cancel", response_model=BuyerOrderCancelResponse,
+             summary="Batalkan pesanan milik Buyer yang sedang login")
+async def cancel_buyer_order(
+    order_id: int,
+    buyer: Buyer = Depends(get_current_buyer),
+    db: AsyncSession = Depends(get_db),
+) -> BuyerOrderCancelResponse:
+    """Batalkan order milik buyer selama pembayaran belum diterima/diproses gateway."""
+    try:
+        # Conceal orders owned by other buyers as not found.
+        await order_service.get_buyer_order_by_id(db, buyer, order_id)
+        result = await order_service.cancel_order_by_customer(db, order_id)
+        return BuyerOrderCancelResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling order {order_id} for buyer {buyer.id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Terjadi kesalahan saat membatalkan pesanan.",
+        ) from e
 
 
 # ── CHATBOT & ADMIN/SELLER ORDER ENDPOINTS ──────────────────────────────────
