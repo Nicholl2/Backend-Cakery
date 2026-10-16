@@ -4,8 +4,11 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -30,6 +33,11 @@ def _test_url(env_name: str) -> str:
 
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")
+
+
+def _expected_head_revision() -> str:
+    config_path = Path(__file__).resolve().parents[2] / "alembic.ini"
+    return ScriptDirectory.from_config(Config(str(config_path))).get_current_head()
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -103,7 +111,7 @@ async def test_postgres_empty_database_bootstrap_creates_current_schema_and_stam
     assert trigram["predicate"] is None
     assert trigram["operator_class"] == "gin_trgm_ops"
     assert "email gin_trgm_ops" in trigram["definition"]
-    assert revision == "20261016_01"
+    assert revision == _expected_head_revision()
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -189,7 +197,7 @@ async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_a
         assert event.status == "pending"
         assert event.attempts == 1
         assert event.payload_json == json.dumps({"payment_status": "Pending"})
-        assert revision == "20261016_01"
+        assert revision == _expected_head_revision()
 
     await engine.dispose()
 
@@ -375,7 +383,7 @@ async def test_postgres_adopts_verified_refund_revision_then_upgrades_to_head():
             lambda sync_conn: inspect(sync_conn).get_columns("order_items")
         )}
         tables = set(await connection.run_sync(lambda sync_conn: inspect(sync_conn).get_table_names()))
-    assert revision == "20261016_01"
+    assert revision == _expected_head_revision()
     assert "pg_order_id" in payment_columns
     assert {"product_name_snapshot", "unit_price_snapshot"} <= order_item_columns
     assert {"email_outbox", "email_outbox_audit", "order_accessories"} <= tables
