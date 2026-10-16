@@ -321,8 +321,9 @@ async def refund_order(
     2. Internal Seller (Staff/Admin/Owner via Bearer JWT):
        - Fleksibel sesuai kebijakan toko.
 
-    Respons mengembalikan penanda refund_mode ('auto' jika API direct refund Midtrans berhasil,
-    atau 'manual' jika pembayaran via VA/QRIS 412 yang memerlukan refund manual).
+    Respons mengembalikan refund_mode: 'auto' jika refund diterima Midtrans,
+    'in_progress' jika Midtrans masih memproses refund sebelumnya, atau 'manual'
+    jika refund perlu ditangani secara manual.
     """
     if auth.is_service:
         if not auth.has_scope("refunds:request"):

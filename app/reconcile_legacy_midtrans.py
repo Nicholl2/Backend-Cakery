@@ -113,7 +113,7 @@ async def _load_candidates(limit: int | None) -> list[tuple[Payment, Invoice]]:
 
 
 async def _apply_verified_reference(report: dict) -> dict:
-    """Backfill one verified reference, then refresh through normal logic."""
+    """Backfill one verified reference without transitioning payment state."""
     async with AsyncSessionLocal() as db:
         payment = await db.scalar(
             select(Payment)
@@ -150,13 +150,22 @@ async def _apply_verified_reference(report: dict) -> dict:
 
         payment.pg_order_id = report["gateway_order_id"]
         await db.commit()
+        report["backfilled"] = True
+        report["apply_result"] = "verified reference backfilled"
+        return report
 
-        # The normal service re-fetches authoritative status, validates all
-        # references again, and applies the standard state transitions.
+
+async def _refresh_backfilled_payment(report: dict) -> dict:
+    """Refresh one row only after every eligible reference has been backfilled."""
+    async with AsyncSessionLocal() as db:
+        payment = await db.get(Payment, report["payment_id"])
+        if not payment:
+            report["apply_result"] = "payment disappeared after reference backfill"
+            return report
         refreshed = await refresh_if_pending(db, payment)
         report["applied"] = True
-        report["apply_result"] = "reference backfilled and status refreshed"
         report["local_status"] = refreshed.payment_status.value
+        report["apply_result"] = "reference backfilled; status refreshed"
         return report
 
 
@@ -182,6 +191,23 @@ async def run(*, apply: bool, limit: int | None) -> int:
         for report in reports:
             if report["eligible"]:
                 await _apply_verified_reference(report)
+        # Backfill all verified IDs before processing expired rows. This lets
+        # the regular failed-payment logic see every pending charge on an
+        # invoice before deciding whether to release its stock.
+        blocked_invoices = {
+            report["invoice"]
+            for report in reports
+            if not report.get("backfilled")
+        }
+        for report in reports:
+            if report.get("backfilled"):
+                if report["invoice"] in blocked_invoices:
+                    report["apply_result"] = (
+                        "reference backfilled; status refresh held because another "
+                        "pending charge for this invoice needs reconciliation"
+                    )
+                else:
+                    await _refresh_backfilled_payment(report)
 
     print(json.dumps({
         "mode": "apply" if apply else "dry-run",
@@ -204,10 +230,19 @@ def main() -> None:
     args = parser.parse_args()
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be a positive integer")
+    if args.apply and args.limit is not None:
+        parser.error("--apply processes the complete candidate set; omit --limit")
+
+    async def run_and_dispose() -> None:
+        try:
+            await run(apply=args.apply, limit=args.limit)
+        finally:
+            await engine.dispose()
+
     try:
-        asyncio.run(run(apply=args.apply, limit=args.limit))
-    finally:
-        asyncio.run(engine.dispose())
+        asyncio.run(run_and_dispose())
+    except Exception as exc:
+        parser.exit(1, f"Reconciliation failed: {type(exc).__name__}: {exc}\n")
 
 
 if __name__ == "__main__":

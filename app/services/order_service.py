@@ -1025,6 +1025,12 @@ async def _rollback_order_stock(db: AsyncSession, order: Order) -> None:
         for stock_id, quantity in consumed.all()
         if quantity is not None and Decimal(str(quantity)) < 0
     }
+    if not stock_item_returns:
+        logger.warning(
+            "[INVENTORY_AUDIT] order_has_no_consumption_ledger | order_id=%s | "
+            "created_at=%s | action=stock_not_adjusted",
+            order.id, order.created_at,
+        )
 
     max_retries = 3
     for stock_id, qty_return in stock_item_returns.items():

@@ -104,7 +104,11 @@ def _validate_stock_ledger(stock, movements) -> List[str]:
         balance = new_balance.quantize(qty_scale, rounding=ROUND_HALF_UP)
 
     if master_qty > 0 and opening_count != 1:
-        errors.append(f"{label} has positive stock but does not have exactly one OPENING_BALANCE movement.")
+        if not movements or movements[0].movement_type not in {"PURCHASE", "ADJUSTMENT_IN"}:
+            errors.append(
+                f"{label} has positive stock but does not have exactly one OPENING_BALANCE "
+                "or a valid first post-migration stock increase."
+            )
     if opening_count > 1:
         errors.append(f"{label} has {opening_count} OPENING_BALANCE movements; exactly one is allowed.")
     if balance != master_qty:

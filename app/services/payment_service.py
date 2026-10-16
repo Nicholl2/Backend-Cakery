@@ -784,6 +784,16 @@ async def process_refund(
                 body = response.json()
                 if response.status_code in (200, 201) and str(body.get("status_code", "")).startswith("2"):
                     mode = "auto"
+                elif response.status_code == 416 or str(body.get("status_code", "")) == "416":
+                    # Midtrans is already processing a refund for this transaction.
+                    # Keep this reservation pending; a refund notification will
+                    # reconcile it against the gateway's refund key and amount.
+                    mode = "in_progress"
+                    logger.info(
+                        "[REFUND_AUDIT] refund_already_in_progress | payment_id=%s | "
+                        "refund_id=%s | gateway_ref=%s",
+                        payment.id, refund.id, refund.gateway_ref,
+                    )
                 else:
                     logger.warning("[REFUND_AUDIT] refund_request_rejected | payment_id=%s | http=%s", payment.id, response.status_code)
             except Exception as exc:
@@ -793,7 +803,11 @@ async def process_refund(
         logger.info("[REFUND_AUDIT] refund_pending | refund_id=%s | payment_id=%s | amount=%s | source=%s | mode=%s",
                     refund.id, payment.id, part, initiated_source, mode)
 
-    return "auto" if modes and all(mode == "auto" for mode in modes) else "manual"
+    if modes and all(mode == "auto" for mode in modes):
+        return "auto"
+    if any(mode == "in_progress" for mode in modes):
+        return "in_progress"
+    return "manual"
 
 
 async def complete_refund_notification(db: AsyncSession, payment: Payment, payload: dict) -> None:
@@ -815,10 +829,28 @@ async def complete_refund_notification(db: AsyncSession, payment: Payment, paylo
         refund = result.scalars().first()
         if not refund:
             amount = Decimal(str(entry["refund_amount"])).quantize(Decimal("0.01"))
-            refund = RefundTransaction(payment_id=payment.id, refund_amount=amount, reason=str(entry.get("reason") or "Midtrans refund")[:500],
-                                       gateway_ref=key, initiated_source="midtrans", status=RefundStatusEnum.pending)
-            db.add(refund)
-            await db.flush()
+            refund = await db.scalar(
+                select(RefundTransaction)
+                .where(
+                    RefundTransaction.payment_id == payment.id,
+                    RefundTransaction.refund_amount == amount,
+                    RefundTransaction.status == RefundStatusEnum.pending,
+                    RefundTransaction.initiated_source.like("%:in_progress"),
+                )
+                .order_by(RefundTransaction.id)
+                .limit(1)
+                .with_for_update()
+            )
+            if refund:
+                # HTTP 416 means another refund for this payment is already
+                # processing. Bind its later callback to the pending reservation
+                # instead of creating a second pending amount for the same refund.
+                refund.gateway_ref = key
+            else:
+                refund = RefundTransaction(payment_id=payment.id, refund_amount=amount, reason=str(entry.get("reason") or "Midtrans refund")[:500],
+                                           gateway_ref=key, initiated_source="midtrans", status=RefundStatusEnum.pending)
+                db.add(refund)
+                await db.flush()
         if refund.payment_id != payment.id:
             raise HTTPException(status_code=400, detail="Refund callback payment mismatch")
         callback_amount = Decimal(str(entry["refund_amount"])).quantize(Decimal("0.01"))

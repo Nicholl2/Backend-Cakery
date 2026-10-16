@@ -32,7 +32,7 @@ class Payment(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False, index=True)
-    pg_transaction_id = Column(String(100), nullable=True)
+    pg_transaction_id = Column(String(255), nullable=True)
     pg_order_id = Column(String(100), nullable=True)
     jumlah_bayar = Column(Numeric(10, 2), nullable=False)
     payment_method = Column(String(50), nullable=False)

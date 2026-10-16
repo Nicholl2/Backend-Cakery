@@ -130,7 +130,7 @@ class RefundResponse(BaseModel):
     order_id: int
     status: str
     payment_status: str
-    refund_mode: str  # "auto" | "manual"
+    refund_mode: str  # "auto" | "manual" | "in_progress"
 
     model_config = ConfigDict(from_attributes=True)
 
