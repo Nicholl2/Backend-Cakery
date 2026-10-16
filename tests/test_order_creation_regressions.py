@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -9,11 +10,12 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
 from app.models.customer import Customer
+from app.models.buyer import Buyer
 from app.models.order import Invoice, Order
 from app.models.product import Product
 from app.models.recipe import Recipe
 from app.models.stock_item import KategoriEnum, SatuanEnum, StockItem
-from app.schemas.order import OrderOut
+from app.schemas.order import BuyerOrderCreate, OrderItemCreate, OrderOut
 from app.services import order_service
 
 
@@ -110,6 +112,26 @@ async def test_retry_after_commit_returns_same_order_and_does_not_deduct_stock_t
 
 
 @pytest.mark.asyncio
+async def test_customer_cancellation_reloads_order_after_waiting_on_lock(order_db):
+    db, factory = order_db
+    order = await make_order(db)
+    order_id = order.id
+    async with factory() as concurrent_db:
+        current = await concurrent_db.get(Order, order_id)
+        current.status = "in_process"
+        await concurrent_db.commit()
+
+    # `db` still has the pending Order instance loaded from checkout. The locked
+    # cancellation query must replace that stale ORM state before validating.
+    with pytest.raises(HTTPException) as error:
+        await order_service.cancel_order_by_customer(db, order_id)
+    assert error.value.status_code == 409
+    await db.refresh(order)
+    assert order.status.value == "in_process"
+    assert (await db.get(StockItem, 1)).stok_tersedia == Decimal("0.00")
+
+
+@pytest.mark.asyncio
 async def test_notification_failure_does_not_rollback_valid_order(order_db, monkeypatch):
     db, _ = order_db
 
@@ -161,3 +183,27 @@ async def test_plain_notes_cannot_impersonate_an_idempotency_marker(order_db):
         email_seller_on_commit=False, idempotency_key=key,
     )
     assert OrderOut.model_validate(order).notes == ordinary_note
+
+
+@pytest.mark.asyncio
+async def test_buyer_idempotency_scope_survives_phone_change(order_db):
+    db, _ = order_db
+    buyer = Buyer(name="Stable Buyer", email="stable@example.test", phone="081299900001",
+                  password_hash="hash", is_active=True)
+    db.add(buyer)
+    await db.commit()
+    data = BuyerOrderCreate(
+        metode_pengiriman="pickup",
+        fulfillment_date=datetime.now(timezone.utc) + timedelta(days=2),
+        items=[OrderItemCreate(product_id=1, jumlah=1)],
+    )
+    first = await order_service.create_buyer_order(db, buyer, data, idempotency_key="buyer-stable-key")
+    first_id = first.id
+
+    buyer.phone = "081299900099"
+    await db.commit()
+    retry = await order_service.create_buyer_order(db, buyer, data, idempotency_key="buyer-stable-key")
+
+    assert retry.id == first_id
+    assert (await db.scalar(select(func.count(Order.id)))) == 1
+    assert OrderOut.model_validate(retry).notes is None

@@ -59,6 +59,15 @@ async def _order_graph(db):
     return order, payment
 
 
+async def _settle_order_dp(db, order, payment):
+    invoice = (await db.execute(select(Invoice).where(Invoice.order_id == order.id))).scalar_one()
+    payment.payment_status = PaymentStatusEnum.success
+    payment.payment_type = PaymentTypeEnum.dp
+    payment.jumlah_bayar = Decimal("50000")
+    invoice.status = InvoiceStatusEnum.partial
+    await db.commit()
+
+
 async def _buyer_order_inputs(db):
     role = Role(nama_role="Staff", level=3)
     db.add(role)
@@ -510,8 +519,8 @@ def test_outbox_cli_requires_configured_token(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_smtp_failure_does_not_undo_committed_order_status(email_db, monkeypatch):
-    order, _ = await _order_graph(email_db)
-    await email_db.commit()
+    order, payment = await _order_graph(email_db)
+    await _settle_order_dp(email_db, order, payment)
     await update_order_status(email_db, order.id, "in_process")
 
     async def failed_send(_event):
@@ -559,8 +568,8 @@ async def test_batch_smtp_failure_records_retry_and_returns_nonzero_cli_exit(ema
 
 @pytest.mark.asyncio
 async def test_order_status_transition_enqueues_once_and_rejected_transition_does_not(email_db):
-    order, _ = await _order_graph(email_db)
-    await email_db.commit()
+    order, payment = await _order_graph(email_db)
+    await _settle_order_dp(email_db, order, payment)
     updated = await update_order_status(email_db, order.id, "in_process")
     assert updated.status == OrderStatusEnum.in_process
     event = (await email_db.execute(select(EmailOutbox))).scalar_one()

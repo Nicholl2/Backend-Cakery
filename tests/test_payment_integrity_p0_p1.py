@@ -22,7 +22,7 @@ from app.models.order import OrderItem
 from app.services.payment_service import (
     create_midtrans_charge, process_manual_payment, process_midtrans_webhook, refresh_if_pending,
 )
-from app.services.order_service import cancel_order_by_customer
+from app.services.order_service import cancel_order_by_customer, update_order_status
 
 
 @pytest.fixture
@@ -72,6 +72,27 @@ async def test_payment_rejected_when_invoice_fully_paid(db_session):
 
 
 @pytest.mark.asyncio
+async def test_charge_reloads_order_state_before_using_a_preloaded_instance(db_session, monkeypatch):
+    db, order, _, _ = db_session
+    order_id = order.id
+    factory = db.bind
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    sessions = async_sessionmaker(factory, class_=AsyncSession, expire_on_commit=False)
+    async with sessions() as other:
+        latest = await other.get(Order, order_id)
+        latest.status = OrderStatusEnum.cancelled
+        await other.commit()
+
+    async def unexpected_midtrans_call(*args, **kwargs):
+        pytest.fail("Cancelled order must not reach Midtrans")
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", unexpected_midtrans_call)
+    with pytest.raises(HTTPException) as exc:
+        await create_midtrans_charge(db, order_id, "qris", "full", Decimal("500000"))
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_manual_payment_cannot_exceed_remaining(db_session):
     db, order, invoice, _ = db_session
     invoice_id = invoice.id
@@ -80,6 +101,46 @@ async def test_manual_payment_cannot_exceed_remaining(db_session):
     assert exc.value.status_code == 400
     result = await db.execute(select(Payment).where(Payment.invoice_id == invoice_id))
     assert len(result.scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_active_pending_payment_conflicts_with_different_method_or_type(db_session):
+    db, order, invoice, _ = db_session
+    pending = Payment(invoice_id=invoice.id, pg_order_id="active-charge",
+                      jumlah_bayar=Decimal("500000"), payment_method="qris",
+                      payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
+    db.add(pending)
+    await db.commit()
+    with pytest.raises(HTTPException) as method_error:
+        await create_midtrans_charge(db, order.id, "bank_transfer", "full", Decimal("500000"))
+    assert method_error.value.status_code == 409
+    with pytest.raises(HTTPException) as type_error:
+        await create_midtrans_charge(db, order.id, "qris", "dp", Decimal("500000"))
+    assert type_error.value.status_code == 409
+    assert (await db.execute(select(Payment).where(Payment.pg_order_id.is_not(None)))).scalars().all() == [pending]
+
+
+@pytest.mark.asyncio
+async def test_order_cannot_enter_production_before_minimum_dp_is_received(db_session):
+    db, order, invoice, dp = db_session
+    dp.payment_status = PaymentStatusEnum.failed
+    await db.commit()
+    with pytest.raises(HTTPException) as unpaid_error:
+        await update_order_status(db, order.id, "in_process")
+    assert unpaid_error.value.status_code == 409
+    db.add(Payment(invoice_id=invoice.id, jumlah_bayar=Decimal("499999"),
+                   payment_method="CASH", payment_status=PaymentStatusEnum.success,
+                   payment_type=PaymentTypeEnum.dp))
+    await db.commit()
+    with pytest.raises(HTTPException) as underpaid_error:
+        await update_order_status(db, order.id, "in_process")
+    assert underpaid_error.value.status_code == 409
+    db.add(Payment(invoice_id=invoice.id, jumlah_bayar=Decimal("1"),
+                   payment_method="CASH", payment_status=PaymentStatusEnum.success,
+                   payment_type=PaymentTypeEnum.dp))
+    await db.commit()
+    updated = await update_order_status(db, order.id, "in_process")
+    assert updated.status == OrderStatusEnum.in_process
 
 
 async def _payload(amount="1000000.00", signature=True):
@@ -127,6 +188,32 @@ async def test_webhook_valid_signature_processes_transaction(db_session):
     ).hexdigest()
     result = await process_midtrans_webhook(db, body)
     assert result["status"] == "success"
+    await db.refresh(payment)
+    assert payment.payment_status == PaymentStatusEnum.success
+
+
+@pytest.mark.asyncio
+async def test_duplicate_and_out_of_order_webhooks_do_not_reverse_success(db_session):
+    db, _, invoice, _ = db_session
+    payment = Payment(invoice_id=invoice.id, pg_transaction_id="ordered-txn",
+                      pg_order_id="INV-INTEGRITY-PAY-1700000000000-ABCD", jumlah_bayar=Decimal("500000"),
+                      payment_method="qris", payment_status=PaymentStatusEnum.pending,
+                      payment_type=PaymentTypeEnum.final)
+    db.add(payment)
+    await db.commit()
+    settled = await _payload("500000.00")
+    settled["transaction_id"] = "ordered-txn"
+    settled["signature_key"] = hashlib.sha512(
+        f"{settled['order_id']}{settled['status_code']}{settled['gross_amount']}{settings.midtrans_server_key}".encode()
+    ).hexdigest()
+    assert (await process_midtrans_webhook(db, settled))["status"] == "success"
+    assert (await process_midtrans_webhook(db, settled))["status"] == "skipped"
+
+    stale_pending = {**settled, "transaction_status": "pending"}
+    stale_pending["signature_key"] = hashlib.sha512(
+        f"{stale_pending['order_id']}{stale_pending['status_code']}{stale_pending['gross_amount']}{settings.midtrans_server_key}".encode()
+    ).hexdigest()
+    assert (await process_midtrans_webhook(db, stale_pending))["status"] == "skipped"
     await db.refresh(payment)
     assert payment.payment_status == PaymentStatusEnum.success
 
@@ -255,7 +342,8 @@ async def test_charge_persists_exact_midtrans_order_id_and_amount(db_session, mo
         def json(self):
             charge = charge_payloads[-1]["transaction_details"]
             return {"status_code": "201", "transaction_id": "created-charge-txn",
-                    "order_id": charge["order_id"]}
+                    "order_id": charge["order_id"],
+                    "actions": [{"name": "generate-qr-code", "url": "https://qris.example.test/qr"}]}
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -300,10 +388,48 @@ async def test_uncertain_charge_keeps_reservation_and_retry_does_not_charge_agai
     pending = (await db.execute(select(Payment).where(Payment.invoice_id == order.invoice.id))).scalars().all()
     assert len(pending) == 2
     reserved_id = next(p.id for p in pending if p.pg_order_id)
-    reused = await create_midtrans_charge(db, order.id, "qris", "full", Decimal("500000"))
-    assert reused["payment_id"] == reserved_id
-    assert reused["pg_order_id"]
+    with pytest.raises(HTTPException) as retry_error:
+        await create_midtrans_charge(db, order.id, "qris", "full", Decimal("500000"))
+    assert retry_error.value.status_code == 502
     assert calls == 1
+    assert (await db.get(Payment, reserved_id)).payment_status == PaymentStatusEnum.pending
+
+
+@pytest.mark.asyncio
+async def test_charge_retry_recovers_instructions_from_midtrans_status(db_session, monkeypatch):
+    db, order, invoice, _ = db_session
+    calls = {"post": 0, "get": 0}
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return {"transaction_id": "recovered-txn", "order_id": charge_order_id,
+                    "gross_amount": "500000.00", "transaction_status": "pending",
+                    "va_numbers": [{"bank": "bca", "va_number": "123456789"}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def post(self, url, json, **kwargs):
+            calls["post"] += 1
+            raise httpx.TimeoutException("response lost")
+        async def get(self, url, **kwargs):
+            calls["get"] += 1
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    with pytest.raises(HTTPException):
+        await create_midtrans_charge(db, order.id, "bank_transfer", "full", Decimal("500000"))
+    reservation = (await db.execute(select(Payment).where(Payment.pg_order_id.is_not(None)))).scalars().one()
+    charge_order_id = reservation.pg_order_id
+    recovered = await create_midtrans_charge(db, order.id, "bank_transfer", "full", Decimal("500000"))
+    assert recovered["payment_id"] == reservation.id
+    assert recovered["va_number"] == "123456789"
+    assert calls == {"post": 1, "get": 1}
+    await db.refresh(reservation)
+    assert reservation.payment_status == PaymentStatusEnum.pending
+    assert reservation.va_number == "123456789"
 
 
 @pytest.mark.asyncio

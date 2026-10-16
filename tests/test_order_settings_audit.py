@@ -176,6 +176,13 @@ async def run_audit_tests():
         assert res.status_code == 200, f"Staff should be allowed on GET /orders/{custom_order_id}, got {res.status_code}"
         print("  ✓ Staff allowed on GET /orders/{id} (200 OK)")
 
+        res_dp = await client.post(
+            "/payments/manual",
+            json={"order_id": str(custom_order_id), "amount": 87500, "payment_method": "CASH"},
+            headers={"Authorization": f"Bearer {token_staff}"},
+        )
+        assert res_dp.status_code == 200, f"DP payment setup failed: {res_dp.text}"
+
         # Staff updates order status -> MUST be 200 OK
         res = await client.patch(
             f"/orders/{custom_order_id}/status",

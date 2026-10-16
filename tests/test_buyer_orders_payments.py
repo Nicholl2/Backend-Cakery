@@ -119,10 +119,11 @@ async def run_tests():
             "created_via": "web",
             "fulfillment_date": future_fulfillment,
         }
+        buyer_order_headers = {"Authorization": f"Bearer {token_buyer1}", "Idempotency-Key": "buyer-checkout-001"}
         res = await client.post(
             "/orders/buyer",
             json=order_payload,
-            headers={"Authorization": f"Bearer {token_buyer1}"}
+            headers=buyer_order_headers
         )
         assert res.status_code == 201, f"Expected 201, got {res.status_code}: {res.text}"
         order1_data = res.json()
@@ -132,6 +133,22 @@ async def run_tests():
         assert order1_data["created_via"] == "web"
         assert len(order1_data["items"]) == 1
         assert order1_data["fulfillment_date"] is not None
+
+        retry_same = await client.post("/orders/buyer", json=order_payload, headers=buyer_order_headers)
+        assert retry_same.status_code == 201, retry_same.text
+        assert retry_same.json()["id"] == order1_id
+        changed_payload = {**order_payload, "notes": "different checkout payload"}
+        retry_changed = await client.post("/orders/buyer", json=changed_payload, headers=buyer_order_headers)
+        assert retry_changed.status_code == 409, retry_changed.text
+
+        with patch("app.services.order_service.create_buyer_order",
+                   new=AsyncMock(side_effect=RuntimeError("internal database detail"))):
+            internal_error = await client.post(
+                "/orders/buyer", json=order_payload,
+                headers={"Authorization": f"Bearer {token_buyer1}"},
+            )
+        assert internal_error.status_code == 500
+        assert "internal database detail" not in internal_error.text
 
         # Duplicate active unpaid order for the same buyer must be rejected.
         duplicate_active = await client.post(
@@ -390,7 +407,7 @@ async def run_tests():
         assert inv1 != inv2, "Invoice numbers must be unique"
         print(f"✓ Unique invoice numbers verified: '{inv1}' vs '{inv2}'")
 
-        # Test 12: Error Handling on POST /orders/buyer (Returns 400 with detail, not 500)
+        # Test 12: Buyer validation errors keep a client-error status.
         print("\n12. Testing Error Handling & Detail on POST /orders/buyer...")
         b4_email = "test.buyer4@test.com"
         b4_phone = "081944444444"

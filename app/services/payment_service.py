@@ -85,6 +85,7 @@ async def create_midtrans_charge(
     # Lock the order so concurrent charge requests cannot spend the same outstanding balance.
     order_result = await db.execute(
         select(Order).where(Order.id == order_id).with_for_update()
+        .execution_options(populate_existing=True)
     )
     order = order_result.scalars().first()
     if not order:
@@ -129,7 +130,24 @@ async def create_midtrans_charge(
     existing_payments = await payment_repo.get_payments_by_order_id(db, order_id)
     for ep in existing_payments:
         if ep.payment_status == PaymentStatusEnum.pending:
+            expected_type = PaymentTypeEnum.dp if payment_type == "dp" else PaymentTypeEnum.final
+            if (ep.payment_method != payment_method or ep.payment_type != expected_type
+                    or Decimal(str(ep.jumlah_bayar)).quantize(Decimal("0.01")) != amount_rounded):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Pembayaran lain masih aktif untuk pesanan ini. Selesaikan atau tunggu status gateway sebelum memilih nominal atau metode lain.",
+                )
             logger.info("[PAYMENT_AUDIT] existing_pending | payment_id=%s | order_id=%s", ep.id, order_id)
+            # A previous /charge call may have timed out after Midtrans accepted
+            # it. Reconcile against the same gateway order before returning the
+            # pending payment; never create a second reservation on retry.
+            await refresh_if_pending(db, ep)
+            await db.refresh(ep)
+            if ep.payment_status == PaymentStatusEnum.pending and not (ep.va_number or ep.qris_url):
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Status charge belum dapat dipastikan. Periksa kembali status pembayaran sebelum mencoba lagi.",
+                )
             return {"payment_id": ep.id, "pg_transaction_id": ep.pg_transaction_id, "va_number": ep.va_number,
                     "qris_url": ep.qris_url, "status": ep.payment_status, "midtrans_response": None,
                     "pg_order_id": ep.pg_order_id,
@@ -237,6 +255,18 @@ async def create_midtrans_charge(
     payment_obj.va_number = va_number
     payment_obj.qris_url = qris_url
     await db.commit()
+
+    if payment_obj.payment_status == PaymentStatusEnum.pending and not (va_number or qris_url):
+        # Some successful HTTP responses omit the payment instructions. Query
+        # the same gateway order once; keep the reservation if the result is
+        # still uncertain, but do not tell the client it is actionable.
+        await refresh_if_pending(db, payment_obj)
+        await db.refresh(payment_obj)
+        if payment_obj.payment_status == PaymentStatusEnum.pending and not (payment_obj.va_number or payment_obj.qris_url):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Status charge belum dapat dipastikan. Periksa kembali status pembayaran sebelum mencoba lagi.",
+            )
     
     logger.info(
         "[PAYMENT_AUDIT] charge_created | payment_id=%s | transaction_id=%s | "
@@ -421,6 +451,7 @@ async def _apply_transaction_status(
                     .options(selectinload(Order.order_items).selectinload(OrderItem.product)
                              .selectinload(Product.recipes).selectinload(Recipe.stock_item))
                     .with_for_update()
+                    .execution_options(populate_existing=True)
                 )
                 order = order_res.scalars().first()
                 other_pending = await db.scalar(select(Payment.id).where(
@@ -503,7 +534,6 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
             result = await db.execute(
                 select(Payment)
                 .where(Payment.pg_transaction_id == pg_txn_id)
-                .with_for_update()
             )
             payment = result.scalars().first()
 
@@ -511,7 +541,6 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
             result = await db.execute(
                 select(Payment)
                 .where(Payment.pg_order_id == order_id_str)
-                .with_for_update()
             )
             payment = result.scalars().first()
 
@@ -524,7 +553,6 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
                     .join(Invoice, Payment.invoice_id == Invoice.id)
                     .where(Invoice.nomor_invoice == inv_num)
                     .order_by(Payment.id.desc())
-                    .with_for_update()
                 )
                 payment = result.scalars().first()
             else:
@@ -533,7 +561,6 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
                     .join(Invoice, Payment.invoice_id == Invoice.id)
                     .where(Invoice.nomor_invoice == order_id_str)
                     .order_by(Payment.id.desc())
-                    .with_for_update()
                 )
                 payment = result.scalars().first()
 
@@ -544,6 +571,22 @@ async def process_midtrans_webhook(db: AsyncSession, payload: dict) -> dict:
                 pg_txn_id, order_id_str,
             )
             return {"status": "ok", "message": "Test notification received, dummy order ignored"}
+
+        # Serialize callbacks with cancellation and production transitions in
+        # the same order -> payment lock order used by the business flows.
+        invoice_for_lock = await db.get(Invoice, payment.invoice_id)
+        if invoice_for_lock:
+            await db.execute(
+                select(Order.id).where(Order.id == invoice_for_lock.order_id).with_for_update()
+            )
+        locked_result = await db.execute(
+            select(Payment).where(Payment.id == payment.id).with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        payment = locked_result.scalars().first()
+        if not payment:
+            await db.rollback()
+            return {"status": "ok", "message": "Payment no longer exists"}
 
         payment_id = payment.id
         try:
@@ -623,23 +666,47 @@ async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
             response = await client.get(url, headers=headers)
             if response.status_code == 200:
                 midtrans_payload = response.json()
+                invoice_for_lock = await db.get(Invoice, payment.invoice_id)
+                if invoice_for_lock:
+                    await db.execute(
+                        select(Order.id).where(Order.id == invoice_for_lock.order_id).with_for_update()
+                    )
+                locked_result = await db.execute(
+                    select(Payment).where(Payment.id == payment.id).with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                payment = locked_result.scalars().first()
+                if not payment or payment.payment_status != PaymentStatusEnum.pending:
+                    await db.commit()
+                    return payment
                 try:
                     await _validate_midtrans_payment_payload(db, payment, midtrans_payload)
                 except ValueError as exc:
                     logger.warning("[PAYMENT_AUDIT] status_refresh_mismatch | payment_id=%s | reason=%s",
                                    payment.id, exc)
-                    return payment
+                    payment_id = payment.id
+                    await db.rollback()
+                    return await db.get(Payment, payment_id)
                 _apply_midtrans_payment_instructions(payment, midtrans_payload)
+                # Pending is an idempotent status in the state machine, but a
+                # status lookup can still recover VA/QR instructions after a
+                # lost /charge response. Persist those fields independently.
+                if midtrans_payload.get("transaction_status") == "pending":
+                    await db.commit()
+                    await db.refresh(payment)
+                    return payment
                 if (midtrans_payload.get("transaction_status") == "capture"
                         and str(midtrans_payload.get("fraud_status") or "").lower() != "accept"):
                     logger.info("[PAYMENT_AUDIT] refresh_capture_not_accepted | payment_id=%s | fraud_status=%s",
                                 payment.id, midtrans_payload.get("fraud_status"))
+                    await db.commit()
                     return payment
                 # Commit DB terlebih dahulu sebelum memicu webhook Chatbot
                 await _apply_transaction_status(db, payment, midtrans_payload, commit=True)
                 await db.refresh(payment)
     except Exception as e:
         logger.error(f"Failed to refresh pending payment {payment.id} status: {e}")
+        await db.rollback()
         # Ignored and fallback to original payment object
     return payment
 
@@ -695,6 +762,7 @@ async def _refresh_refund_payment_state(db: AsyncSession, payment: Payment) -> N
             select(Order).where(Order.id == invoice.order_id).with_for_update()
             .options(selectinload(Order.order_items).selectinload(OrderItem.product)
                      .selectinload(Product.recipes).selectinload(Recipe.stock_item))
+            .execution_options(populate_existing=True)
         )
         order = order_result.scalars().first()
         if order:
@@ -725,6 +793,7 @@ async def process_refund(
     order_result = await db.execute(
         select(Order).where(Order.id == order_id).with_for_update()
         .options(selectinload(Order.invoice).selectinload(Invoice.payments))
+        .execution_options(populate_existing=True)
     )
     order = order_result.scalars().first()
     if not order or not order.invoice:
@@ -888,7 +957,10 @@ async def process_manual_payment(
     4. Status order tetap 'pending' agar konsisten dengan alur online payment & dapat dibatalkan jika diperlukan.
     5. Commit ke database & kirim notifikasi chatbot.
     """
-    order_result = await db.execute(select(Order).where(Order.id == order_id).with_for_update())
+    order_result = await db.execute(
+        select(Order).where(Order.id == order_id).with_for_update()
+        .execution_options(populate_existing=True)
+    )
     order = order_result.scalars().first()
     if not order:
         raise HTTPException(
@@ -1035,6 +1107,8 @@ async def check_expired_settlements(db: AsyncSession) -> int:
                             .selectinload(Product.recipes)
                             .selectinload(Recipe.stock_item)
                         )
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
                     )
                     order = order_result.scalars().first()
                     if not order or not order.invoice:

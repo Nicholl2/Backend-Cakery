@@ -53,6 +53,7 @@ router = APIRouter(
 async def create_order_for_buyer(
     request: Request,
     data: BuyerOrderCreate,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", min_length=1, max_length=200),
     buyer: Buyer = Depends(get_current_buyer),
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
@@ -61,22 +62,16 @@ async def create_order_for_buyer(
     `customer_id` didapatkan otomatis dari nomor HP/identitas Buyer token JWT.
     """
     try:
-        order = await order_service.create_buyer_order(db, buyer, data)
+        order = await order_service.create_buyer_order(db, buyer, data, idempotency_key=idempotency_key)
         return OrderOut.model_validate(order)
-    except HTTPException as he:
-        if he.status_code >= 500:
-            logger.error(f"Server error in create_order_for_buyer converted to 400: {he.detail}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(he.detail) if he.detail else "Terjadi kesalahan data saat memproses pesanan.",
-            )
+    except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unhandled exception in create_order_for_buyer: {e}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Terjadi kesalahan saat memproses pesanan.",
+        ) from e
 
 
 @router.get("/buyer", response_model=list[OrderOut],

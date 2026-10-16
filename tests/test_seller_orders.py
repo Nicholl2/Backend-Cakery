@@ -320,9 +320,9 @@ async def run_seller_order_tests():
             json={"status": "in_process"},
             headers={"Authorization": f"Bearer {token_admin}"}
         )
-        assert res_status1.status_code == 200
-        assert res_status1.json()["status"] == "in_process"
-        print("✓ Order status updated to 'in_process'")
+        assert res_status1.status_code == 409
+        assert "pembayaran minimal DP 50%" in res_status1.json()["detail"]
+        print("✓ Unpaid order is correctly blocked from entering production")
 
         # Update to cancelled -> Verify stock is restored!
         res_status_cancel = await client.patch(

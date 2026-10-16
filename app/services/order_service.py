@@ -34,27 +34,43 @@ from app.models.buyer import Buyer
 from app.schemas.order import BuyerOrderCreate, CustomOrderCreate
 
 
-_ORDER_IDEMPOTENCY_MARKER = re.compile(
+_ORDER_IDEMPOTENCY_MARKER_V1 = re.compile(
     r"\x1eorder-idempotency-v1:([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64})\x1e$"
+)
+_ORDER_IDEMPOTENCY_MARKER_V2 = re.compile(
+    r"\x1eorder-idempotency-v2:([a-zA-Z0-9:_-]+):([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64})\x1e$"
 )
 
 
-def _order_idempotency_signature(customer_id: int, key_hash: str, fingerprint: str) -> str:
-    message = f"order-idempotency-v1:{customer_id}:{key_hash}:{fingerprint}".encode()
+def _order_idempotency_signature(scope: str, key_hash: str, fingerprint: str, version: int = 1) -> str:
+    prefix = f"order-idempotency-v{version}"
+    message = f"{prefix}:{scope}:{key_hash}:{fingerprint}".encode()
     return hmac.new(settings.secret_key.encode(), message, hashlib.sha256).hexdigest()
 
 
-def _read_order_idempotency_marker(notes: Optional[str], customer_id: int):
+def _read_order_idempotency_marker(
+    notes: Optional[str], customer_id: int, required_scope: Optional[str] = None,
+):
     if not notes:
         return None
-    match = _ORDER_IDEMPOTENCY_MARKER.search(notes)
-    if not match:
-        return None
-    key_hash, fingerprint, signature = match.groups()
-    expected = _order_idempotency_signature(customer_id, key_hash, fingerprint)
+    match = _ORDER_IDEMPOTENCY_MARKER_V2.search(notes)
+    if match:
+        marker_scope, key_hash, fingerprint, signature = match.groups()
+        if required_scope is not None and marker_scope != required_scope:
+            return None
+        expected = _order_idempotency_signature(marker_scope, key_hash, fingerprint, version=2)
+    else:
+        match = _ORDER_IDEMPOTENCY_MARKER_V1.search(notes)
+        if not match:
+            return None
+        key_hash, fingerprint, signature = match.groups()
+        marker_scope = str(customer_id)
+        if required_scope is not None and marker_scope != required_scope:
+            return None
+        expected = _order_idempotency_signature(marker_scope, key_hash, fingerprint)
     if not hmac.compare_digest(signature, expected):
         return None
-    return key_hash, fingerprint, notes[:match.start()]
+    return key_hash, fingerprint, notes[:match.start()], marker_scope
 
 
 async def create_new_order(
@@ -70,6 +86,7 @@ async def create_new_order(
     email_seller_on_commit: bool = True,
     actor_buyer: Optional[Buyer] = None,
     idempotency_key: Optional[str] = None,
+    idempotency_scope: Optional[str] = None,
 ) -> Order:
     try:
         # ── 1. Cek tagihan aktif ─────────────────────────────────────────────
@@ -77,8 +94,7 @@ async def create_new_order(
 
         # Persist an authenticated marker in the existing notes column; the
         # HMAC prevents ordinary user notes from impersonating idempotency data.
-        request_fingerprint = hashlib.sha256(json.dumps({
-            "customer_id": customer_id,
+        fingerprint_payload = {
             "items": items,
             "metode_pengiriman": metode_pengiriman,
             "created_via": created_via,
@@ -86,20 +102,34 @@ async def create_new_order(
             "due_date": due_date.isoformat() if due_date else None,
             "fulfillment_date": fulfillment_date.isoformat() if fulfillment_date else None,
             "payment_method_preference": payment_method_preference,
-        }, sort_keys=True, default=str, separators=(",", ":")).encode()).hexdigest()
+        }
+        if idempotency_scope is None:
+            fingerprint_payload["customer_id"] = customer_id
+        request_fingerprint = hashlib.sha256(json.dumps(
+            fingerprint_payload, sort_keys=True, default=str, separators=(",", ":")
+        ).encode()).hexdigest()
         key_marker = None
         if idempotency_key:
             key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
-            signature = _order_idempotency_signature(customer_id, key_hash, request_fingerprint)
-            key_marker = f"\x1eorder-idempotency-v1:{key_hash}:{request_fingerprint}:{signature}\x1e"
+            if idempotency_scope is None:
+                signature = _order_idempotency_signature(str(customer_id), key_hash, request_fingerprint)
+                key_marker = f"\x1eorder-idempotency-v1:{key_hash}:{request_fingerprint}:{signature}\x1e"
+                previous_query = select(Order).where(Order.customer_id == customer_id)
+            else:
+                signature = _order_idempotency_signature(
+                    idempotency_scope, key_hash, request_fingerprint, version=2
+                )
+                key_marker = (f"\x1eorder-idempotency-v2:{idempotency_scope}:"
+                              f"{key_hash}:{request_fingerprint}:{signature}\x1e")
+                previous_query = select(Order)
             previous_result = await db.execute(
-                select(Order).where(
-                    Order.customer_id == customer_id,
-                    Order.notes.contains(key_hash),
-                ).order_by(Order.id.desc())
+                previous_query.where(Order.notes.contains(key_hash)).order_by(Order.id.desc())
             )
             for previous in previous_result.scalars().all():
-                marker = _read_order_idempotency_marker(previous.notes, customer_id)
+                marker = _read_order_idempotency_marker(
+                    previous.notes, previous.customer_id,
+                    required_scope=idempotency_scope if idempotency_scope is not None else str(customer_id),
+                )
                 if not marker or marker[0] != key_hash:
                     continue
                 if marker[1] != request_fingerprint:
@@ -744,9 +774,19 @@ async def get_buyer_order_by_id(db: AsyncSession, buyer: Buyer, order_id: int) -
     return order
 
 
-async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCreate) -> Order:
+async def create_buyer_order(
+    db: AsyncSession, buyer: Buyer, data: BuyerOrderCreate,
+    idempotency_key: Optional[str] = None,
+) -> Order:
     try:
-        customer = await get_or_create_customer_for_buyer(db, buyer)
+        buyer_result = await db.execute(
+            select(Buyer).where(Buyer.id == buyer.id).with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        locked_buyer = buyer_result.scalars().first()
+        if not locked_buyer:
+            raise HTTPException(status_code=404, detail="Buyer tidak ditemukan")
+        customer = await get_or_create_customer_for_buyer(db, locked_buyer)
         order = await create_new_order(
             db=db,
             customer_id=customer.id,
@@ -757,7 +797,9 @@ async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCre
             due_date=data.due_date,
             fulfillment_date=data.fulfillment_date,
             payment_method_preference=data.payment_method_preference,
-            actor_buyer=buyer,
+            actor_buyer=locked_buyer,
+            idempotency_key=idempotency_key,
+            idempotency_scope=f"buyer:{locked_buyer.id}" if idempotency_key else None,
         )
         await _attach_payment_amounts(db, order)
         return order
@@ -767,9 +809,9 @@ async def create_buyer_order(db: AsyncSession, buyer: Buyer, data: BuyerOrderCre
         await db.rollback()
         logger.error(f"DETAIL ERROR: {repr(e)}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Gagal memproses pesanan: {str(e)}",
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Terjadi kesalahan saat memproses pesanan.",
+        ) from e
 
 
 
@@ -787,6 +829,7 @@ async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
                 .selectinload(Recipe.stock_item)
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         order = result.scalars().first()
         if not order:
@@ -858,6 +901,7 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
             .selectinload(Recipe.stock_item)
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     order = result.scalars().first()
     if not order:
@@ -881,6 +925,18 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
             detail=f"Transisi status tidak valid: '{order.status.value}' → '{new_status}'. "
                    f"Pesanan sudah dalam status '{order.status.value}'.",
         )
+
+    if new_status_enum == OrderStatusEnum.in_process:
+        if not order.invoice:
+            raise HTTPException(status_code=409, detail="Invoice pesanan tidak ditemukan")
+        from app.services.payment_service import invoice_payment_totals
+        paid = (await invoice_payment_totals(db, order.invoice.id))["net_paid"]
+        minimum_to_start = Decimal(str(order.invoice.total_tagihan)) * Decimal("0.5")
+        if paid < minimum_to_start:
+            raise HTTPException(
+                status_code=409,
+                detail="Pesanan baru dapat diproses setelah pembayaran minimal DP 50% diterima.",
+            )
 
     if new_status_enum == OrderStatusEnum.cancelled and order.invoice:
         pending_online = await db.scalar(select(Payment.id).where(
@@ -1089,6 +1145,7 @@ async def cancel_and_refund_order(
             .selectinload(Recipe.stock_item)
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     order = result.scalars().first()
     if not order:

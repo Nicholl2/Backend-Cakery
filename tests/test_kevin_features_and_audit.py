@@ -123,6 +123,15 @@ async def audit_test_session():
         pass
 
 
+async def _mark_fixture_dp_paid(db):
+    invoice = await db.get(Invoice, 1)
+    invoice.status = InvoiceStatusEnum.partial
+    db.add(Payment(invoice_id=invoice.id, pg_transaction_id="fixture-dp-payment",
+                   jumlah_bayar=Decimal("75000"), payment_method="CASH",
+                   payment_status=PaymentStatusEnum.success, payment_type=PaymentTypeEnum.dp))
+    await db.commit()
+
+
 @pytest.mark.asyncio
 async def test_read_order_by_id_via_service_key(audit_test_session):
     """Test Kevin's feature: GET /orders/{order_id} via SERVICE_ORDERS_READ_KEY (header & query param)."""
@@ -161,6 +170,7 @@ async def test_chatbot_webhooks_for_processing_and_completed(audit_test_session)
     """Test outward chatbot webhook triggers when order transitions to processing (diproses) and completed (selesai)."""
     SessionLocal = audit_test_session
     async with SessionLocal() as db:
+        await _mark_fixture_dp_paid(db)
         with patch("app.services.chatbot_notify.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_resp = MagicMock()
@@ -197,6 +207,7 @@ async def test_chatbot_webhooks_for_processing_and_completed(audit_test_session)
 async def test_status_change_rolls_back_when_in_app_notification_cannot_be_persisted(audit_test_session, monkeypatch):
     SessionLocal = audit_test_session
     async with SessionLocal() as db:
+        await _mark_fixture_dp_paid(db)
         db.add(Buyer(name="Buyer Budi", email="budi@example.test", phone="08123456789",
                      password_hash="hash", is_active=True))
         await db.commit()

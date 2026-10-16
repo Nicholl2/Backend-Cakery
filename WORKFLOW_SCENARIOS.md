@@ -38,7 +38,7 @@ sequenceDiagram
 
     Customer->>Midtrans: Scan & Bayar QRIS via M-Banking
     Midtrans->>API: POST /payments/notify (Webhook Settlement)
-    Note over API: Verifikasi Signature SHA512 -> Lock baris payment (pg_order_id) -> Payment='Success' -> Invoice='paid' -> Order='in_process'
+    Note over API: Verifikasi Signature SHA512 -> lock Order lalu Payment -> Payment='Success' -> Invoice='paid'; Order tetap 'pending' sampai staf memulai produksi setelah validasi pembayaran
     API->>Bot: POST /webhook/internal/orders/15/paid
     API->>Bot: POST /webhook/internal/orders/15/processing
     Bot->>Customer: Kirim WA: "Pembayaran terkonfirmasi! Pesanan Anda sedang diproses oleh dapur."
@@ -65,7 +65,7 @@ sequenceDiagram
 1. **Pilihan DP 50%**: Pelanggan memilih pembayaran DP melalui Chatbot (`payment_type: "dp"`). Nilai tagihan divalidasi presisi tepat 50% dari total invoice.
 2. **Settlement DP**: Setelah Midtrans mengirim webhook sukses:
    - Invoice berubah status menjadi `partial`.
-   - Order bertransisi menjadi `in_process`.
+   - Order tetap `pending`; staf memulai produksi melalui endpoint perubahan status. Transisi ke `in_process` hanya diizinkan setelah pembayaran bersih mencapai minimal 50% dari total invoice.
    - Dihitung `settlement_due_date` (H-1 sebelum `fulfillment_date` pukul 18:00 WIB) untuk opsi pelunasan online.
 3. **Fleksibilitas Pengambilan di Toko**:
    - Jika pelanggan memilih melunasi sisa tagihan 50% secara tunai/EDC langsung di toko fisik saat pengambilan kue:

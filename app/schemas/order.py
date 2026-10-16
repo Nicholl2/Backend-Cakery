@@ -310,18 +310,29 @@ class OrderOut(BaseModel):
     @classmethod
     def hide_order_idempotency_marker(cls, v, info: ValidationInfo):
         if isinstance(v, str):
-            marker = re.search(
+            marker_v2 = re.search(
+                r"\x1eorder-idempotency-v2:([a-zA-Z0-9:_-]+):([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64})\x1e$",
+                v,
+            )
+            marker_v1 = re.search(
                 r"\x1eorder-idempotency-v1:([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64})\x1e$",
                 v,
             )
             customer_id = (info.data or {}).get("customer_id")
-            if marker and customer_id is not None:
+            if marker_v2:
                 from app.core.config import settings
-                key_hash, fingerprint, signature = marker.groups()
+                marker_scope, key_hash, fingerprint, signature = marker_v2.groups()
+                message = f"order-idempotency-v2:{marker_scope}:{key_hash}:{fingerprint}".encode()
+                expected = hmac.new(settings.secret_key.encode(), message, hashlib.sha256).hexdigest()
+                if hmac.compare_digest(signature, expected):
+                    return v[:marker_v2.start()] or None
+            elif marker_v1 and customer_id is not None:
+                from app.core.config import settings
+                key_hash, fingerprint, signature = marker_v1.groups()
                 message = f"order-idempotency-v1:{customer_id}:{key_hash}:{fingerprint}".encode()
                 expected = hmac.new(settings.secret_key.encode(), message, hashlib.sha256).hexdigest()
                 if hmac.compare_digest(signature, expected):
-                    return v[:marker.start()] or None
+                    return v[:marker_v1.start()] or None
         return v
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
