@@ -919,7 +919,10 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
             ).with_for_update()
         )
         pending_refunds = pending_result.scalars().all()
-        if any(refund.initiated_source.endswith(":auto") for refund in pending_refunds):
+        if any(
+            refund.initiated_source.endswith((":auto", ":in_progress"))
+            for refund in pending_refunds
+        ):
             raise HTTPException(status_code=409, detail="Refund gateway masih menunggu konfirmasi Midtrans")
         for refund in pending_refunds:
             refund.status = RefundStatusEnum.completed
