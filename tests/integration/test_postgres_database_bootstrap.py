@@ -103,7 +103,7 @@ async def test_postgres_empty_database_bootstrap_creates_current_schema_and_stam
     assert trigram["predicate"] is None
     assert trigram["operator_class"] == "gin_trgm_ops"
     assert "email gin_trgm_ops" in trigram["definition"]
-    assert revision == "20261015_01"
+    assert revision == "20261016_01"
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -189,7 +189,7 @@ async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_a
         assert event.status == "pending"
         assert event.attempts == 1
         assert event.payload_json == json.dumps({"payment_status": "Pending"})
-        assert revision == "20261015_01"
+        assert revision == "20261016_01"
 
     await engine.dispose()
 
@@ -375,7 +375,7 @@ async def test_postgres_adopts_verified_refund_revision_then_upgrades_to_head():
             lambda sync_conn: inspect(sync_conn).get_columns("order_items")
         )}
         tables = set(await connection.run_sync(lambda sync_conn: inspect(sync_conn).get_table_names()))
-    assert revision == "20261015_01"
+    assert revision == "20261016_01"
     assert "pg_order_id" in payment_columns
     assert {"product_name_snapshot", "unit_price_snapshot"} <= order_item_columns
     assert {"email_outbox", "email_outbox_audit", "order_accessories"} <= tables
