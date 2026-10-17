@@ -69,6 +69,58 @@ async def ensure_stock_item_columns(conn: AsyncConnection):
     await conn.execute(text("ALTER TABLE stock_items ALTER COLUMN alert_min_stok SET NOT NULL;"))
 
 
+async def ensure_purchase_cancellation_columns(conn: AsyncConnection):
+    """Ensure pending purchase cancellations remain visible for audit."""
+    if conn.dialect.name != "postgresql":
+        return
+
+    await conn.execute(text(
+        "ALTER TABLE purchases ADD COLUMN IF NOT EXISTS is_cancelled BOOLEAN DEFAULT FALSE;"
+    ))
+    await conn.execute(text(
+        "ALTER TABLE purchases ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;"
+    ))
+    await conn.execute(text(
+        "ALTER TABLE purchases ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;"
+    ))
+    await conn.execute(text(
+        "ALTER TABLE purchases ADD COLUMN IF NOT EXISTS cancelled_by INTEGER REFERENCES users(id) ON DELETE SET NULL;"
+    ))
+    await conn.execute(text(
+        "UPDATE purchases SET is_cancelled = FALSE WHERE is_cancelled IS NULL;"
+    ))
+    await conn.execute(text(
+        "ALTER TABLE purchases ALTER COLUMN is_cancelled SET DEFAULT FALSE;"
+    ))
+    await conn.execute(text(
+        "ALTER TABLE purchases ALTER COLUMN is_cancelled SET NOT NULL;"
+    ))
+    await conn.execute(text("""
+        DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_purchases_not_received_and_cancelled'
+                  AND conrelid = 'purchases'::regclass
+            ) THEN
+                ALTER TABLE purchases ADD CONSTRAINT ck_purchases_not_received_and_cancelled
+                    CHECK (NOT (is_received AND is_cancelled));
+            END IF;
+        END $$;
+    """))
+    await conn.execute(text(
+        "ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS cost_deviation_confirmed BOOLEAN DEFAULT FALSE;"
+    ))
+    await conn.execute(text(
+        "UPDATE purchase_items SET cost_deviation_confirmed = FALSE WHERE cost_deviation_confirmed IS NULL;"
+    ))
+    await conn.execute(text(
+        "ALTER TABLE purchase_items ALTER COLUMN cost_deviation_confirmed SET DEFAULT FALSE;"
+    ))
+    await conn.execute(text(
+        "ALTER TABLE purchase_items ALTER COLUMN cost_deviation_confirmed SET NOT NULL;"
+    ))
+
+
 async def ensure_stock_master_name_constraint(conn: AsyncConnection):
     """Create case-insensitive material uniqueness after checking legacy duplicates."""
     duplicates = (await conn.execute(text(
@@ -574,6 +626,7 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_product_columns(conn)
     await ensure_buyer_columns(conn)
     await ensure_stock_item_columns(conn)
+    await ensure_purchase_cancellation_columns(conn)
     await ensure_stock_master_name_constraint(conn)
     await ensure_recipe_columns(conn)
     await ensure_otp_columns(conn)

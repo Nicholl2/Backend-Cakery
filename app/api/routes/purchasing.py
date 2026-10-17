@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_user_id, require_admin_or_owner, require_internal_user
 from app.schemas.purchasing import (
     SupplierCreate, SupplierUpdate, SupplierOut,
-    PurchaseCreate, PurchaseUpdate, PurchaseOut, PurchaseDetailOut,
+    PurchaseCreate, PurchaseUpdate, PurchaseCancel, PurchaseOut, PurchaseDetailOut,
 )
 from app.services import purchasing_service
 
@@ -78,10 +78,11 @@ async def create_purchase(
             summary="List semua pemesanan — bisa filter by status / supplier")
 async def list_purchases(
     only_received: Optional[bool] = Query(None, description="True = sudah diterima, False = belum diterima"),
+    only_cancelled: Optional[bool] = Query(None, description="True = purchase dibatalkan"),
     supplier_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    return await purchasing_service.get_all_purchases(db, only_received, supplier_id)
+    return await purchasing_service.get_all_purchases(db, only_received, supplier_id, only_cancelled)
 
 
 @router.get("/purchases/{purchase_id}", response_model=PurchaseDetailOut,
@@ -93,17 +94,33 @@ async def get_purchase(purchase_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.put("/purchases/{purchase_id}", response_model=PurchaseOut,
             dependencies=[Depends(require_admin_or_owner)],
-            summary="Update pemesanan (status diterima, tanggal diterima, catatan)")
+            summary="Edit supplier, nomor PO, catatan, atau item sebelum diterima; terima purchase")
 async def update_purchase(
     purchase_id: int, data: PurchaseUpdate, db: AsyncSession = Depends(get_db)
 ):
     return await purchasing_service.update_purchase(db, purchase_id, data)
 
 
+@router.post("/purchases/{purchase_id}/cancel", response_model=PurchaseOut,
+             dependencies=[Depends(require_admin_or_owner)],
+             summary="Batalkan purchase yang belum diterima, dengan alasan audit")
+async def cancel_purchase(
+    purchase_id: int,
+    data: PurchaseCancel,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    return await purchasing_service.cancel_purchase(db, purchase_id, data.reason, user_id)
+
+
 @router.delete("/purchases/{purchase_id}",
                dependencies=[Depends(require_admin_or_owner)],
-               summary="Hapus pemesanan — gagal jika sudah diterima")
-async def delete_purchase(purchase_id: int, db: AsyncSession = Depends(get_db)):
-    await purchasing_service.delete_purchase(db, purchase_id)
-    return {"deleted": True, "purchase_id": purchase_id}
+               summary="Batalkan purchase yang belum diterima (legacy; tersimpan untuk audit)")
+async def delete_purchase(
+    purchase_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    await purchasing_service.delete_purchase(db, purchase_id, user_id)
+    return {"cancelled": True, "purchase_id": purchase_id}
 

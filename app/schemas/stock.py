@@ -32,7 +32,6 @@ class StockUpdate(BaseModel):
     nama_item: Optional[str] = Field(None, min_length=1, max_length=100)
     satuan: Optional[SatuanEnum] = None
     kategori: Optional[KategoriEnum] = None
-    harga_per_satuan: Optional[Decimal] = Field(None, ge=0, decimal_places=4)
     # Inventory balance changes through ledger transactions, never master edits.
     alert_min_stok: Optional[Decimal] = Field(None, ge=0)
     model_config = ConfigDict(extra="forbid")

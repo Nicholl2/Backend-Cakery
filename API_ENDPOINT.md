@@ -93,9 +93,9 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/stock/` | Internal | Buat satu master material baru (memastikan default `alert_min_stok = 0.00` konsisten), opsional dengan saldo awal yang menghasilkan `OPENING_BALANCE`. Supplier pembelian dipilih pada Purchase; endpoint ini tidak membuat item untuk restock. |
-| `GET` | `/stock/` | Internal | List semua item stok (Filter: `bahan_baku` / `kemasan`) |
+| `GET` | `/stock/` | Internal | List semua item stok (Filter: `bahan_baku` / `kemasan`). Untuk form purchase, tampilkan `satuan` sebagai unit dasar dan `harga_per_satuan` sebagai average cost saat ini. |
 | `GET` | `/stock/{stock_id}` | Internal | Detail master bahan (stok terkini, average cost, alert minimum) |
-| `PUT` | `/stock/{stock_id}` | Internal | Update atribut master/alert (mempertahankan fallback `alert_min_stok = 0.00`). Saldo dan harga tidak dapat diedit langsung. |
+| `PUT` | `/stock/{stock_id}` | Internal | Update nama, satuan, kategori, dan batas stok minimum. Saldo serta average cost tidak dapat diedit langsung; koreksi melalui transaksi inventory yang tercatat. |
 | `POST` | `/stock/{stock_id}/adjustments` | Admin / Owner | Koreksi stok dengan validasi bilangan riil terbatas (`quantity_difference` & `unit_cost` finite, menolak `NaN`/`Infinity`), pencegahan saldo negatif (stok tidak boleh di bawah 0), `reason` wajib, dan membuat ledger `StockMovement` tercatat. |
 | `GET` | `/stock/{stock_id}/movements` | Internal | Histori stock movement untuk audit. |
 | `DELETE` | `/stock/{stock_id}` | Admin / Owner | Hapus hanya jika tidak punya saldo, recipe, atau histori movement. |
@@ -112,10 +112,13 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `PUT` | `/purchases/suppliers/{supplier_id}` | Internal | Update data supplier |
 | `DELETE` | `/purchases/suppliers/{supplier_id}` | Internal | Hapus supplier (gagal jika ada Purchase Order terkait) |
 | `POST` | `/purchases/purchases` | Authenticated User | Buat Purchase Order (PO) baru beserta item bahan yang dibeli |
-| `GET` | `/purchases/purchases` | Internal | List PO (Filter: `only_received`, `supplier_id`) |
-| `GET` | `/purchases/purchases/{purchase_id}` | Internal | Detail PO beserta daftar item pemesanan |
-| `PUT` | `/purchases/purchases/{purchase_id}` | Internal | Saat `is_received = True`, dalam satu transaksi menambah stok, weighted average cost, membuat movement `PURCHASE`, serta menghitung ulang HPP produk untuk pesanan berikutnya. Tidak dapat menerima ulang atau membatalkan status diterima. |
-| `DELETE` | `/purchases/purchases/{purchase_id}` | Internal | Hapus PO (dicegah jika PO sudah berstatus diterima) |
+| `GET` | `/purchases/purchases` | Internal | List PO (filter: `only_received`, `only_cancelled`, `supplier_id`). Tanpa filter menampilkan seluruh status. |
+| `GET` | `/purchases/purchases/{purchase_id}` | Internal | Detail PO beserta item; tiap item mengembalikan unit dasar dan average cost terkini pada `stock_item.base_unit` dan `stock_item.average_cost`. |
+| `PUT` | `/purchases/purchases/{purchase_id}` | Admin / Owner | Purchase yang menunggu dapat mengubah supplier, nomor PO, catatan, dan seluruh daftar item. Kirim daftar item lengkap; tiap item memakai `stock_item_id`, `jumlah` dalam unit dasar, dan tepat satu dari `harga_total` atau legacy `harga_satuan`. `harga_total` direkomendasikan; server menurunkan harga per unit. Terima purchase lewat `is_received=true` pada request terpisah. Item/identitas PO yang sudah diterima tidak dapat diedit; catatan masih dapat diperbarui. Purchase batal tidak dapat diedit atau diterima. |
+| `POST` | `/purchases/purchases/{purchase_id}/cancel` | Admin / Owner | Batalkan purchase yang belum diterima dengan body `{"reason":"Salah input harga"}`. Record tidak dihapus; alasan, waktu, dan aktor tersimpan untuk audit. Purchase diterima atau sudah batal ditolak dengan HTTP 409. |
+| `DELETE` | `/purchases/purchases/{purchase_id}` | Admin / Owner | Alias kompatibilitas untuk membatalkan PO yang belum diterima; tidak menghapus record. Gunakan endpoint `POST .../cancel` agar alasan tercatat. |
+
+Contoh item purchase baru: `{"stock_item_id":12,"jumlah":100,"harga_total":250000}` berarti 100 unit dasar dengan total Rp250.000; server menghitung Rp2.500 per unit. FE perlu menampilkan nama item, unit dasar, average cost saat ini, jumlah yang dibeli (dalam unit dasar), dan harga total yang ditagihkan. Jika harga per unit hasilnya berbeda minimal 10× dari average cost sekarang, API menolak dengan HTTP 422 kecuali client mengirim `confirm_cost_deviation=true` setelah pengguna mengonfirmasi peringatan. Jumlah, harga, total purchase, presisi database, dan ID item duplikat divalidasi.
 
 ---
 

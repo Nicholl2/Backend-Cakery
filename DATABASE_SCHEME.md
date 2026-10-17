@@ -113,8 +113,13 @@ Table purchases {
   total_harga decimal(15,2) [default: 0, not null]
   catatan text [null]
   is_received boolean [default: false, not null]
+  is_cancelled boolean [default: false, not null]
+  cancelled_at timestamp [null]
+  cancellation_reason text [null]
+  cancelled_by int [ref: > users.id, null]
   created_at timestamp [default: `now()`]
   updated_at timestamp
+  note: 'Received and cancelled cannot both be true; cancelling preserves the PO for audit.'
 }
 
 Table purchase_items {
@@ -124,6 +129,7 @@ Table purchase_items {
   jumlah decimal(10,4) [not null]
   harga_satuan decimal(10,4) [not null]
   harga_total decimal(15,2) [not null]
+  cost_deviation_confirmed boolean [default: false, not null]
   created_at timestamp [default: `now()`]
 }
 

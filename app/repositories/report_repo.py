@@ -235,6 +235,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         )
         .join(Purchase, Purchase.supplier_id == Supplier.id)
         .where(
+            Purchase.is_cancelled.is_(False),
             func.coalesce(Purchase.tanggal_pemesanan, Purchase.created_at) >= start_dt,
             func.coalesce(Purchase.tanggal_pemesanan, Purchase.created_at) <= end_dt
         )

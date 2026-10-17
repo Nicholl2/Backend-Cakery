@@ -1,0 +1,31 @@
+﻿nama_item,satuan,kategori,harga_per_satuan_estimasi_idr,stok_awal,catatan
+Susu UHT,ml,bahan_baku,20,0,baru; estimasi Rp20/ml
+Baking Powder,gram,bahan_baku,40,0,baru; estimasi Rp40/gram
+Baking Soda,gram,bahan_baku,30,0,baru; estimasi Rp30/gram
+Ekstrak Vanila,ml,bahan_baku,250,0,baru; estimasi Rp250/ml
+Garam,gram,bahan_baku,5,0,baru; estimasi Rp5/gram
+Bubuk Kakao,gram,bahan_baku,180,0,baru; estimasi Rp180/gram
+Buttercream Siap Pakai,gram,bahan_baku,85,0,baru; estimasi Rp85/gram
+Brown Sugar,gram,bahan_baku,25,0,baru; estimasi Rp25/gram
+Chocolate Chips Dark,gram,bahan_baku,150,0,baru; estimasi Rp150/gram
+Chocolate Chips White,gram,bahan_baku,150,0,baru; estimasi Rp150/gram
+Matcha Powder,gram,bahan_baku,300,0,baru; estimasi Rp300/gram
+Pewarna Merah,ml,bahan_baku,500,0,baru; estimasi Rp500/ml
+Box Cupcake Isi 4,pcs,kemasan,3500,0,baru; estimasi Rp3.500/box
+Box Cupcake Isi 6,pcs,kemasan,4500,0,baru; estimasi Rp4.500/box
+Box Cupcake Isi 9,pcs,kemasan,6000,0,baru; estimasi Rp6.000/box
+Paper Cup Cupcake,pcs,kemasan,300,0,baru; estimasi Rp300/pcs
+Box Tart Cupcake Isi 7,pcs,kemasan,5000,0,baru; estimasi Rp5.000/box
+Cake Board 10cm,pcs,kemasan,1500,0,baru; estimasi Rp1.500/pcs
+Cake Board 15cm,pcs,kemasan,2000,0,baru; estimasi Rp2.000/pcs
+Cake Board 18cm,pcs,kemasan,2500,0,baru; estimasi Rp2.500/pcs
+Cake Board 20cm,pcs,kemasan,3000,0,baru; estimasi Rp3.000/pcs
+Cake Board 22cm,pcs,kemasan,3500,0,baru; estimasi Rp3.500/pcs
+Cake Box 10cm,pcs,kemasan,3500,0,baru; estimasi Rp3.500/box
+Cake Box 15cm,pcs,kemasan,5000,0,baru; estimasi Rp5.000/box
+Cake Box 18cm,pcs,kemasan,6000,0,baru; estimasi Rp6.000/box
+Cake Box 20cm,pcs,kemasan,7000,0,baru; estimasi Rp7.000/box
+Cake Box 22cm,pcs,kemasan,8000,0,baru; estimasi Rp8.000/box
+Box Cookies Isi 5,pcs,kemasan,2500,0,baru; estimasi Rp2.500/box
+Box Bento Cookies 10cm,pcs,kemasan,2000,0,baru; estimasi Rp2.000/box
+Box Giant Cookies 15cm,pcs,kemasan,2500,0,baru; estimasi Rp2.500/box

@@ -180,6 +180,7 @@ async def test_run_auto_migrations_calls_payment_schema_repair(monkeypatch):
 
     migration_names = (
         "ensure_product_columns", "ensure_buyer_columns", "ensure_stock_item_columns",
+        "ensure_purchase_cancellation_columns",
         "ensure_stock_master_name_constraint", "ensure_recipe_columns", "ensure_otp_columns",
         "ensure_user_columns", "ensure_order_columns", "ensure_fulfillment_columns",
         "ensure_order_accessories_table", "ensure_payment_columns", "ensure_review_columns",
