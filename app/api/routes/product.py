@@ -4,7 +4,7 @@ from typing import Optional
 
 from app.core.database import get_db
 from app.core.cache import app_cache
-from app.api.dependencies import require_admin_or_owner
+from app.api.dependencies import get_current_user_id, require_admin_or_owner
 from app.schemas.product import (
     ProductCreate, ProductUpdate, ProductOut, ProductImageOut,
     SetPriceRequest, SetPriceResponse,
@@ -81,8 +81,13 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
 @router.put("/{product_id}", response_model=ProductOut,
              dependencies=[Depends(require_admin_or_owner)],
              summary="Edit produk (Admin/Owner) — nama, deskripsi, kategori, is_active")
-async def update_product(product_id: int, data: ProductUpdate, db: AsyncSession = Depends(get_db)):
-    result = await product_service.update_product(db, product_id, data)
+async def update_product(
+    product_id: int,
+    data: ProductUpdate,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await product_service.update_product(db, product_id, data, changed_by=str(user_id))
     app_cache.invalidate_prefix("products:")
     return result
 
@@ -155,8 +160,13 @@ async def delete_product_image(
               dependencies=[Depends(require_admin_or_owner)],
               summary="Owner menetapkan harga jual — Use Case 2 (Set Product Prices). "
                       "Sistem beri warning jika harga < HPP. Riwayat perubahan dicatat otomatis.")
-async def set_price(product_id: int, data: SetPriceRequest, db: AsyncSession = Depends(get_db)):
-    result = await product_service.set_product_price(db, product_id, data)
+async def set_price(
+    product_id: int,
+    data: SetPriceRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await product_service.set_product_price(db, product_id, data, changed_by=str(user_id))
     app_cache.invalidate_prefix("products:")
     return result
 

@@ -50,9 +50,19 @@ async def get_product_or_404(db: AsyncSession, product_id: int) -> Product:
     return p
 
 
-async def update_product(db: AsyncSession, product_id: int, data: ProductUpdate) -> ProductOut:
+async def update_product(
+    db: AsyncSession,
+    product_id: int,
+    data: ProductUpdate,
+    changed_by: Optional[str] = None,
+) -> ProductOut:
     product = await get_product_or_404(db, product_id)
-    updated = await product_repo.update(db, product, data)
+    if data.harga_jual is not None:
+        # Refresh from the current recipe and stock average costs before saving,
+        # so the warning and price-history snapshot are based on current HPP.
+        current_hpp, _ = await recipe_repo.calculate_hpp(db, product_id)
+        product.hpp_total = current_hpp
+    updated = await product_repo.update(db, product, data, changed_by=changed_by)
     return ProductOut.model_validate(updated)
 
 
@@ -91,7 +101,10 @@ async def get_pricing_breakdown(db: AsyncSession, product_id: int) -> PricingRes
 
 
 async def set_product_price(
-    db: AsyncSession, product_id: int, data: SetPriceRequest
+    db: AsyncSession,
+    product_id: int,
+    data: SetPriceRequest,
+    changed_by: Optional[str] = None,
 ) -> SetPriceResponse:
     """
     Owner menetapkan/mengubah harga jual produk — Use Case 2 (Set Product Prices).
@@ -102,20 +115,22 @@ async def set_product_price(
     """
     product = await get_product_or_404(db, product_id)
 
-    warning = data.harga_jual < product.hpp_total
+    current_hpp, _ = await recipe_repo.calculate_hpp(db, product_id)
+    product.hpp_total = current_hpp
+    warning = data.harga_jual < current_hpp
 
-    await product_repo.set_price(db, product, data.harga_jual, data.changed_by)
+    await product_repo.set_price(db, product, data.harga_jual, changed_by)
 
     margin = None
-    if product.hpp_total and product.hpp_total > 0:
+    if current_hpp > 0:
         margin = float(
-            (data.harga_jual - product.hpp_total) / product.hpp_total * 100
+            (data.harga_jual - current_hpp) / current_hpp * 100
         )
 
     return SetPriceResponse(
         product_id=product_id,
         nama_produk=product.nama_produk,
-        hpp_total=product.hpp_total,
+        hpp_total=current_hpp,
         harga_jual_baru=data.harga_jual,
         margin_persen=margin,
         warning_below_hpp=warning,

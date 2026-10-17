@@ -18,6 +18,7 @@ from app.models.buyer import Buyer
 from app.models.product import Product
 from app.models.stock_item import StockItem, SatuanEnum, KategoriEnum
 from app.models.recipe import Recipe
+from app.models.price_history import PriceHistory
 from app.schemas.product import ProductOut, ProductResponse, ProductRead, ProductCreate, ProductUpdate
 from app.services import product_service, order_service
 from fastapi import HTTPException
@@ -61,6 +62,23 @@ async def test_pydantic_schema_aliases_and_computed_in_stock():
     assert p1.is_available is True
     assert p1.stock_quantity == 5
     assert p1.is_in_stock is True
+
+    # Price/HPP advisory is included in product responses without blocking low prices.
+    under_hpp = ProductOut(
+        id=101, nama_produk="Promo kue", hpp_total=Decimal("30000"),
+        harga_jual=Decimal("25000"),
+    )
+    assert under_hpp.warning_below_hpp is True
+    above_hpp = ProductOut(
+        id=102, nama_produk="Kue normal", hpp_total=Decimal("30000"),
+        harga_jual=Decimal("42000"),
+    )
+    assert above_hpp.warning_below_hpp is False
+    no_hpp_yet = ProductOut(
+        id=103, nama_produk="Kue tanpa resep", hpp_total=Decimal("0"),
+        harga_jual=Decimal("25000"),
+    )
+    assert no_hpp_yet.warning_below_hpp is False
 
     # Case B: is_available=True, stock = 0 -> is_in_stock=False
     p2 = ProductResponse(
@@ -481,4 +499,38 @@ async def test_product_availability_empty_recipe(test_session: AsyncSession):
     out_with_recipe = ProductOut.model_validate(prod_with_recipe)
     assert out_with_recipe.is_available is True
     assert out_with_recipe.is_in_stock is True
+
+
+@pytest.mark.asyncio
+async def test_product_update_allows_under_hpp_price_and_returns_advisory(test_session):
+    stock = StockItem(
+        nama_item="Tepung untuk HPP", satuan=SatuanEnum.gram,
+        kategori=KategoriEnum.bahan_baku, harga_per_satuan=Decimal("6000"),
+        stok_tersedia=Decimal("100"), alert_min_stok=Decimal("0"), version=0,
+    )
+    product = Product(
+        nama_produk="Bento Cookies Promo", harga_jual=Decimal("35000"),
+        hpp_total=Decimal("1"), is_active=True, is_available=True,
+    )
+    test_session.add_all([stock, product])
+    await test_session.flush()
+    test_session.add(Recipe(
+        product_id=product.id, stock_item_id=stock.id,
+        jumlah_dibutuhkan=Decimal("5"),
+    ))
+    await test_session.commit()
+
+    result = await product_service.update_product(
+        test_session, product.id, ProductUpdate(harga_jual=Decimal("25000")),
+        changed_by="7",
+    )
+
+    assert result.hpp_total == Decimal("30000.00")
+    assert result.harga_jual == Decimal("25000.00")
+    assert result.warning_below_hpp is True
+    history = (await test_session.execute(
+        select(PriceHistory).where(PriceHistory.product_id == product.id)
+    )).scalars().one()
+    assert history.hpp_saat_itu == Decimal("30000.00")
+    assert history.changed_by == "7"
 

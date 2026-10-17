@@ -61,16 +61,18 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | :--- | :--- | :--- | :--- |
 | `POST` | `/products/` | Admin / Owner | Buat master produk baru (HPP default 0 sebelum resep diisi, `is_available` default `true`) |
 | `GET` | `/products/` | Public | List katalog produk (Filter: `only_active`, `kategori`, `only_available`). Dilengkapi **in-memory TTL cache (5 menit)** dengan auto-invalidation saat ada operasi create/update/delete/pricing/image produk. Default menampilkan semua produk aktif (termasuk yang stok habis). Field response memuat `is_available: bool` (manual seller), `stock_quantity: int` (ketersediaan bahan/resep), dan `is_in_stock: bool` (computed property). Filter `only_available=true` hanya mereturn produk dengan `is_in_stock == true`. |
-| `GET` | `/products/{product_id}` | Public | Detail produk lengkap beserta ketersediaan manual (`is_available`), stok bahan (`stock_quantity`), dan status siap beli (`is_in_stock`) |
-| `PUT` | `/products/{product_id}` | Admin / Owner | Update data produk (nama, deskripsi, kategori, is_active, is_available, slug, minimum_order, dll.) |
+| `GET` | `/products/{product_id}` | Public | Detail produk lengkap beserta ketersediaan manual (`is_available`), stok bahan (`stock_quantity`), status siap beli (`is_in_stock`), `hpp_total`, dan advisory `warning_below_hpp` untuk harga tersimpan |
+| `PUT` | `/products/{product_id}` | Admin / Owner | Update data produk termasuk harga jual. Response mengembalikan `hpp_total` dan `warning_below_hpp`; harga di bawah HPP tetap boleh disimpan. Perubahan harga dicatat di riwayat beserta HPP saat penyimpanan dan ID user terautentikasi. |
 | `DELETE` | `/products/{product_id}` | Admin / Owner | Hapus produk beserta seluruh relasi resep dan riwayat harganya |
 | `POST` | `/products/{product_id}/images` | Admin / Owner | Upload multiple foto produk langsung ke Cloudinary (`toti-cakery/products`, maks 5MB per file, format JPEG/PNG/WEBP), simpan array secure URLs ke tabel `product_images`, dan set gambar pertama/pilihan sebagai primary image |
 | `POST` | `/products/{product_id}/image` | Admin / Owner | Upload gambar produk tunggal (Backward Compatibility) ke Cloudinary |
 | `PATCH` | `/products/{product_id}/images/{image_id}/primary` | Admin / Owner | Tetapkan salah satu gambar produk sebagai primary image (otomatis sinkronisasi `products.image_url`) |
 | `DELETE` | `/products/{product_id}/images/{image_id}` | Admin / Owner | Hapus salah satu gambar dari galeri produk (dan hapus resource Cloudinary jika memungkinkan; reassign primary ke gambar berikutnya jika gambar utama dihapus) |
-| `PATCH` | `/products/{product_id}/price` | Admin / Owner | Tetapkan/ubah harga jual produk (audit riwayat harga otomatis) |
-| `GET` | `/products/{product_id}/pricing` | Public / Internal | Lihat rincian breakdown HPP bahan + kalkulasi margin vs harga jual |
+| `PATCH` | `/products/{product_id}/price` | Admin / Owner | Tetapkan/ubah harga jual produk; HPP dihitung ulang dari resep dan average cost terkini, response menyertakan `warning_below_hpp` dan margin, harga di bawah HPP tetap diperbolehkan, dan riwayat harga dicatat beserta ID user terautentikasi |
+| `GET` | `/products/{product_id}/pricing` | Public / Internal | Lihat rincian breakdown HPP bahan + kalkulasi margin vs harga jual, termasuk flag `warning_below_hpp`; HPP dihitung dari resep dan average cost bahan saat ini |
 | `GET` | `/products/{product_id}/price-history`| Public / Internal | Riwayat perubahan harga jual produk oleh Owner |
+
+Untuk peringatan langsung saat seller mengetik harga, FE memakai `hpp_total` dari detail produk (atau `hpp` dari `/products/{product_id}/pricing`) dan membandingkannya dengan nilai harga di form: `harga_jual < HPP` berarti tampilkan warning, tetapi jangan blokir tombol simpan. `ProductOut` mengembalikan `warning_below_hpp` sebagai pemeriksaan harga tersimpan; endpoint pricing juga mengembalikan flag dan margin. Jika HPP `0` atau produk belum punya resep, tampilkan bahwa HPP belum tersedia dan jangan tandai harga sebagai aman/untung.
 
 
 ---

@@ -94,6 +94,10 @@ class ProductOut(BaseModel):
     category: Optional[CategoryResponse] = Field(None, alias='category_rel')
     hpp_total: Optional[Decimal] = Decimal("0.00")
     harga_jual: Optional[Decimal] = None
+    warning_below_hpp: bool = Field(
+        False,
+        description="True jika harga jual tersimpan di bawah HPP saat ini; advisory saja, bukan larangan jual.",
+    )
     markup_percentage: Optional[Decimal] = None
     is_active: bool = True
     is_available: bool = True
@@ -125,6 +129,13 @@ class ProductOut(BaseModel):
 
     @model_validator(mode='after')
     def compute_fields_and_fallback(self):
+        hpp = self.hpp_total or Decimal("0")
+        if self.harga_jual is not None and hpp > 0:
+            self.warning_below_hpp = self.harga_jual < hpp
+        else:
+            # A product without a recipe has no meaningful HPP comparison yet.
+            self.warning_below_hpp = False
+
         # If recipes list is empty, product has no recipes and is NOT available
         if self.recipes is not None:
             has_recipe = bool(len(self.recipes) > 0)

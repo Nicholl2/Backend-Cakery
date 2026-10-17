@@ -72,8 +72,23 @@ async def search(
     return result.scalars().all()
 
 
-async def update(db: AsyncSession, product: Product, data: ProductUpdate) -> Product:
-    for field, value in data.model_dump(exclude_unset=True).items():
+async def update(
+    db: AsyncSession,
+    product: Product,
+    data: ProductUpdate,
+    changed_by: Optional[str] = None,
+) -> Product:
+    changes = data.model_dump(exclude_unset=True)
+    new_price = changes.get("harga_jual")
+    if new_price is not None and Decimal(str(new_price)) != Decimal(str(product.harga_jual or 0)):
+        db.add(PriceHistory(
+            product_id=product.id,
+            harga_jual_lama=product.harga_jual,
+            harga_jual_baru=new_price,
+            hpp_saat_itu=product.hpp_total or Decimal("0"),
+            changed_by=changed_by,
+        ))
+    for field, value in changes.items():
         setattr(product, field, value)
     await db.commit()
     await db.refresh(product)
