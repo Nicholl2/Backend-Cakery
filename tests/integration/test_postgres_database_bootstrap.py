@@ -162,8 +162,16 @@ async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_a
         await connection.execute(text("DROP INDEX uq_payments_pg_order_id"))
         await connection.execute(text("ALTER TABLE payments DROP COLUMN pg_order_id"))
         # Base.metadata.create_all above reflects the current models. Remove objects
-        # introduced by the custom-order revision so this fixture represents the
-        # older schema that Alembic is about to upgrade.
+        # introduced after 20261013_01 so this fixture represents the older schema
+        # that Alembic is about to upgrade.
+        await connection.execute(text(
+            "ALTER TABLE purchases DROP CONSTRAINT IF EXISTS ck_purchases_not_received_and_cancelled"
+        ))
+        await connection.execute(text("ALTER TABLE purchase_items DROP COLUMN IF EXISTS cost_deviation_confirmed"))
+        await connection.execute(text("ALTER TABLE purchases DROP COLUMN IF EXISTS cancelled_by"))
+        await connection.execute(text("ALTER TABLE purchases DROP COLUMN IF EXISTS cancellation_reason"))
+        await connection.execute(text("ALTER TABLE purchases DROP COLUMN IF EXISTS cancelled_at"))
+        await connection.execute(text("ALTER TABLE purchases DROP COLUMN IF EXISTS is_cancelled"))
         await connection.execute(text("DROP TABLE IF EXISTS order_accessories"))
         await connection.execute(text("ALTER TABLE order_items DROP COLUMN IF EXISTS unit_price_snapshot"))
         await connection.execute(text("ALTER TABLE order_items DROP COLUMN IF EXISTS product_name_snapshot"))
@@ -341,6 +349,14 @@ async def test_postgres_adopts_verified_refund_revision_then_upgrades_to_head():
         await connection.execute(text("DROP TABLE email_outbox_audit"))
         await connection.execute(text("DROP TABLE email_outbox"))
         await connection.execute(text("DROP TABLE order_accessories"))
+        await connection.execute(text(
+            "ALTER TABLE purchases DROP CONSTRAINT IF EXISTS ck_purchases_not_received_and_cancelled"
+        ))
+        await connection.execute(text("ALTER TABLE purchase_items DROP COLUMN IF EXISTS cost_deviation_confirmed"))
+        await connection.execute(text("ALTER TABLE purchases DROP COLUMN IF EXISTS cancelled_by"))
+        await connection.execute(text("ALTER TABLE purchases DROP COLUMN IF EXISTS cancellation_reason"))
+        await connection.execute(text("ALTER TABLE purchases DROP COLUMN IF EXISTS cancelled_at"))
+        await connection.execute(text("ALTER TABLE purchases DROP COLUMN IF EXISTS is_cancelled"))
         await connection.execute(text("ALTER TABLE payments DROP COLUMN pg_order_id"))
         await connection.execute(text("ALTER TABLE order_items DROP COLUMN unit_price_snapshot"))
         await connection.execute(text("ALTER TABLE order_items DROP COLUMN product_name_snapshot"))
