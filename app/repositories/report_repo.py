@@ -98,6 +98,7 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         db,
         select(func.sum(Expense.jumlah))
         .where(
+            Expense.is_voided.is_(False),
             Expense.tanggal >= start_dt,
             Expense.tanggal <= end_dt
         )
@@ -281,6 +282,59 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         "order_count": order_count,
         "avg_order_value": avg_order_value,
     }
+
+
+async def get_sales_trend_rows(db: AsyncSession, start_dt: datetime, end_dt: datetime):
+    """Return paid-order revenue and COGS rows keyed by each order's final settlement."""
+    paid_orders = (
+        select(
+            Invoice.order_id.label("order_id"),
+            func.max(func.coalesce(Payment.settled_at, Payment.created_at)).label("settled_at"),
+            func.sum(Payment.jumlah_bayar).label("revenue"),
+        )
+        .join(Payment, Payment.invoice_id == Invoice.id)
+        .join(Order, Order.id == Invoice.order_id)
+        .where(
+            func.lower(cast(Payment.payment_status, String)) == "success",
+            func.lower(cast(Invoice.status, String)) == "paid",
+            func.lower(cast(Order.status, String)).notin_(["cancelled", "refunded"]),
+        )
+        .group_by(Invoice.order_id)
+        .subquery()
+    )
+    item_hpp = (
+        select(
+            OrderItem.order_id.label("order_id"),
+            func.sum(OrderItem.jumlah * func.coalesce(OrderItem.hpp_snapshot, 0.0)).label("hpp"),
+        )
+        .group_by(OrderItem.order_id)
+        .subquery()
+    )
+    accessory_hpp = (
+        select(
+            OrderAccessory.order_id.label("order_id"),
+            func.sum(OrderAccessory.subtotal).label("hpp"),
+        )
+        .group_by(OrderAccessory.order_id)
+        .subquery()
+    )
+    statement = (
+        select(
+            paid_orders.c.order_id,
+            paid_orders.c.settled_at,
+            paid_orders.c.revenue,
+            (
+                func.coalesce(item_hpp.c.hpp, Decimal("0.00"))
+                + func.coalesce(accessory_hpp.c.hpp, Decimal("0.00"))
+            ).label("hpp"),
+        )
+        .outerjoin(item_hpp, item_hpp.c.order_id == paid_orders.c.order_id)
+        .outerjoin(accessory_hpp, accessory_hpp.c.order_id == paid_orders.c.order_id)
+        .where(paid_orders.c.settled_at >= start_dt, paid_orders.c.settled_at <= end_dt)
+        .order_by(paid_orders.c.settled_at, paid_orders.c.order_id)
+    )
+    result = await _execute_readonly(db, statement)
+    return result.all()
 
 async def get_analytics_report_data(db: AsyncSession, start_dt: datetime, end_dt: datetime) -> dict:
     """

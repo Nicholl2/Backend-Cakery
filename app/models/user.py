@@ -41,7 +41,7 @@ class User(Base):
         return ""
 
     faq_items = relationship("FaqItem", back_populates="created_by_user", foreign_keys="FaqItem.created_by")
-    expenses = relationship("Expense", back_populates="recorded_by_user")
+    expenses = relationship("Expense", back_populates="recorded_by_user", foreign_keys="Expense.recorded_by")
     stock_items_updated = relationship("StockItem", back_populates="last_updated_by_user")
     purchase_orders = relationship("Purchase", back_populates="created_by_user", foreign_keys="Purchase.created_by")
 

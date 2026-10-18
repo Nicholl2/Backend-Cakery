@@ -1,7 +1,7 @@
 from pydantic import BaseModel, ConfigDict, model_validator
 from decimal import Decimal
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date
 
 
 class RecentOrderSummary(BaseModel):
@@ -107,6 +107,21 @@ class SupplierSpendingItem(BaseModel):
     purchase_count: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class SalesTrendPoint(BaseModel):
+    period_start: date
+    revenue: Decimal
+    hpp: Decimal
+    gross_profit: Decimal
+    order_count: int
+
+
+class SalesTrendsResponse(BaseModel):
+    start_date: date
+    end_date: date
+    granularity: str
+    points: List[SalesTrendPoint]
 
 
 class FinancialReportDetail(BaseModel):

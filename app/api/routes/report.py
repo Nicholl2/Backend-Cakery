@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from decimal import Decimal
 from datetime import datetime, time
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 from app.core.database import get_db
 from app.api.dependencies import require_internal_user, require_owner, require_service_scope
@@ -14,6 +14,7 @@ from app.schemas.report import (
     FinancialReportDetail,
     FinancialReportResponse,
     AnalyticsReport,
+    SalesTrendsResponse,
 )
 from app.services import report_service
 from app.models.payment import Payment, PaymentStatusEnum
@@ -120,4 +121,25 @@ async def get_analytics_report(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Gagal memuat analitik: {str(exc)}"
+        )
+
+
+@router.get("/sales-trends", response_model=SalesTrendsResponse)
+async def get_sales_trends(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    granularity: Literal["day", "week", "month"] = Query("day"),
+    db: AsyncSession = Depends(get_db),
+    _ = Depends(require_internal_user),
+) -> SalesTrendsResponse:
+    """Revenue, HPP, gross profit, and paid-order count by settlement period."""
+    try:
+        return await report_service.get_sales_trends(db, start_date, end_date, granularity)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Error getting sales trends: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Gagal memuat tren penjualan",
         )

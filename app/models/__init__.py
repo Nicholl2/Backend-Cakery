@@ -7,7 +7,7 @@ from .purchasing import Supplier, Purchase, PurchaseItem
 from .role import Role
 from .user import User  
 from .faq_item import FaqItem
-from .expense import Expense
+from .expense import Expense, ExpenseAudit
 from .customer import Customer
 from .order import Order, OrderItem, OrderAccessory, Invoice
 from .payment import Payment, RefundTransaction
@@ -33,6 +33,7 @@ __all__ = [
     "User",
     "FaqItem",
     "Expense",
+    "ExpenseAudit",
     "Customer",
     "Order",
     "OrderItem",

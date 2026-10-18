@@ -1,7 +1,13 @@
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.schemas.expense import ExpenseCreate, ExpenseUpdate, ExpenseDetailResponse
+from app.schemas.expense import (
+    ExpenseCreate,
+    ExpenseUpdate,
+    ExpenseCancel,
+    ExpenseDetailResponse,
+    ExpenseAuditResponse,
+)
 from app.services import expense_service
 from app.api.dependencies import get_current_user_id, require_admin_or_owner
 from typing import List, Optional
@@ -37,6 +43,41 @@ async def create_expense(
     return await expense_service.create_expense(db, expense_data, recorded_by=user_id)
 
 
+@router.patch("/{expense_id}", response_model=ExpenseDetailResponse)
+async def update_expense(
+    expense_id: int,
+    expense_data: ExpenseUpdate,
+    user_id: int = Depends(get_current_user_id),
+    role_level: int = Depends(require_admin_or_owner),
+    db: AsyncSession = Depends(get_db),
+) -> ExpenseDetailResponse:
+    """Edit an active expense. All changed fields are recorded in the audit trail."""
+    return await expense_service.update_expense(db, expense_id, expense_data, updated_by=user_id)
+
+
+@router.post("/{expense_id}/cancel", response_model=ExpenseDetailResponse)
+async def cancel_expense(
+    expense_id: int,
+    request: ExpenseCancel,
+    user_id: int = Depends(get_current_user_id),
+    role_level: int = Depends(require_admin_or_owner),
+    db: AsyncSession = Depends(get_db),
+) -> ExpenseDetailResponse:
+    """Soft-void an expense with a required reason; records an audit event."""
+    return await expense_service.void_expense(db, expense_id, request.reason, voided_by=user_id)
+
+
+@router.get("/{expense_id}/audit", response_model=List[ExpenseAuditResponse])
+async def get_expense_audit(
+    expense_id: int,
+    user_id: int = Depends(get_current_user_id),
+    role_level: int = Depends(require_admin_or_owner),
+    db: AsyncSession = Depends(get_db),
+) -> List[ExpenseAuditResponse]:
+    """Read immutable expense audit history (Owner/Admin only)."""
+    return await expense_service.get_expense_audit(db, expense_id)
+
+
 @router.get("", response_model=List[ExpenseDetailResponse], status_code=status.HTTP_200_OK)
 async def list_expenses(
     skip: int = Query(0, ge=0),
@@ -56,6 +97,8 @@ async def list_expenses(
     - **start_date**: Filter expenses from this date
     - **end_date**: Filter expenses until this date
     """
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date harus sebelum atau sama dengan end_date")
     return await expense_service.list_expenses(
         db,
         skip=skip,
@@ -81,6 +124,8 @@ async def get_expenses_summary(
     - **start_date**: Optional period start date
     - **end_date**: Optional period end date
     """
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date harus sebelum atau sama dengan end_date")
     return await expense_service.get_expenses_summary(db, start_date, end_date)
 
 

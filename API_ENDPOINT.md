@@ -177,10 +177,13 @@ Contoh item purchase baru: `{"stock_item_id":12,"jumlah":100,"harga_total":25000
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/expenses` | Admin / Owner | Catat pengeluaran operasional baru (gaji, listrik, sewa, dsb.) |
-| `GET` | `/expenses` | Authenticated User | List riwayat pengeluaran (Filter: `kategori`, rentang tanggal, paginasi) |
-| `GET` | `/expenses/summary/dashboard` | Authenticated User | Ringkasan total dan breakdown biaya untuk dashboard P&L |
-| `GET` | `/expenses/{expense_id}` | Authenticated User | Detail single data pengeluaran |
+| `POST` | `/expenses` | Admin / Owner | Catat expense dengan `kategori`, `jumlah` (> 0), `tanggal?`, `deskripsi?`, `penerima?`, `metode_pembayaran?` (`cash`, `bank_transfer`, `e_wallet`, `card`, `other`), dan `bukti_url?` (HTTPS). Membuat audit event `created`. |
+| `GET` | `/expenses` | Authenticated User | List riwayat, termasuk yang sudah dibatalkan (status `is_voided`). Filter: `kategori`, `start_date`, `end_date`, paginasi. |
+| `GET` | `/expenses/summary/dashboard` | Authenticated User | Ringkasan total, breakdown kategori, dan count dengan filter tanggal yang konsisten; expense yang dibatalkan dikecualikan. |
+| `PATCH` | `/expenses/{expense_id}` | Admin / Owner | Partial update field expense yang boleh diedit; butuh minimal satu field dan menyimpan perubahan before/after ke audit. Expense yang dibatalkan tidak bisa diedit (`409`). |
+| `POST` | `/expenses/{expense_id}/cancel` | Admin / Owner | Soft-cancel dengan body `{"reason":"..."}` (3–500 karakter). Tidak menghapus record; expense void tidak masuk laporan. Cancel ulang ditolak (`409`). |
+| `GET` | `/expenses/{expense_id}` | Authenticated User | Detail satu expense termasuk metadata dan status cancel. |
+| `GET` | `/expenses/{expense_id}/audit` | Admin / Owner | Riwayat event `created`, `updated`, `voided` beserta actor dan before/after. |
 
 ---
 
@@ -192,6 +195,7 @@ Contoh item purchase baru: `{"stock_item_id":12,"jumlah":100,"harga_total":25000
 | `GET` | `/reports/financial` | Staff / Admin / Owner (JWT) | Laporan komprehensif Laba/Rugi (P&L): `revenue`/`total_revenue`, `cash_received` (akumulasi arus kas masuk riil periode ini dengan integritas historis), `cash_refunded` (total arus kas keluar via refund pada periode ini), `net_cash_flow` (`cash_received - cash_refunded`), `hpp_total`/`total_hpp_cost`, `gross_profit`, `expenses_total`/`total_expenses`, `net_profit` (termasuk pendapatan DP hangus), `outstanding_payments` (akumulasi piutang kumulatif seluruh order non-cancelled per titik `end_date`), `non_refundable_dp_income`/`other_income` (pendapatan lain-lain dari DP pesanan yang dibatalkan tanpa refund), `product_profitability`/`full_product_profitability` (rincian qty terjual, revenue, HPP, gross profit, margin % per produk), dan `supplier_spending` (total belanja dan frekuensi PO per supplier). Menggunakan basis tanggal pembayaran lunas yang konsisten (menghindari pergeseran periode) dan mengeluarkan seluruh order unpaid/pending dari HPP & profit. |
 | `GET` | `/reports/financial-summary` | `SERVICE_FINANCIAL_SUMMARY_KEY` (`X-Service-Key` / `?service_key=...`) / Internal JWT | Ringkasan cepat laporan keuangan (`FinancialReportSummary`) untuk Chatbot atau internal: omzet kotor (`omzet_kotor`), modal HPP (`modal_hpp`), laba kotor (`laba_kotor`), margin persen (`margin_persen`), total pesanan (`total_pesanan`), dan rata-rata nilai pesanan (`aov`). Scope `reports:summary`. |
 | `GET` | `/reports/analytics` | Staff / Admin / Owner (JWT) | Analitik penjualan bulanan, tren produk terlaris, dan distribusi rating |
+| `GET` | `/reports/sales-trends` | Staff / Admin / Owner (JWT) | Seri grafik berisi `period_start`, `revenue`, `hpp`, `gross_profit`, `order_count`. Query `start_date`, `end_date` (`YYYY-MM-DD`), `granularity` (`day` default, `week`, `month`). Menggunakan tanggal settlement akhir order dan definisi paid-order yang sama dengan laporan finansial; periode kosong tetap dikembalikan dengan nilai nol. Batas rentang: 366 hari untuk daily, 3650 hari weekly, 7300 hari monthly. |
 
 ---
 
