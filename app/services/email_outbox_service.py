@@ -95,6 +95,30 @@ async def enqueue_order_status_for_buyer(db: AsyncSession, order: Order, new_sta
         )
 
 
+async def enqueue_order_overdue_for_buyer(db: AsyncSession, order: Order) -> None:
+    recipient = await buyer_email_for_order(db, order)
+    if recipient:
+        await enqueue_email(
+            db, event_key=f"order-overdue:buyer:{order.id}", recipient=recipient,
+            event_type="order_overdue", payload=order_email_payload(order),
+        )
+
+
+async def enqueue_order_overdue_for_sellers(db: AsyncSession, order: Order) -> None:
+    result = await db.execute(
+        select(User.email).join(Role, User.role_id == Role.id)
+        .where(User.is_active.is_(True), Role.level.in_([1, 2, 3]), User.email.is_not(None))
+    )
+    recipients = sorted({email.strip() for (email,) in result.all() if email and email.strip()})
+    if not recipients and settings.smtp_operational_inbox.strip():
+        recipients = [settings.smtp_operational_inbox.strip()]
+    for recipient in recipients:
+        await enqueue_email(
+            db, event_key=f"order-overdue:seller:{order.id}:{recipient.lower()}", recipient=recipient,
+            event_type="order_overdue", payload=order_email_payload(order),
+        )
+
+
 async def enqueue_payment_event(db: AsyncSession, order: Order, event_type: str,
                                 event_reference: str, **extra) -> None:
     recipient = await buyer_email_for_order(db, order)

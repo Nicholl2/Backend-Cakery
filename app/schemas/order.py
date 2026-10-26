@@ -256,6 +256,8 @@ class OrderOut(BaseModel):
     due_date: Optional[datetime] = None
     fulfillment_date: Optional[datetime] = None
     settlement_due_date: Optional[datetime] = None
+    payment_expires_at: Optional[datetime] = None
+    fulfillment_overdue_notified_at: Optional[datetime] = None
     payment_method_preference: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -268,7 +270,7 @@ class OrderOut(BaseModel):
     amount_due: Optional[Decimal] = None
     payment_status: Optional[str] = None
 
-    @field_validator("fulfillment_date", "settlement_due_date", "due_date", "created_at", "updated_at", mode="after")
+    @field_validator("fulfillment_date", "settlement_due_date", "payment_expires_at", "fulfillment_overdue_notified_at", "due_date", "created_at", "updated_at", mode="after")
     @classmethod
     def ensure_utc_timezone(cls, v):
         from datetime import timezone as tz

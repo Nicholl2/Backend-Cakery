@@ -6,6 +6,17 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### Order Payment Expiry, Overdue Alerts, and Buyer Status Events — 2026-10-26
+- Checkout dari Buyer/Web dan Chatbot kini mendapat `payment_expires_at` 60 menit setelah dibuat (dapat diatur `ORDER_UNPAID_TIMEOUT_MINUTES`, validasi 5–1440 menit). Seller-created orders dikecualikan. Midtrans Core API charge mengirim `custom_expiry` yang diselaraskan ke waktu checkout; charge yang dimulai setelah batas ditolak bila invoice unpaid.
+- Worker lifecycle opsional `ORDER_LIFECYCLE_WORKER_ENABLED` memeriksa unpaid checkout, merekonsiliasi transaksi Midtrans pending sebelum pembatalan, mengunci ulang order, memulihkan stok lewat ledger reversal, mempertahankan riwayat cancelled, dan mengirim notifikasi/email. Worker juga memberi alert satu kali pada order DP/lunas yang melewati `fulfillment_date`; tidak melakukan refund otomatis.
+- Perluas Chatbot callback status seller ke `delivered`, `picked_up`, dan `cancelled`; event `overdue` dikirim oleh worker. Status email seller/buyer tetap lewat outbox; overdue menambahkan event email khusus untuk buyer dan seller.
+- `OrderOut` menyertakan `payment_expires_at` dan `fulfillment_overdue_notified_at`. `PATCH /orders/{order_id}/status` memakai validasi state machine/auth yang ada dan rate limit 30 request/menit per IP.
+- Migration Alembic `20261026_01_order_lifecycle_automation` menambahkan waktu kedaluwarsa pembayaran dan marker notifikasi terlambat. Konfigurasi deployment baru: `ORDER_UNPAID_TIMEOUT_MINUTES=60`, `ORDER_LIFECYCLE_WORKER_ENABLED=false`, `ORDER_LIFECYCLE_POLL_SECONDS=30`. Aktifkan worker hanya pada proses persisten; platform serverless memerlukan worker terpisah.
+- Owner dapat mengubah `from_email`/`from_name` melalui `GET/PATCH /settings/email-sender` tanpa mengganti secret SMTP; migration `20261026_02_email_sender_settings` menyimpan identitas runtime dan actor/waktu pembaruan. Endpoint hanya Owner, membatasi 5 perubahan/menit, memvalidasi alamat dan menolak karakter kontrol. SMTP credential tetap secret deployment; sender harus diverifikasi provider.
+- Kontrak frontend dan chatbot diperbarui di `API_ENDPOINT.md`, alur bisnis di `FEATURES_LOGIC.md`, dan instruksi konfigurasi di `README.md`. Identitas sender diubah Owner secara runtime; provider tetap harus memverifikasi alamat/domain.
+- Midtrans custom expiry mengikuti format charge resmi `custom_expiry` untuk Core API (lihat [Midtrans Charge Transactions](https://docs.midtrans.com/reference/charge-transactions-1)).
+- Verifikasi lokal: full suite **311 passed, 41 skipped**; focused regression setelah penyesuaian expiry **73 passed**; Alembic memiliki satu head `20261026_02`; `git diff --check` dan compile check lulus. Test PostgreSQL/integration yang membutuhkan layanan eksternal tetap skipped sesuai konfigurasi lokal.
+
 ### Seller Order Filter & Payment Migration Audit — 2026-10-16
 - Parameter internal filter pada `GET /orders` kini bernama `order_status`, sedangkan alias query tetap `status`. Ini mencegah parameter menutupi modul `fastapi.status` di exception handler; request dengan atau tanpa `?status=` tetap kompatibel.
 - Helper test `_revision_metadata` memvalidasi deklarasi `revision` dan `down_revision`, menolak metadata hilang/duplikat/tidak literal, dan memeriksa graph migrasi lokal untuk parent hilang, root/head ambigu, siklus, atau revisi tak terjangkau.

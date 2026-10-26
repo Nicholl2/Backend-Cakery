@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from datetime import timedelta
 from decimal import Decimal
 
 MAX_ORDER_AMOUNT = Decimal("50000000")
@@ -322,6 +323,7 @@ async def create_new_order(
                 req["stock_item_obj"] = stock_item
 
         # ── 4. Buat Order ────────────────────────────────────────────────────
+        created_at = datetime.now(timezone.utc)
         order_obj = Order(
             customer_id=customer_id,
             status=OrderStatusEnum.pending,
@@ -331,6 +333,8 @@ async def create_new_order(
             notes=(notes or "") + key_marker if key_marker else notes,
             due_date=due_date,
             fulfillment_date=fulfillment_date,
+            created_at=created_at,
+            payment_expires_at=created_at + timedelta(minutes=settings.order_unpaid_timeout_minutes),
             payment_method_preference=payment_method_preference,
         )
         await order_repo.create_order(db, order_obj)  # flush → dapat order.id
@@ -1092,6 +1096,15 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
     elif actual_status == OrderStatusEnum.completed.value:
         from app.services.chatbot_notify import notify_chatbot_order_event
         await notify_chatbot_order_event(order_id, "completed")
+    elif actual_status == OrderStatusEnum.delivered.value:
+        from app.services.chatbot_notify import notify_chatbot_order_event
+        await notify_chatbot_order_event(order_id, "delivered")
+    elif actual_status == OrderStatusEnum.picked_up.value:
+        from app.services.chatbot_notify import notify_chatbot_order_event
+        await notify_chatbot_order_event(order_id, "picked_up")
+    elif actual_status == OrderStatusEnum.cancelled.value:
+        from app.services.chatbot_notify import notify_chatbot_order_event
+        await notify_chatbot_order_event(order_id, "cancelled")
     elif actual_status == OrderStatusEnum.refunded.value:
         # Sinyal Manual Refund Completed (Poin 2.b):
         # Dipicu saat Admin/Seller mengubah status pesanan menjadi refunded di Dashboard Site

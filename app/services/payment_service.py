@@ -2,7 +2,7 @@ import base64
 import hashlib
 import hmac
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional, List
 import httpx
@@ -95,6 +95,19 @@ async def create_midtrans_charge(
         )
     if order.status in (OrderStatusEnum.cancelled, OrderStatusEnum.refunded, OrderStatusEnum.cancelled_settlement_expired):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Order yang dibatalkan tidak dapat menerima pembayaran")
+    if order.payment_expires_at and order.invoice and order.invoice.status == InvoiceStatusEnum.unpaid:
+        payment_expires_at = order.payment_expires_at
+        if payment_expires_at.tzinfo is None:
+            payment_expires_at = payment_expires_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) >= payment_expires_at:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batas pembayaran pesanan sudah berakhir. Buat pesanan baru untuk melanjutkan.")
+    if (order.invoice and order.invoice.status == InvoiceStatusEnum.partial
+            and payment_type == "full" and order.settlement_due_date):
+        settlement_due_date = order.settlement_due_date
+        if settlement_due_date.tzinfo is None:
+            settlement_due_date = settlement_due_date.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) >= settlement_due_date:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batas pelunasan pesanan sudah berakhir.")
     if not order.invoice:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -177,7 +190,7 @@ async def create_midtrans_charge(
 
     # DP settlement logic is persisted with the reservation as well.
     if payment_type == "dp" and order.fulfillment_date:
-        from datetime import timedelta, timezone as tz
+        from datetime import timezone as tz
         wib_tz = tz(timedelta(hours=7))
         f_dt = order.fulfillment_date
         if f_dt.tzinfo is None:
@@ -186,7 +199,7 @@ async def create_midtrans_charge(
         h_minus_1_wib = f_wib.date() - timedelta(days=1)
         settlement_due_wib = datetime(h_minus_1_wib.year, h_minus_1_wib.month, h_minus_1_wib.day, 18, 0, 0, tzinfo=wib_tz)
         order.settlement_due_date = settlement_due_wib.astimezone(tz.utc)
-    elif payment_type == "full":
+    elif payment_type == "full" and invoice.status == InvoiceStatusEnum.unpaid:
         order.settlement_due_date = None
     await db.commit()
 
@@ -199,6 +212,35 @@ async def create_midtrans_charge(
             "gross_amount": int(amount_rounded)
         }
     }
+    expiry_start = None
+    expiry_minutes = None
+    wib = timezone(timedelta(hours=7))
+    if invoice.status == InvoiceStatusEnum.unpaid and order.created_at:
+        # Anchor initial payment expiry to checkout, not charge attempt time.
+        expiry_start = order.created_at
+        if expiry_start.tzinfo is None:
+            expiry_start = expiry_start.replace(tzinfo=timezone.utc)
+        deadline = order.payment_expires_at or (
+            expiry_start + timedelta(minutes=settings.order_unpaid_timeout_minutes)
+        )
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        from math import ceil
+        expiry_minutes = ceil((deadline - expiry_start).total_seconds() / 60)
+    elif invoice.status == InvoiceStatusEnum.partial and order.settlement_due_date:
+        # Final payment after DP expires at the agreed settlement deadline.
+        from math import ceil
+        expiry_start = datetime.now(timezone.utc)
+        due_at = order.settlement_due_date
+        if due_at.tzinfo is None:
+            due_at = due_at.replace(tzinfo=timezone.utc)
+        expiry_minutes = ceil((due_at - expiry_start).total_seconds() / 60)
+    if expiry_start and expiry_minutes and expiry_minutes > 0:
+        payload["custom_expiry"] = {
+            "order_time": expiry_start.astimezone(wib).strftime("%Y-%m-%d %H:%M:%S %z"),
+            "expiry_duration": expiry_minutes,
+            "unit": "minute",
+        }
     
     if payment_method == "bank_transfer":
         payload["bank_transfer"] = {"bank": "bca"}
@@ -1135,16 +1177,23 @@ async def check_expired_settlements(db: AsyncSession) -> int:
                         continue
 
                     await _rollback_order_stock(order_db, order)
+                    old_status = order.status.value
                     order.status = OrderStatusEnum.cancelled_settlement_expired
                     from app.services.email_outbox_service import enqueue_order_status_for_buyer
                     await enqueue_order_status_for_buyer(
                         order_db, order, OrderStatusEnum.cancelled_settlement_expired.value
+                    )
+                    from app.services.notification_service import notify_order_status_updated
+                    await notify_order_status_updated(
+                        order_db, order, old_status,
+                        OrderStatusEnum.cancelled_settlement_expired.value,
                     )
         except Exception as e:
             logger.error(f"Failed to process expired settlement for order {order_id}: {e}", exc_info=True)
             continue
 
         cancelled_count += 1
+        await notify_chatbot_order_event(order_id, "cancelled")
         logger.info(
             "[SETTLEMENT_AUDIT] order_cancelled_expired | order_id=%s | "
             "settlement_due_date=%s",

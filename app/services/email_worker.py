@@ -10,11 +10,12 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from sqlalchemy import and_, or_, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.email_outbox import EmailOutbox
+from app.models.email_sender_settings import EmailSenderSettings
 
 logger = logging.getLogger(__name__)
 
@@ -30,16 +31,20 @@ def _message_id(event_key: str) -> str:
 
 def _render_email(event: EmailOutbox) -> tuple[str, str]:
     data = json.loads(event.payload_json)
+    sender_name = getattr(event, "_sender_name", None) or settings.smtp_from_name
     order_number = html.escape(str(data.get("order_number", "")))
     name = html.escape(str(data.get("customer_name", "Pelanggan")))
     total = html.escape(str(data.get("total", "")))
     if event.event_type == "order_created":
-        subject = f"Pesanan baru {order_number} — {settings.smtp_from_name}"
+        subject = f"Pesanan baru {order_number} — {sender_name}"
         body = f"<p>Pesanan baru dari {name}.</p><p>Nomor: {order_number}</p><p>Total: Rp {total}</p>"
     elif event.event_type == "order_status_updated":
         status = html.escape(str(data.get("status", "")))
         subject = f"Status pesanan {order_number} diperbarui"
         body = f"<p>Halo {name}, status pesanan {order_number} sekarang <strong>{status}</strong>.</p>"
+    elif event.event_type == "order_overdue":
+        subject = f"Pesanan {order_number} melewati tanggal pemenuhan"
+        body = f"<p>Pesanan {order_number} untuk {name} melewati tanggal pemenuhan yang dijadwalkan. Hubungi pelanggan untuk menyepakati tindak lanjut.</p>"
     elif event.event_type == "payment_status_updated":
         payment_status = html.escape(str(data.get("payment_status", "")))
         subject = f"Pembayaran pesanan {order_number} diperbarui"
@@ -49,18 +54,20 @@ def _render_email(event: EmailOutbox) -> tuple[str, str]:
         amount = html.escape(str(data.get("amount", "")))
         subject = f"Pembaruan refund pesanan {order_number}"
         body = f"<p>Halo {name}, refund pesanan {order_number} berstatus <strong>{refund_status}</strong>.</p><p>Nominal: Rp {amount}</p>"
-    return subject, f"<html><body style=\"font-family:Arial,sans-serif\"><h2>{html.escape(settings.smtp_from_name)}</h2>{body}</body></html>"
+    return subject, f"<html><body style=\"font-family:Arial,sans-serif\"><h2>{html.escape(sender_name)}</h2>{body}</body></html>"
 
 
 async def _send(event: EmailOutbox) -> None:
-    if not settings.smtp_host or not settings.smtp_from_email:
+    sender_email = getattr(event, "_sender_email", None) or settings.smtp_from_email
+    sender_name = getattr(event, "_sender_name", None) or settings.smtp_from_name
+    if not settings.smtp_host or not sender_email:
         raise RuntimeError("SMTP is not configured")
     import aiosmtplib
 
     subject, body = _render_email(event)
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"{settings.smtp_from_name} <{settings.smtp_from_email}>"
+    msg["From"] = f"{sender_name} <{sender_email}>"
     msg["To"] = event.recipient
     msg["Message-ID"] = _message_id(event.event_key)
     msg.attach(MIMEText(body, "html", "utf-8"))
@@ -161,10 +168,18 @@ async def _finish_failure(db: AsyncSession, event: EmailOutbox, token: str, exc:
 
 async def _process_one_email(db: AsyncSession) -> tuple[bool, bool | None]:
     """Return (did_work, delivery_succeeded); None means there was no event."""
+    sender_factory = async_sessionmaker(bind=db.bind, class_=AsyncSession, expire_on_commit=False)
+    async with sender_factory() as sender_db:
+        sender = await sender_db.get(EmailSenderSettings, 1)
+    sender_email = sender.from_email if sender else None
+    sender_name = sender.from_name if sender else None
     claimed = await _claim_email(db)
     if claimed is None:
         return False, None
     event, token = claimed
+    if sender_email:
+        event._sender_email = sender_email
+        event._sender_name = sender_name
     try:
         await _send(event)
     except Exception as exc:

@@ -55,6 +55,7 @@ from app.api.routes.report import router as report_router
 from app.api.routes.user import router as user_router
 from app.api.routes.review import router as review_router
 from app.api.routes import admin_buyer, admin_whatsapp, public
+from app.api.routes.settings import router as settings_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -100,11 +101,19 @@ async def lifespan(app: FastAPI):
         raise
 
     email_worker_task = None
+    order_lifecycle_worker_task = None
     if settings.email_worker_enabled:
         from app.services.email_worker import run_email_worker
 
         email_worker_task = asyncio.create_task(
             run_email_worker(), name="email-outbox-worker"
+        )
+
+    if settings.order_lifecycle_worker_enabled:
+        from app.services.order_lifecycle_service import run_order_lifecycle_worker
+
+        order_lifecycle_worker_task = asyncio.create_task(
+            run_order_lifecycle_worker(), name="order-lifecycle-worker"
         )
 
     try:
@@ -113,6 +122,9 @@ async def lifespan(app: FastAPI):
         if email_worker_task is not None:
             email_worker_task.cancel()
             await asyncio.gather(email_worker_task, return_exceptions=True)
+        if order_lifecycle_worker_task is not None:
+            order_lifecycle_worker_task.cancel()
+            await asyncio.gather(order_lifecycle_worker_task, return_exceptions=True)
 
 
 app = FastAPI(
@@ -170,6 +182,7 @@ app.include_router(order_router, prefix="/orders", tags=["Orders"])
 app.include_router(payment_router, prefix="/payments", tags=["Payments"])
 app.include_router(report_router, prefix="/reports", tags=["Reports"])
 app.include_router(user_router, prefix="/users", tags=["Users"])
+app.include_router(settings_router)
 app.include_router(review_router, prefix="/reviews", tags=["Reviews"])
 app.include_router(notification_router)
 app.include_router(admin_whatsapp.router)

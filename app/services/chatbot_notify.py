@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 async def notify_chatbot_order_event(order_id: int, event: str) -> None:
     """
     Send an async HTTP POST notification to Chatbot with bounded retries.
-    Supported events: 'created', 'paid', 'refunded', 'ready', 'processing', 'completed'
+    Supported events: 'created', 'paid', 'refunded', 'ready', 'processing',
+    'delivered', 'picked_up', 'completed', 'cancelled', 'overdue'
     Target URL: {settings.chatbot_url}/webhook/internal/orders/{order_id}/{event}
     Header: X-Internal-Key: {settings.chatbot_internal_key}
     """

@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     email_outbox_lease_seconds: int = Field(default=300, ge=3)
     email_outbox_admin_token: str = ""
 
+    # Order lifecycle automation
+    order_unpaid_timeout_minutes: int = Field(default=60, ge=5, le=1440)
+    order_lifecycle_worker_enabled: bool = False
+    order_lifecycle_poll_seconds: int = Field(default=30, ge=5, le=3600)
+
     @model_validator(mode="after")
     def enforce_production_security(self) -> "Settings":
         env_name = (self.environment or "").lower()

@@ -98,3 +98,28 @@ async def notify_order_status_updated(
         actor_id=actor_id,
         metadata_json=metadata,
     )
+
+
+async def notify_order_event(db: AsyncSession, order: Order, event_type: str) -> None:
+    """Persist a lifecycle alert for active sellers and the linked buyer account."""
+    metadata = json.dumps({
+        "order_id": order.id,
+        "order_number": f"ORDER-{order.id}",
+        "status": event_type,
+    })
+    sellers = (await db.execute(select(User).where(User.is_active.is_(True)))).scalars().all()
+    for user in sellers:
+        await notification_repo.create_notification(
+            db=db, type=event_type, recipient_user_id=user.id, order_id=order.id,
+            actor_type="system", metadata_json=metadata,
+        )
+
+    customer = await db.get(Customer, order.customer_id) if order.customer_id else None
+    if not customer or not customer.nomor_wa:
+        return
+    buyer = (await db.execute(select(Buyer).where(Buyer.phone == customer.nomor_wa))).scalars().first()
+    if buyer:
+        await notification_repo.create_notification(
+            db=db, type=event_type, recipient_buyer_id=buyer.id, order_id=order.id,
+            actor_type="system", metadata_json=metadata,
+        )

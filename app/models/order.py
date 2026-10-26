@@ -56,6 +56,8 @@ class Order(Base):
     due_date = Column(DateTime(timezone=True), nullable=True)
     fulfillment_date = Column(DateTime(timezone=True), nullable=True)
     settlement_due_date = Column(DateTime(timezone=True), nullable=True)
+    payment_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    fulfillment_overdue_notified_at = Column(DateTime(timezone=True), nullable=True)
     payment_method_preference = Column(String(50), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())

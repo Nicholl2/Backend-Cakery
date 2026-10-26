@@ -114,6 +114,19 @@ Alur kerja background task / endpoint internal `POST /payments/check-expired-set
    - Mengubah status pesanan menjadi `OrderStatusEnum.cancelled_settlement_expired`.
    - Mencatat log audit `[SETTLEMENT_AUDIT] order_cancelled_expired`.
 
+## 3c. Batas Pembayaran Checkout dan Pesanan Terlambat
+
+- Order Buyer/Web dan Chatbot menyimpan `payment_expires_at` sebesar 60 menit setelah checkout. Order manual yang dibuat seller dikecualikan karena biasanya merupakan transaksi yang sudah dikonfirmasi secara langsung.
+- Charge Midtrans memakai `custom_expiry` dengan waktu checkout yang sama. Aturan ini berlaku untuk metode Core API yang digunakan aplikasi (`bank_transfer` dan `qris`). Percobaan charge setelah batas checkout ditolak HTTP `409` bila invoice masih unpaid.
+- Worker lifecycle berjalan setiap `ORDER_LIFECYCLE_POLL_SECONDS` (default 30 detik) saat `ORDER_LIFECYCLE_WORKER_ENABLED=true`. Untuk database lama yang belum memiliki `payment_expires_at`, batas dihitung dari `created_at + ORDER_UNPAID_TIMEOUT_MINUTES`.
+- Worker yang sama juga menjalankan pemeriksaan jatuh tempo pelunasan DP (`settlement_due_date`) yang sebelumnya hanya tersedia sebagai endpoint internal, sehingga order DP yang belum lunas dapat dibatalkan otomatis sesuai H-1 pukul 18.00 WIB.
+- Sebelum membatalkan, worker merekonsiliasi payment Midtrans yang masih pending. Jika status gateway masih pending/tidak dapat diperiksa, order dan stok tidak dibatalkan; worker mencoba lagi pada siklus berikutnya. Jika semua payment gagal/kedaluwarsa dan invoice tetap unpaid, order menjadi `cancelled`, stok dipulihkan lewat ledger idempotent, dan pembeli/seller mendapat event notifikasi. Riwayat order tetap tersimpan.
+- Order yang sudah membayar DP atau penuh, tetapi melewati `fulfillment_date` saat masih `pending`, `in_process`, atau `ready`, mendapat satu alert `order_overdue` untuk buyer dan seller. Worker mengirim email outbox, notifikasi in-app, dan webhook chatbot setelah commit. Status order tetap berjalan dan **tidak ada refund otomatis**; seller perlu menghubungi pelanggan untuk menyepakati estimasi/tindak lanjut.
+- Notifikasi lifecycle bersifat idempotent melalui row lock dan marker `fulfillment_overdue_notified_at`. Rate limit `PATCH /orders/{order_id}/status` adalah 30 request/menit per IP; route tetap memerlukan akun internal dan transisi status tervalidasi.
+- Mengaktifkan worker pada deployment yang menjalankan proses API secara persisten: `ORDER_LIFECYCLE_WORKER_ENABLED=true`. Pada platform serverless/scale-to-zero, jalankan proses worker persisten terpisah atau jadwalkan pemanggilan service yang setara. Pengiriman email buyer memerlukan akun Buyer yang memiliki email; Chatbot perlu menangani webhook baru `cancelled` dan `overdue`.
+- Ganti nama/alamat pengirim lewat `PATCH /settings/email-sender`; alamat harus sudah diverifikasi oleh penyedia email. `SMTP_FROM_EMAIL`/`SMTP_FROM_NAME` hanya menjadi fallback awal. Host, username, password, TLS, dan token tetap berupa secret konfigurasi deployment; worker memakai retry outbox yang sudah ada.
+- Owner dapat mengubah identitas pengirim runtime lewat `PATCH /settings/email-sender`. Nilai nama/alamat pengirim disimpan di database dan dipakai oleh outbox untuk pengiriman berikutnya; `SMTP_HOST`, username, password, dan TLS tetap konfigurasi secret deployment. Validasi format/karakter kontrol, Owner-only authorization, rate limit, audit `updated_by`/`updated_at`, dan domain terverifikasi tetap menjadi syarat operasional.
+
 ## 4. Otomasi Webhook Settlement, Idempotency & State Machine
 
 Alur kerja saat Midtrans memanggil webhook listener `POST /payments/notify`:

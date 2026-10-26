@@ -223,6 +223,8 @@ pytest tests/test_imports.py
 - An unpaid order cancellation changes the order to `cancelled`. Stock is reversed from its original `ORDER` movements, and a `REVERSAL` movement prevents repeat cancellation/refund paths from restoring it twice. Current recipes are not used for reversal.
 - A refund request cancels the order while refund confirmation is pending. The invoice/order become `refunded` when all settled funds are refunded, or when a seller records a completed manual refund. Failed internal Midtrans webhook processing returns 5xx so the gateway can retry; invalid signatures and unknown test orders are acknowledged without applying changes.
 - Important buyer email events are written to the transactional email outbox and retried by the email worker. Keep `EMAIL_WORKER_ENABLED=false` by default; enable it only on a persistent deployment after SMTP and database readiness checks.
+- Customer web/chatbot checkouts expire as unpaid after 60 minutes by default. Enable the order lifecycle worker on a persistent deployment with `ORDER_LIFECYCLE_WORKER_ENABLED=true`; it reconciles pending Midtrans payments before cancelling and releasing stock, and sends a one-time overdue alert for paid orders past fulfillment. Keep `ORDER_UNPAID_TIMEOUT_MINUTES` and `ORDER_LIFECYCLE_POLL_SECONDS` within their validated ranges. Delayed fulfillment does not issue an automatic refund.
+- Customer status emails use the transactional outbox and require `EMAIL_WORKER_ENABLED=true` plus a verified sender at the email provider. Owner can update the sender name/address through `PATCH /settings/email-sender`; SMTP host and credentials remain deployment secrets, never database values.
 
 ## 📚 API Documentation
 

@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.database import Base
-from app.models import Buyer, Customer, EmailOutbox, Invoice, Notification, Order, Payment, Role, User
+from app.models import Buyer, Customer, EmailOutbox, EmailSenderSettings, Invoice, Notification, Order, Payment, Role, User
 from app.models.order import InvoiceStatusEnum, MetodePengirimanEnum, OrderStatusEnum
 from app.models.payment import PaymentStatusEnum, PaymentTypeEnum
 from app.models.product import Product
@@ -195,6 +195,23 @@ async def test_worker_sends_and_marks_event_sent(email_db, monkeypatch):
     assert sent == ["sent"]
     assert event.status == "sent"
     assert event.sent_at is not None
+
+
+@pytest.mark.asyncio
+async def test_worker_uses_owner_managed_sender_identity(email_db, monkeypatch):
+    email_db.add(EmailSenderSettings(id=1, from_email="orders@new.example.test",
+                                     from_name="Toti Order Desk"))
+    await enqueue_email(email_db, event_key="sender-setting", recipient="buyer@example.test",
+                        event_type="order_status_updated", payload={"status": "ready"})
+    await email_db.commit()
+    observed = []
+
+    async def fake_send(event):
+        observed.append((event._sender_email, event._sender_name))
+
+    monkeypatch.setattr("app.services.email_worker._send", fake_send)
+    assert await process_one_email(email_db)
+    assert observed == [("orders@new.example.test", "Toti Order Desk")]
 
 
 def test_message_id_is_valid_and_deterministic():

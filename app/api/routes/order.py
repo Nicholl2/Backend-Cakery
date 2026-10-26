@@ -6,7 +6,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-from app.core.rate_limiter import limiter, RATE_ORDER_CREATE
+from app.core.rate_limiter import limiter, RATE_ORDER_CREATE, RATE_ORDER_STATUS_UPDATE
 
 from app.core.database import get_db
 from app.api.dependencies import (
@@ -289,8 +289,10 @@ async def get_seller_order_detail(
 @router.patch("/{order_id}/status", response_model=OrderOut,
               dependencies=[Depends(require_internal_user)],
               summary="Update status order oleh seller")
+@limiter.limit(RATE_ORDER_STATUS_UPDATE)
 async def update_order_status(
     order_id: int,
+    request: Request,
     data: OrderStatusUpdate,
     auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
     db: AsyncSession = Depends(get_db),

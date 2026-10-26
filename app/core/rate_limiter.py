@@ -21,6 +21,7 @@ limiter = Limiter(
 
 RATE_ORDER_CREATE = "5/minute"            # POST /orders, /orders/buyer, /orders/custom
 RATE_PAYMENT_CREATE = "5/minute"          # POST /payments
+RATE_ORDER_STATUS_UPDATE = "30/minute"    # PATCH /orders/{order_id}/status
 RATE_AUTH_LOGIN = "10/minute"             # POST /auth/login, /auth/buyer/*
 RATE_AUTH_VERIFY = "6/minute"             # POST /auth/verify/*
 RATE_WEBHOOK = "30/minute"               # POST /payments/notify (global, bukan per-IP)
