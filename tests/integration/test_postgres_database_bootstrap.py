@@ -367,6 +367,12 @@ async def test_postgres_adopts_verified_refund_revision_then_upgrades_to_head():
         await connection.execute(text("ALTER TABLE payments DROP COLUMN pg_order_id"))
         await connection.execute(text("ALTER TABLE order_items DROP COLUMN unit_price_snapshot"))
         await connection.execute(text("ALTER TABLE order_items DROP COLUMN product_name_snapshot"))
+        # Lifecycle automation and sender settings were added after 20261008_01.
+        # Remove current-model objects so adoption validates the intended old schema.
+        await connection.execute(text("DROP INDEX IF EXISTS ix_orders_payment_expires_at"))
+        await connection.execute(text("ALTER TABLE orders DROP COLUMN IF EXISTS payment_expires_at"))
+        await connection.execute(text("ALTER TABLE orders DROP COLUMN IF EXISTS fulfillment_overdue_notified_at"))
+        await connection.execute(text("DROP TABLE IF EXISTS email_sender_settings"))
         await connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await connection.execute(text(
             "CREATE UNIQUE INDEX uq_stock_items_normalized_name "
