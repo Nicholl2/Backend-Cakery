@@ -175,6 +175,13 @@ async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_a
         await connection.execute(text("DROP TABLE IF EXISTS order_accessories"))
         await connection.execute(text("ALTER TABLE order_items DROP COLUMN IF EXISTS unit_price_snapshot"))
         await connection.execute(text("ALTER TABLE order_items DROP COLUMN IF EXISTS product_name_snapshot"))
+        # These columns and the settings table are part of the current ORM metadata,
+        # but did not exist at the revision being upgraded from. Keep the database
+        # aligned with 20261013_01 so the lifecycle migration exercises a real upgrade.
+        await connection.execute(text("DROP INDEX IF EXISTS ix_orders_payment_expires_at"))
+        await connection.execute(text("ALTER TABLE orders DROP COLUMN IF EXISTS payment_expires_at"))
+        await connection.execute(text("ALTER TABLE orders DROP COLUMN IF EXISTS fulfillment_overdue_notified_at"))
+        await connection.execute(text("DROP TABLE IF EXISTS email_sender_settings"))
         await connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
         await connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20261013_01')"))
 
