@@ -24,7 +24,7 @@ Coverage:
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch

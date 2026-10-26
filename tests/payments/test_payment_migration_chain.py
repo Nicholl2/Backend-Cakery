@@ -6,7 +6,7 @@ from typing import TypeAlias
 from app.models.payment import Payment
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 VERSIONS = ROOT / "alembic" / "versions"
 RevisionParents: TypeAlias = str | tuple[str, ...] | None
 

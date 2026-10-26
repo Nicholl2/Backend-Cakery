@@ -21,7 +21,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 - Parameter internal filter pada `GET /orders` kini bernama `order_status`, sedangkan alias query tetap `status`. Ini mencegah parameter menutupi modul `fastapi.status` di exception handler; request dengan atau tanpa `?status=` tetap kompatibel.
 - Helper test `_revision_metadata` memvalidasi deklarasi `revision` dan `down_revision`, menolak metadata hilang/duplikat/tidak literal, dan memeriksa graph migrasi lokal untuk parent hilang, root/head ambigu, siklus, atau revisi tak terjangkau.
 - Audit menemukan `payments.pg_order_id` sudah disediakan oleh migration `20261014_03_payment_midtrans_order_id` (nullable `String(100)`, unique index `uq_payments_pg_order_id`). Model `Payment` cocok; tidak dibuat migration baru. Pemeriksaan ini membandingkan source migration dan metadata model, bukan skema database aktual.
-- Regression test mempertahankan kompatibilitas query `status` dan menambahkan audit statis migration. Verifikasi lokal: `venv/bin/pytest -q tests/test_seller_orders.py tests/test_payment_migration_chain.py` — **4 passed**; tidak ada migration atau perubahan database yang dijalankan.
+- Regression test mempertahankan kompatibilitas query `status` dan menambahkan audit statis migration. Verifikasi lokal: `venv/bin/pytest -q tests/orders/test_seller_orders.py tests/payments/test_payment_migration_chain.py` — **4 passed**; tidak ada migration atau perubahan database yang dijalankan.
 
 ### Seller Custom Order Inventory Flow — 2026-10-15
 - `/orders/custom` sekarang mewajibkan tanggal pemenuhan, menerima `product_id` katalog dan aksesoris melalui `stock_item_id`/kuantitas; harga produk dan nama/harga/satuan stok disimpan sebagai snapshot.
@@ -69,7 +69,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 - **Database Migrations (`alembic/versions/20261001_01_add_fulfillment_and_settlement_columns.py`, `app/core/migrations.py`)**:
   - Skrip migrasi Alembic baru untuk penambahan kolom `fulfillment_date` dan `settlement_due_date` pada tabel `orders`, serta penambahan nilai enum `cancelled_settlement_expired`.
   - Menambahkan fungsi DDL runtime `ensure_fulfillment_columns` pada lifespan auto-migrations.
-- **Unit & Integration Tests (`tests/test_product_stock_catalog.py`, `tests/test_buyer_orders_payments.py`)**:
+- **Unit & Integration Tests (`tests/catalog/test_product_stock_catalog.py`, `tests/orders/test_buyer_orders_payments.py`)**:
   - Pengujian ketersediaan produk tanpa resep mengembalikan `is_available = False`.
   - Pengujian penolakan checkout Same-day dan penerimaan minimal H+1.
   - Pengujian kalkulasi nominal DP 50% dan ketepatan `settlement_due_date` (H-1 pukul 18:00 WIB).
@@ -99,7 +99,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - `POST /reviews/{review_id}/images`: Mengunggah foto baru ke ulasan yang sudah ada (khusus Buyer pemilik ulasan).
   - `DELETE /reviews/{review_id}/images/{image_id}`: Menghapus foto tertentu dari ulasan (khusus pemilik ulasan atau Admin/Owner) serta membersihkan asset dari storage Cloudinary (`delete_image_from_cloudinary`).
   - `DELETE /reviews/{review_id}`: Saat ulasan dihapus, seluruh foto terkait di Cloudinary ikut dibersihkan otomatis.
-- **Automated Tests Suite (`tests/test_review_multiple_images.py`)**:
+- **Automated Tests Suite (`tests/catalog/test_review_multiple_images.py`)**:
   - Pengujian pembuatan review dengan upload multiple image (multipart form-data), backward compatibility JSON payload, penambahan foto baru, penghapusan foto, serta proteksi hak akses / BOLA (Broken Object Level Authorization).
   - 100% test suite backend lulus (**78 passed**).
 
@@ -129,7 +129,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Menambahkan endpoint `GET /orders/stats` (didefinisikan sebelum `GET /orders/{order_id}` untuk mencegah route shadowing/422).
   - Parameter query tanggal `start_date` dan `end_date` bersifat opsional dengan penanganan fallback default aman (tidak memicu HTTP 422 Unprocessable Content jika tidak dikirim atau jika dikirim berupa string kosong oleh frontend).
   - Mengembalikan skema `OrderStatsOut` (total orders, count per status, active/completed orders, total revenue).
-- **Automated Tests & Audit Keamanan (`tests/test_product_multiple_images.py`, `tests/test_seller_orders.py`)**:
+- **Automated Tests & Audit Keamanan (`tests/catalog/test_product_multiple_images.py`, `tests/orders/test_seller_orders.py`)**:
   - Pengujian backward compatibility skema respons, upload multi-gambar, set primary, delete image, dan query parameter order stats.
   - 100% test suite backend lulus (**75 passed**).
 
@@ -162,7 +162,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - `start_wa_verification()` sekarang memanggil `fetch_whatsapp_number()` secara dinamis untuk pembentukan URL `https://wa.me/{wa_number}?text=VERIFIKASI%20{nonce}`.
 - **Public Endpoint Kontak Toko (`app/api/routes/public.py`)**:
   - `GET /public/kontak-toko`: Public endpoint (tanpa autentikasi) untuk mendapatkan nomor WhatsApp toko dengan in-memory cache ±60 detik (`app_cache`).
-- **Test Suite (`tests/test_whatsapp_chatbot_routes.py`)**:
+- **Test Suite (`tests/chatbot/test_whatsapp_chatbot_routes.py`)**:
   - Ditambahkan pengujian unit & integrasi lengkap untuk status, QR, ganti nomor, deeplink dinamis, dan caching publik (8 unit test).
 
 ### 001ab. Fitur Mutasi Profil Buyer & Forgot/Reset Password via Email
@@ -181,7 +181,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 - **Endpoint Baru (`app/api/routes/customer.py` & `app/api/routes/auth.py`)**:
   - `POST /buyers/me/change-password` & `PATCH /buyers/me/phone` pada router customer (auth: JWT `get_current_buyer`).
   - `POST /auth/buyer/forgot-password` & `POST /auth/buyer/reset-password/email` pada router auth (Public).
-- **Test Suite (`tests/test_buyer_profile_mutation.py`)**:
+- **Test Suite (`tests/accounts/test_buyer_profile_mutation.py`)**:
   - Ditambahkan test coverage untuk alur Forgot & Reset Password (intercept SMTP menggunakan `unittest.mock.patch`).
 - **Dokumentasi**: Update `API_ENDPOINT.md` (tabel Section A & F) dan `FEATURES_LOGIC.md` (Section 24).
 
@@ -197,9 +197,9 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 - **Preservasi Status Order `pending` pada Pembayaran Manual/Tunai (`app/services/payment_service.py`, `app/api/routes/payment.py`)**:
   - Menghapus blok kondisional auto-transition `order.status = OrderStatusEnum.in_process` dari fungsi `process_manual_payment()`.
   - Membiarkan status order tetap `pending` (hanya `invoice.status` yang berubah menjadi `paid`), sehingga konsisten dengan alur pembayaran online dan pesanan dapat dibatalkan/refund oleh pelanggan via chatbot jika diperlukan sebelum seller/dapur memproses pesanan.
-- **Automated Tests & Verifikasi (`tests/test_frontend_contracts.py`, `tests/test_settlement_and_migrations.py`)**:
-  - Menyelaraskan pengujian `test_manual_payment_contract` pada `tests/test_frontend_contracts.py` untuk memverifikasi order tetap berstatus `pending` dan field `notes` tercatat dengan benar.
-  - Menambahkan pengujian `test_ensure_payment_columns` pada `tests/test_settlement_and_migrations.py`.
+- **Automated Tests & Verifikasi (`tests/chatbot/test_frontend_contracts.py`, `tests/payments/test_settlement_and_migrations.py`)**:
+  - Menyelaraskan pengujian `test_manual_payment_contract` pada `tests/chatbot/test_frontend_contracts.py` untuk memverifikasi order tetap berstatus `pending` dan field `notes` tercatat dengan benar.
+  - Menambahkan pengujian `test_ensure_payment_columns` pada `tests/payments/test_settlement_and_migrations.py`.
   - Seluruh test suite backend (57 tests) lulus 100% (**100% PASSED**).
 
 ### 001z. Perbaikan UndefinedColumnError pada Model Payment (payment.py & payment_service.py)
@@ -207,8 +207,8 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Menghapus atribut kolom `notes = Column(Text, nullable=True)` dari model SQLAlchemy `Payment` di `app/models/payment.py`.
   - Menghapus passing argumen `notes=notes` saat instansiasi `Payment(...)` pada `process_manual_payment` di `app/services/payment_service.py`.
   - Menghilangkan `UndefinedColumnError / ProgrammingError: column payments.notes does not exist` saat memuat query order atau mengeksekusi eager-loading relasi `Invoice.payments`.
-- **Automated Tests (`tests/test_seller_orders.py`, `tests/test_frontend_contracts.py`)**:
-  - Memverifikasi pengujian `tests/test_seller_orders.py` dan `tests/test_frontend_contracts.py` berjalan sukses (**100% PASSED**).
+- **Automated Tests (`tests/orders/test_seller_orders.py`, `tests/chatbot/test_frontend_contracts.py`)**:
+  - Memverifikasi pengujian `tests/orders/test_seller_orders.py` dan `tests/chatbot/test_frontend_contracts.py` berjalan sukses (**100% PASSED**).
   - Seluruh 56 unit & integration tests pada Backend lulus tanpa error.
 
 ### 001y. Perbaikan HTTP 500 pada Endpoint Seller Orders & Custom Orders (order_repo.py & order_service.py)
@@ -220,16 +220,16 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Membungkus pembuatan pesanan custom (`create_custom_order`) di dalam subtransaksi atomic `async with db.begin_nested():` guna mencegah kegagalan pembuatan transaksi parsial atau rollback error.
   - Menetapkan `product_id = None` dan menjamin `custom_product_name` terisi nama custom item pada `OrderItem` pesanan kustom buatan seller (tanpa dependensi ke master produk).
   - Menetapkan default `hpp_snapshot = Decimal("0.00")` dan `custom_decoration_charge = Decimal("0.00")`.
-- **Automated Tests (`tests/test_seller_orders.py`, `tests/test_buyer_orders_payments.py`)**:
-  - Memverifikasi pengujian `tests/test_seller_orders.py` dan `tests/test_buyer_orders_payments.py` berjalan sukses (**100% PASSED**).
+- **Automated Tests (`tests/orders/test_seller_orders.py`, `tests/orders/test_buyer_orders_payments.py`)**:
+  - Memverifikasi pengujian `tests/orders/test_seller_orders.py` dan `tests/orders/test_buyer_orders_payments.py` berjalan sukses (**100% PASSED**).
   - Seluruh 56 unit & integration tests pada Backend lulus tanpa error.
 
 ### 001x. Perbaikan GroupingError PostgreSQL pada Query Agregasi Profitabilitas Produk (report_repo.py)
 - **Klausa GROUP BY Lengkap pada Agregasi Produk (`app/repositories/report_repo.py`)**:
   - Pada query `product_profit_query` di `get_financial_report_data`, menambahkan seluruh kolom fisik tabel yang menjadi bagian dari ekspresi non-aggregate SELECT (`OrderItem.product_id`, `OrderItem.custom_product_name`, `Product.nama_produk`) ke dalam klausa `.group_by(...)`.
   - Mengeliminasi error PostgreSQL `GroupingError / ProgrammingError: column "..." must appear in the GROUP BY clause or be used in an aggregate function` saat mengeksekusi perhitungan laporan profitabilitas per produk.
-- **Automated Tests (`tests/test_financial_report.py`)**:
-  - Memverifikasi pengujian `tests/test_financial_report.py` dan seluruh test suite (56 tests) berjalan sukses (**100% PASSED**).
+- **Automated Tests (`tests/finance/test_financial_report.py`)**:
+  - Memverifikasi pengujian `tests/finance/test_financial_report.py` dan seluruh test suite (56 tests) berjalan sukses (**100% PASSED**).
 
 ### 001w. Perbaikan InFailedSQLTransactionError & Deadlock Resilience pada Endpoint Laporan Keuangan (report_repo.py & report_service.py)
 - **Subtransaksi & Savepoint Terisolasi (`app/repositories/report_repo.py`)**:
@@ -242,7 +242,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Menambahkan decorator `@retry_on_deadlock(max_retries=3, delay=0.5)` yang menangkap exception `asyncpg.exceptions.DeadlockDetectedError`, `OperationalError`, `DBAPIError`, maupun pesan lock contention database PostgreSQL.
   - Melakukan `await db.rollback()` otomatis saat mendeteksi kegagalan sebelum jeda waktu (delay 0.5s) dan melakukan retry maksimal 3 kali untuk membersihkan status sesi transaksi aborted.
   - Diterapkan pada fungsi `get_financial_report`, `get_analytics_report`, dan `get_dashboard_summary`.
-- **Automated Tests (`tests/test_financial_report.py`)**:
+- **Automated Tests (`tests/finance/test_financial_report.py`)**:
   - Menambahkan unit test `test_financial_report_deadlock_retry`: Mensimulasikan `OperationalError` (deadlock detected) pada 2 percobaan pertama dan memverifikasi bahwa retry decorator berhasil me-rollback session, pulih pada percobaan ke-3, dan mengembalikan data laporan yang valid.
   - Seluruh 56 unit & integration tests pada Backend berjalan sukses (**100% PASSED**).
 
@@ -255,7 +255,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Mengambil field `order_id`, `transaction_status`, `status_code`, `gross_amount`, `signature_key`, dan `transaction_id` secara aman.
   - Jika order/pembayaran tidak ditemukan di database (`order is None` / `payment is None`), tidak melempar HTTP 500 melainkan langsung mengembalikan status HTTP 200 OK dengan payload JSON `{"status": "ok", "message": "Test notification received, dummy order ignored"}`.
   - Memverifikasi `signature_key` buatan Midtrans dengan SHA-512 secara defensif tanpa throw exception unhandled, sehingga Midtrans selalu menerima respons status HTTP 200 OK.
-- **Automated Tests (`tests/test_buyer_orders_payments.py`)**:
+- **Automated Tests (`tests/orders/test_buyer_orders_payments.py`)**:
   - Menambahkan pengujian `Test 14`: Validasi `POST /payments/notify` dan `POST /payments/notification` dengan payload order dummy/unknown di DB mengembalikan status 200 OK dan body `{"status": "ok", "message": "Test notification received, dummy order ignored"}`, serta payload dengan signature tidak valid mengembalikan status 200 OK `{"status": "error_handled"}`.
   - Seluruh test suite (55 tests) berjalan sukses (**100% PASSED**).
 
@@ -276,8 +276,8 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Menjamin iterasi Python pada breakdown profitabilitas kebal terhadap nilai `None` (`row.total_revenue or 0`, `row.total_hpp or 0`), mencegah unhandled `TypeError` pada kalkulasi margin laba.
 - **Pencatatan Structured Error Log (`app/services/order_service.py`, `app/services/report_service.py`)**:
   - Menambahkan `logger.error(f"DETAIL ERROR: {repr(e)}", exc_info=True)` pada seluruh blok `except Exception as e:` di layer service untuk menjamin pesan error utuh dari database PostgreSQL tercatat lengkap saat terjadi kendala.
-- **Automated Tests (`tests/test_financial_report.py`, `tests/test_seller_orders.py`, `tests/test_buyer_orders_payments.py`)**:
-  - Menambahkan pengujian `test_financial_report_null_hpp_snapshot_resilience` pada `tests/test_financial_report.py` untuk memverifikasi kalkulasi laporan keuangan pada pesanan historis dengan `hpp_snapshot = NULL` dan `custom_decoration_charge = NULL`.
+- **Automated Tests (`tests/finance/test_financial_report.py`, `tests/orders/test_seller_orders.py`, `tests/orders/test_buyer_orders_payments.py`)**:
+  - Menambahkan pengujian `test_financial_report_null_hpp_snapshot_resilience` pada `tests/finance/test_financial_report.py` untuk memverifikasi kalkulasi laporan keuangan pada pesanan historis dengan `hpp_snapshot = NULL` dan `custom_decoration_charge = NULL`.
   - Seluruh 55 test suite pada Backend berjalan lancar dan lulus (**100% PASSED**).
 
 ### 001t. Perbaikan Root Cause HTTP 500 pada Endpoint Seller Orders (GET /orders)
@@ -289,7 +289,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Mengeliminasi `pydantic_core.ValidationError` saat endpoint `GET /orders` memuat seluruh riwayat pesanan toko (all-time) yang memuat data historis.
 - **Exception Shielding & Logging Komprehensif pada Seller Orders Router (`app/api/routes/order.py`)**:
   - Membungkus endpoint `GET /orders` (`list_seller_orders`) dan `GET /orders/{order_id}` (`get_seller_order_detail`) dalam blok `try-except Exception as e` dengan pencatatan structured error log.
-- **Automated Tests (`tests/test_seller_orders.py`)**:
+- **Automated Tests (`tests/orders/test_seller_orders.py`)**:
   - Menambahkan pengujian `Test 6`: Validasi pengambilan seluruh pesanan toko (`GET /orders`) dengan data item/invoice yang mengandung field `NULL`, memastikan status HTTP 200 OK berhasil dikembalikan dengan struktur nested data yang utuh.
   - Seluruh 53 unit & integration tests di test suite berjalan sukses (**100% PASSED**).
 
@@ -306,7 +306,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 - **Exception Shielding & Logging Komprehensif (`app/api/routes/order.py`)**:
   - Membungkus handler `GET /orders/buyer` dan `GET /orders/buyer/{id}` dengan blok `try-except Exception as e` dan *structured error logging*.
   - Mengembalikan status HTTP 500 terstruktur yang rapi dengan header CORS utuh jika terjadi kegagalan tak terduga.
-- **Automated Tests (`tests/test_buyer_orders_payments.py`)**:
+- **Automated Tests (`tests/orders/test_buyer_orders_payments.py`)**:
   - Menambahkan pengujian `Test 13`: Validasi deserialisasi pesanan buyer dengan kolom `OrderItem` bernilai `None` (`hpp_snapshot`, `custom_decoration_charge`) pada status `completed`, memastikan response berhasil dikembalikan dengan status HTTP 200 OK dan nilai default `0.00`.
   - Seluruh 53 unit & integration tests di test suite berjalan sukses (**100% PASSED**).
 
@@ -343,7 +343,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Menerapkan eager loading (`selectinload(Review.product)`, `selectinload(Review.customer)`, `selectinload(Review.order)`) untuk mengeliminasi potensi `MissingGreenlet` lazy-loading error.
   - Menambahkan bidang langsung `product_name` dan `customer_name` pada response model `ReviewOut` dan model ORM `Review`.
 
-- **Automated Tests (`tests/test_frontend_contracts.py`)**:
+- **Automated Tests (`tests/chatbot/test_frontend_contracts.py`)**:
   - `test_dashboard_summary_contract`: Memverifikasi RBAC (401 unauthenticated, 403 buyer, 200 staff/admin/owner) dan validasi struktur data `ReportSummary`.
   - `test_manual_payment_contract`: Memverifikasi pencatatan pembayaran manual, transisi status pembayaran menjadi `PAID`, transisi order menjadi `in_process`, dan pencatatan record `Payment` di database.
   - `test_global_reviews_latest_contract`: Memverifikasi pengambilan review terbaru secara global dengan parameter `limit`, urutan kronologis terbaru, serta kelengkapan `product_name` dan `customer_name`.
@@ -363,7 +363,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Membungkus alur `POST /orders/buyer` (`create_order_for_buyer`) dalam blok `try-except Exception as e`.
   - Mengembalikan `HTTPException(status_code=400, detail=str(e))` lengkap dengan pesan error spesifik jika terjadi kesalahan data pesanan, sehingga backend tidak melempar crash HTTP 500 yang menutup header CORS.
   - Mengubah penanganan error `create_new_order` agar melempar HTTP 400 Bad Request alih-alih HTTP 500 Internal Server Error saat validasi data gagal.
-- **Automated Tests (`tests/test_buyer_orders_payments.py`)**:
+- **Automated Tests (`tests/orders/test_buyer_orders_payments.py`)**:
   - Menambahkan pengujian `Test 10`: Validasi penanganan duplicate customer dengan varian format nomor HP (`62xx` pre-existing vs `08xx` buyer), memastikan record customer digunakan kembali tanpa memicu HTTP 409 Conflict.
   - Menambahkan pengujian `Test 11`: Validasi keunikan `nomor_invoice` dengan suffix acak antarpesanan.
   - Menambahkan pengujian `Test 12`: Validasi penanganan error pada `POST /orders/buyer` dengan payload invalid yang mengembalikan status HTTP 4xx (400/422) dengan pesan `detail` spesifik tanpa crash HTTP 500.
@@ -389,7 +389,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
     2. **Product in Order Check**: Memverifikasi `product_id` terdapat di dalam `order_items` dari pesanan tersebut. Jika tidak, melempar `HTTP 400 Bad Request` dengan detail `"Produk tidak terdapat dalam pesanan ini."`.
     3. **Duplicate Check**: Memverifikasi kombinasi `(order_id, product_id)` belum pernah diulas di database melalui query `review_repo.get_by_order_and_product`. Jika sudah ada, melempar `HTTP 400 Bad Request` dengan detail `"Anda sudah memberikan ulasan untuk produk pada pesanan ini."`.
   - Menambahkan eager loading `selectinload(Review.order)` pada repository query.
-- **Automated Tests (`tests/test_review.py`)**:
+- **Automated Tests (`tests/catalog/test_review.py`)**:
   - Menambahkan 6 unit & integration tests baru:
     * `test_create_review_success_for_completed_order`: Memvalidasi keberhasilan pembuatan review untuk order completed dan rekalkulasi rating & review count produk.
     * `test_create_review_delivered_and_picked_up_statuses`: Memvalidasi bahwa status `delivered` dan `picked_up` juga memenuhi syarat order selesai.
@@ -411,7 +411,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Mengimplementasikan fungsi `revoke_token` yang mendaftarkan token ke `app_cache` (TTLCache) berdasarkan `jti`, signature token, dan token raw dengan TTL sisa masa kedaluwarsa (`remaining_ttl = exp - now`).
   - Mengintegrasikan pengecekan blacklist pada fungsi `decode_token`: setiap token yang sudah dicabut langsung ditolak dengan status `HTTP 401 Unauthorized` (`{"detail": "Token has been revoked"}`).
   - Melindungi seluruh endpoint terproteksi (`get_current_user_payload`, `get_current_user_id`, `get_current_buyer`, `get_auth_identity_optional_service_or_jwt`) dari penggunaan kembali token yang telah di-logout.
-- **Automated Unit Tests (`tests/test_auth_logout.py`)**:
+- **Automated Unit Tests (`tests/security/test_auth_logout.py`)**:
   - 3 unit tests baru:
     * `test_access_token_expire_minutes_configuration`: Memvalidasi `ACCESS_TOKEN_EXPIRE_MINUTES == 60` di settings dan modul security.
     * `test_token_creation_includes_jti_and_60m_expiry`: Memvalidasi kehadiran klaim `jti` dan masa berlaku 60 menit pada payload JWT.
@@ -429,7 +429,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 - **Perhitungan Arus Kas Bersih `net_cash_flow` (`app/repositories/report_repo.py`, `app/schemas/report.py`)**:
   - Mengkalkulasikan pergerakan kas bersih per periode: `net_cash_flow = cash_received - cash_refunded`.
   - Memasukkan `cash_refunded` dan `net_cash_flow` ke dalam `FinancialReportResponse`, `FinancialReportDetail`, dan `FinancialReportSummary`.
-- **Automated Test Suite (`tests/test_financial_report.py`)**:
+- **Automated Test Suite (`tests/finance/test_financial_report.py`)**:
   - Memperbarui assertions pada seluruh unit test finansial untuk memvalidasi `cash_refunded` dan `net_cash_flow`.
   - Menambahkan unit test baru `test_cross_period_refund_and_historical_integrity`:
     * Memvalidasi pembayaran di bulan Januari tetap tercatat di `cash_received` Januari meskipun di-refund pada Februari.
@@ -455,7 +455,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Menyelaraskan nama field respon mencakup: `revenue`, `total_revenue`, `cash_received`, `hpp_total`, `total_hpp_cost`, `gross_profit`, `expenses_total`, `total_expenses`, `net_profit`, `outstanding_payments`, `non_refundable_dp_income`, `other_income`, `product_profitability`, `full_product_profitability`, dan `supplier_spending`.
   - Mengarahkan `FinancialReportResponse = FinancialReportDetail` untuk backward compatibility penuh.
   - Memperbarui `app/services/report_service.py` dan `app/api/routes/report.py` untuk menggunakan `FinancialReportResponse`.
-- **Automated Test Suite (`tests/test_financial_report.py`)**:
+- **Automated Test Suite (`tests/finance/test_financial_report.py`)**:
   - Memperbarui assertions pada `test_financial_report_date_consistency_and_unpaid_exclusion` dan `test_partial_payment_and_cancelled_orders_handling` untuk memvalidasi `cash_received` dan field skema baru.
   - Menambahkan test baru `test_cumulative_outstanding_and_non_refundable_dp` untuk memvalidasi akumulasi piutang lintas periode, pengakuan DP hangus pada pesanan dibatalkan, dan rekonsiliasi `net_profit`.
   - Seluruh 40 tests di test suite berjalan lancar (**100% PASSED**).
@@ -482,7 +482,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Menambahkan konstanta `MAX_ORDER_AMOUNT = Decimal("50000000")` (Rp 50.000.000).
   - Menerapkan validasi limit transaksi sebelum pengecekan stok pada `create_new_order` dan `create_custom_order`.
   - Menolak pembuatan pesanan yang nominalnya di atas batas maksimal dengan `HTTP 400 Bad Request`.
-- **Automated Test Suite (`tests/test_stability_features.py`)**:
+- **Automated Test Suite (`tests/quality/test_stability_features.py`)**:
   - 9 unit tests baru mencakup: health check endpoint, upload size limit rejection (>5MB) & allowance (<=5MB), spending cap rejection (>50 juta) & allowance (<=50 juta), serta operasi dasar, expiry, prefix invalidation, dan single key invalidation pada TTLCache.
   - Seluruh test suite (39 tests) berstatus **PASSED**.
 
@@ -508,7 +508,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
     * Menghitung ulang harga pokok rata-rata tertimbang (`stock_items.harga_per_satuan`) via formula Weighted Average Costing berpresisi Decimal.
     * Memicu rekalkulasi otomatis HPP produk resep terkait (`product_repo.calculate_and_update_product_price`).
     * Memproteksi status PO yang sudah diterima agar tidak dapat diubah kembali menjadi belum diterima (HTTP 409 Conflict) dan mencegah duplikasi penambahan stok.
-- **Automated Test Suite (`tests/test_financial_report.py`, `tests/test_purchasing_stock_integration.py`)**:
+- **Automated Test Suite (`tests/finance/test_financial_report.py`, `tests/inventory/test_purchasing_stock_integration.py`)**:
   - `test_financial_report_date_consistency_and_unpaid_exclusion`: memvalidasi alokasi tanggal settlement, eksklusi order unpaid, kalkulasi gross profit & net profit, serta validitas field DTO baru.
   - `test_partial_payment_and_cancelled_orders_handling`: memvalidasi penanganan DP parsial dan eksklusi total pesanan cancelled/refunded dari outstanding payments.
   - `test_purchase_received_updates_stock_and_weighted_average_cost`: memvalidasi penambahan stok, kalkulasi Weighted Average Costing, dan tanggal diterima.
@@ -527,7 +527,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Menghapus blok transisi otomatis yang mengubah `order.status` menjadi `OrderStatusEnum.in_process` saat pembayaran lunas/settlement (`total_success >= invoice.total_tagihan`).
   - Menjaga status invoice ter-update menjadi `InvoiceStatusEnum.paid`, namun membiarkan `order.status` tetap berada di `OrderStatusEnum.pending`.
   - Hal ini menjamin pembeli yang telah melunasi pesanan tetap dapat membatalkan dan mengajukan refund sebelum admin toko secara manual memulai proses produksi di dapur (status `in_process`).
-- **Automated Test Suite (`tests/test_settlement_and_migrations.py`)**:
+- **Automated Test Suite (`tests/payments/test_settlement_and_migrations.py`)**:
   - Memvalidasi fungsi migrasi `ensure_order_status_enum` pada dialect non-PostgreSQL (skip) dan PostgreSQL (autocommit DDL).
   - Memvalidasi alur pelunasan pembayaran via `_apply_transaction_status`, memastikan `invoice.status == 'paid'` sementara `order.status == 'pending'`.
 
@@ -549,7 +549,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
     * Mengembalikan HTTP 404 jika order tidak ditemukan di database.
     * Eager-loading seluruh relasi terkait: `customer`, `order_items` beserta `product`, serta `invoice` beserta `payments`.
     * Mengembalikan `StreamingResponse` dengan header `Content-Disposition: attachment; filename="Invoice-TotiCakery-{order_id}.pdf"` dan `media_type="application/pdf"`.
-- **Pengujian Terintegrasi & Verifikasi Unit Test (`tests/test_order_invoice_pdf.py`)**:
+- **Pengujian Terintegrasi & Verifikasi Unit Test (`tests/orders/test_order_invoice_pdf.py`)**:
   - Menguji alur lengkap unduh PDF oleh Buyer pemilik pesanan (HTTP 200, validitas magic bytes `%PDF-`, header filename).
   - Menguji akses oleh seluruh role internal (Staff, Admin, Owner) -> HTTP 200.
   - Menguji pencegahan akses oleh Buyer lain terhadap pesanan yang bukan miliknya -> HTTP 404.
@@ -575,9 +575,9 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
        - Saat refund otomatis tidak didukung / gagal (misal VA / QRIS HTTP 412), transaksi dicatat sebagai `refund_mode == "manual"` dan status awal pesanan diset ke `cancelled` (tanpa menembak webhook refund prematur ke Chatbot).
        - Saat Admin/Seller menyelesaikan transfer manual offline dan menandai pesanan menjadi `refunded` di Dashboard Site (melalui `PATCH /orders/{id}/status` atau `POST /orders/{id}/refund`), status pesanan berubah menjadi `refunded`, database di-commit, dan Sinyal 2.b ditembakkan ke Chatbot.
 - **Pengujian & Verifikasi Terintegrasi**:
-  - `tests/test_hardening.py`: Memvalidasi transisi `cancelled -> refunded` diizinkan dan `is_order_terminal(refunded)` benar.
-  - `tests/test_refund.py`: Memverifikasi mode auto dan manual refund dengan status akhir `refunded`.
-  - `tests/test_chatbot_refund_webhook.py`: Memverifikasi kedua sinyal pemicu webhook: Sinyal 2.a (Auto refund QRIS/Midtrans) dan Sinyal 2.b (Admin mark as refunded via PATCH status atau POST refund).
+  - `tests/security/test_hardening.py`: Memvalidasi transisi `cancelled -> refunded` diizinkan dan `is_order_terminal(refunded)` benar.
+  - `tests/payments/test_refund.py`: Memverifikasi mode auto dan manual refund dengan status akhir `refunded`.
+  - `tests/chatbot/test_chatbot_refund_webhook.py`: Memverifikasi kedua sinyal pemicu webhook: Sinyal 2.a (Auto refund QRIS/Midtrans) dan Sinyal 2.b (Admin mark as refunded via PATCH status atau POST refund).
 
 ### 001g. User Service Eager Loading & Fix MissingGreenlet (POST /users & User Queries)
 - **Eager Loading Relasi Role & Proteksi `role_name` (`app/models/user.py`)**:
@@ -588,7 +588,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Fungsi `update_avatar_url` kini me-reload user dengan `selectinload(User.role)` setelah `await db.commit()`.
   - Pada `app/services/user_service.py`, fungsi `create_user()` kini mengaitkan instance `new_user.role = role_obj` secara eksplisit dan melakukan re-fetch user lengkap dengan `options(selectinload(User.role))` setelah `await db.commit()`. Hal ini menjamin saat FastAPI mereturn response Pydantic `UserOut.model_validate(user)`, atribut `role_name` dan `role` sudah siap terbaca tanpa error 500.
   - Perbaikan re-query serupa juga diterapkan pada mutasi user lainnya (`bootstrap_owner`, `update_user_profile`, `admin_update_user`, `deactivate_user`). Pada `admin_update_user`, pengubahan `role` atau `role_id` langsung mengikat objek role baru (`user.role = role_obj`) sehingga serialisasi response konsisten seketika.
-- **Automated Test Suite Baru (`tests/test_user_management.py`)**:
+- **Automated Test Suite Baru (`tests/accounts/test_user_management.py`)**:
   - Verifikasi pembuatan user baru via `POST /users` (Owner) untuk Admin (`role_id=2`) dan Staff (`role="staff"`) menghasilkan HTTP 201 dengan `role_name` & `role` terisi lengkap tanpa melempar HTTP 500 `MissingGreenlet`.
   - Verifikasi `GET /users`, `GET /users/me`, `PUT /users/me`, `PUT /users/{id}`, dan `PATCH /users/{id}/deactivate`.
   - Verifikasi eksekusi direct service `create_user` dalam session terisolasi untuk mereplikasi siklus request asinkron murni.
@@ -614,8 +614,8 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
     - `"refund_mode": "auto"`: Panggilan API Direct Refund ke Midtrans berhasil (status 200/201).
     - `"refund_mode": "manual"`: Panggilan API Midtrans gagal (error HTTP 412 untuk VA/QRIS, gateway error, atau pencatatan refund manual admin).
 - **Pengujian & Verifikasi Terintegrasi**:
-  - Diperbarui pada `tests/test_refund.py`: Pengujian alur refund sukses (`refund_mode: "auto"`) serta skenario uji khusus Midtrans HTTP 412 (VA method) yang memverifikasi fallback ke `refund_mode: "manual"`.
-  - Diperbarui pada `tests/test_chatbot_refund_webhook.py`: Verifikasi response payload `RefundResponse` lengkap dan pemicu webhook notifikasi post-commit.
+  - Diperbarui pada `tests/payments/test_refund.py`: Pengujian alur refund sukses (`refund_mode: "auto"`) serta skenario uji khusus Midtrans HTTP 412 (VA method) yang memverifikasi fallback ke `refund_mode: "manual"`.
+  - Diperbarui pada `tests/chatbot/test_chatbot_refund_webhook.py`: Verifikasi response payload `RefundResponse` lengkap dan pemicu webhook notifikasi post-commit.
 
 ### 001e. Chatbot Webhook Triggers & Service-to-Service Refund
 - **Sentralisasi Notifikasi Webhook Chatbot (`app/services/chatbot_notify.py`, `app/services/payment_service.py`, `app/services/order_service.py`)**:
@@ -635,7 +635,7 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - Fleksibilitas refund manual oleh Admin/Staff via token JWT tetap dipertahankan.
 - **Normalisasi Nomor Telepon (`app/utils/phone.py`)**:
   - Ditambahkan alias `normalize_phone_number = normalize_phone` untuk konsistensi antar-service.
-- **Automated Test Suite Baru (`tests/test_chatbot_refund_webhook.py`)**:
+- **Automated Test Suite Baru (`tests/chatbot/test_chatbot_refund_webhook.py`)**:
   - Verifikasi penolakan Chatbot refund saat `nomor_wa` salah atau tidak ada (403 Forbidden).
   - Verifikasi penolakan Chatbot refund pada order berstatus `in_process` (400 Bad Request).
   - Verifikasi keberhasilan Chatbot refund pada order berstatus `pending` (stok pulih, invoice & payment refunded, order cancelled).
@@ -663,8 +663,8 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
   - `PATCH /users/{user_id}/deactivate`: Deaktivasi akun pengguna internal (`is_active = False`) oleh Owner.
   - `DELETE /users/{user_id}`: Hapus/deaktivasi akun pengguna internal oleh Owner dengan penanganan aman terhadap relasi foreign key transaksi.
 - **Automated Test Suite Baru**:
-  - `tests/test_order_settings_audit.py`: Menguji seluruh perbaikan integrasi secara komprehensif (Staff order RBAC, OrderItem product_name, payment polling 401 handling, profil user, password change, dan Owner RBAC guard).
-  - Penyesuaian assertion pada `tests/test_seller_orders.py` agar mengonfirmasi akses Staff (200 OK).
+  - `tests/orders/test_order_settings_audit.py`: Menguji seluruh perbaikan integrasi secara komprehensif (Staff order RBAC, OrderItem product_name, payment polling 401 handling, profil user, password change, dan Owner RBAC guard).
+  - Penyesuaian assertion pada `tests/orders/test_seller_orders.py` agar mengonfirmasi akses Staff (200 OK).
 
 ### 001c. Fix CI Integration Tests & Test Data Isolation
 - **Test Database Isolation (`test_owner_numbers.py` & `test_refund.py`)**:
@@ -1125,7 +1125,7 @@ curl -X POST "http://127.0.0.1:8000/products/1/image" \
 
 1. **Jalankan Automated Test Suite Terisolasi**:
 ```bash
-pytest tests/test_chatbot_refund_webhook.py -v
+pytest tests/chatbot/test_chatbot_refund_webhook.py -v
 ```
 Semua 5 test case akan memverifikasi:
 - Penolakan HTTP 403 Forbidden saat chatbot memanggil refund dengan nomor WA yang tidak cocok / tidak diberikan.
@@ -1198,7 +1198,7 @@ curl -X POST "http://localhost:8000/orders/1/refund" \
 #### B. Pengujian Terotomasi
 Jalankan test suite terisolasi baru:
 ```bash
-venv/bin/pytest tests/test_product_stock_catalog.py -v
+venv/bin/pytest tests/catalog/test_product_stock_catalog.py -v
 ```
 Seluruh 4 test cases memvalidasi:
 - Kesesuaian schema Pydantic `ProductResponse` / `ProductRead` dan kalkulasi computed `is_in_stock`.
@@ -1224,7 +1224,7 @@ Seluruh 4 test cases memvalidasi:
    - Menjadikan `ProductOut.hpp_total` opsional dengan default `Decimal("0.00")` dan validator `round_hpp`.
 
 #### B. Pengujian Terotomasi
-- Menambahkan test case `test_financial_report_endpoint_authorization_and_query` pada `tests/test_financial_report.py`.
+- Menambahkan test case `test_financial_report_endpoint_authorization_and_query` pada `tests/finance/test_financial_report.py`.
 - Seluruh 54 test cases lulus 100%:
 ```bash
 venv/bin/pytest tests/ -v
@@ -1256,7 +1256,7 @@ venv/bin/pytest tests/ -v
    - **Frontend Tetap Tanpa Perubahan**: Frontend (Buyer Web & Seller Dashboard) menerima data dalam format schema yang 100% konsisten.
 
 #### B. Pengujian Terotomasi
-- Menambahkan verifikasi `created_via=None`, `custom_decoration_charge=None`, dan `hpp_snapshot=None` pada suite test `tests/test_buyer_orders_payments.py`.
+- Menambahkan verifikasi `created_via=None`, `custom_decoration_charge=None`, dan `hpp_snapshot=None` pada suite test `tests/orders/test_buyer_orders_payments.py`.
 - Seluruh 54 test cases lulus 100%:
 ```bash
 venv/bin/pytest tests/ -v
@@ -1283,7 +1283,7 @@ venv/bin/pytest tests/ -v
 #### B. Pengujian Terotomasi
 - Menjalankan unit test khusus:
 ```bash
-venv/bin/pytest tests/test_seller_orders.py tests/test_financial_report.py -v
+venv/bin/pytest tests/orders/test_seller_orders.py tests/finance/test_financial_report.py -v
 # 6 passed in 1.12s
 ```
 - Menjalankan seluruh test suite backend:

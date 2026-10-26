@@ -197,12 +197,12 @@ pytest
 Atau secara spesifik per file:
 
 ```bash
-pytest tests/test_hardening.py
-pytest tests/test_seller_orders.py
-pytest tests/test_avatar_upload.py
-pytest tests/test_master_data.py
-pytest tests/test_buyer_orders_payments.py
-pytest tests/test_imports.py
+pytest tests/security/test_hardening.py
+pytest tests/orders/test_seller_orders.py
+pytest tests/accounts/test_avatar_upload.py
+pytest tests/catalog/test_master_data.py
+pytest tests/orders/test_buyer_orders_payments.py
+pytest tests/quality/test_imports.py
 ```
 
 ### Struktur Pengujian (`tests/`)

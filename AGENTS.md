@@ -9,7 +9,7 @@ This repository contains the Toti Cakery FastAPI backend. Application code lives
 - `python3 -m venv venv && source venv/bin/activate`: create and activate a local environment.
 - `pip install -r requirements.txt`: install pinned dependencies.
 - `uvicorn app.main:app --reload`: run the API locally at `http://127.0.0.1:8000`.
-- `pytest`: run the full suite; `pytest tests/test_auth_security.py` runs one module.
+- `pytest`: run the full suite; `pytest tests/security/test_auth_security.py` runs one module.
 - `alembic upgrade head`: apply database migrations; `python -m app.seed_data` seeds initial master data when needed.
 
 Configure local settings in `.env` using `.env.example` as a reference. Do not commit credentials or production secrets.

@@ -9,7 +9,7 @@ from alembic.operations import Operations
 from sqlalchemy import create_engine, text
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = ROOT / "alembic/versions/20261016_02_link_buyer_customer.py"
 SPEC = importlib.util.spec_from_file_location("buyer_customer_migration", MIGRATION_PATH)
 MIGRATION = importlib.util.module_from_spec(SPEC)
