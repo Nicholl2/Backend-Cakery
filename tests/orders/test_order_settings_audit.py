@@ -136,6 +136,7 @@ async def run_audit_tests():
     token_owner = create_access_token(user_id=1, role_level=1, username="owner_boss")
     token_admin = create_access_token(user_id=2, role_level=2, username="admin_siti")
     token_staff = create_access_token(user_id=3, role_level=3, username="staff_budi")
+    token_limited_internal = create_access_token(user_id=3, role_level=4, username="staff_budi")
     token_buyer = create_access_token(user_id=1, role_level=4, username="ani@buyer.com", role="buyer")
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -257,6 +258,14 @@ async def run_audit_tests():
         assert payment_status_data["order_id"] == catalog_order_id
         assert payment_status_data["invoice_status"] == "unpaid"
         print(f"  ✓ Polling valid order returns 200 OK: invoice_status={payment_status_data['invoice_status']}")
+
+        # An internal JWT with a role above the documented seller/staff range
+        # must be rejected before the endpoint reads or reveals the order.
+        res = await client.get(
+            f"/payments/{catalog_order_id}/status",
+            headers={"Authorization": f"Bearer {token_limited_internal}"},
+        )
+        assert res.status_code == 403, f"Expected 403 for unauthorized internal role, got {res.status_code}"
 
         # (c) Simulate internal SQLAlchemyError in payment_service -> 500 NOT 401
         with patch("app.services.payment_service.get_payments_by_order", side_effect=SQLAlchemyError("Simulated DB Connection Down")):

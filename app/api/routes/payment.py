@@ -132,6 +132,21 @@ async def get_order_payment_status(
     Mengambil summary status pembayaran terakhir dari suatu order (Chatbot atau Buyer JWT).
     """
     try:
+        # Validate the caller class and internal role before looking up an order,
+        # so unauthorized callers cannot probe order IDs through 404 responses.
+        if auth.is_service:
+            if not auth.has_scope("payments:read"):
+                raise HTTPException(status_code=403, detail="Service key lacks required capability")
+        elif auth.is_internal_user:
+            try:
+                role_level = int(auth.role)
+            except (TypeError, ValueError):
+                role_level = 99
+            if role_level > 3:
+                raise HTTPException(status_code=403, detail="Akses ditolak untuk membaca status pembayaran")
+        elif not auth.is_buyer:
+            raise HTTPException(status_code=403, detail="Akses ditolak untuk membaca status pembayaran")
+
         # Validasi order lebih awal
         order = await order_repo.get_order_by_id(db, order_id)
         if not order:
@@ -148,8 +163,6 @@ async def get_order_payment_status(
                     detail="Order tidak ditemukan"
                 )
         elif auth.is_service:
-            if not auth.has_scope("payments:read"):
-                raise HTTPException(status_code=403, detail="Service key lacks required capability")
             customer = await customer_repo.get_by_nomor_wa(db, nomor_wa or "")
             if not customer or order.customer_id != customer.id:
                 raise HTTPException(status_code=404, detail="Order tidak ditemukan")

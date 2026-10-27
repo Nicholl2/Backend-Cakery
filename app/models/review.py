@@ -19,8 +19,9 @@ class Review(Base):
     komentar = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # Relationships
-    order = relationship("Order")
+    # Review reads do not need the full Order row (which contains operational
+    # and payment fields); callers that genuinely need it must opt in explicitly.
+    order = relationship("Order", lazy="raise")
     product = relationship("Product", lazy="selectin")
     customer = relationship("Customer", lazy="selectin")
     images = relationship(

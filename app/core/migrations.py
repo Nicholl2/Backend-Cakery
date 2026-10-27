@@ -275,7 +275,7 @@ async def ensure_customer_columns(conn: AsyncConnection):
     """
     Ensure buyer_id and relevant columns/indices exist on customers table on PostgreSQL.
     """
-    if conn.dialect.name != "postgresql":
+    if getattr(conn, "dialect", None) is None or getattr(conn.dialect, "name", "") != "postgresql":
         return
 
     await conn.execute(text("ALTER TABLE customers ADD COLUMN IF NOT EXISTS buyer_id INTEGER REFERENCES buyers(id) ON DELETE SET NULL;"))

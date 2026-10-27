@@ -655,19 +655,12 @@ async def _attach_payment_amounts(db: AsyncSession, order: Order) -> Order:
         return order
     amount_paid = Decimal("0.00")
     if order.invoice:
-        try:
-            from app.services.payment_service import invoice_payment_totals
-            totals = await invoice_payment_totals(db, order.invoice.id)
-            amount_paid = totals.get("net_paid", Decimal("0.00"))
-        except Exception as e:
-            logger.warning(f"Failed to calculate invoice_payment_totals for order {getattr(order, 'id', None)}: {e}")
-            amount_paid = Decimal("0.00")
+        from app.services.payment_service import invoice_payment_totals
+        totals = await invoice_payment_totals(db, order.invoice.id)
+        amount_paid = totals.get("net_paid", Decimal("0.00"))
             
     if order.invoice and order.invoice.total_tagihan is not None:
-        try:
-            amount_due = max(Decimal("0.00"), Decimal(str(order.invoice.total_tagihan)) - amount_paid)
-        except Exception:
-            amount_due = Decimal("0.00")
+        amount_due = max(Decimal("0.00"), Decimal(str(order.invoice.total_tagihan)) - amount_paid)
     else:
         amount_due = Decimal("0.00")
         

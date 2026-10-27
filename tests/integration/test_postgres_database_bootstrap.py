@@ -418,3 +418,68 @@ async def test_postgres_adopts_verified_refund_revision_then_upgrades_to_head():
     assert {"email_outbox", "email_outbox_audit", "order_accessories"} <= tables
     await engine.dispose()
 
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_postgres_repairs_missing_objects_when_database_was_already_stamped_at_head():
+    """A forward repair migration restores missing objects without restamping history."""
+    url = _test_url("TEST_POSTGRES_UPGRADE_URL")
+    engine = create_async_engine(url)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.drop_all)
+        await connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        await connection.run_sync(Base.metadata.create_all)
+        await connection.execute(text("DROP TABLE expense_audits"))
+        await connection.execute(text("DROP TABLE email_sender_settings"))
+        await connection.execute(text("DROP INDEX IF EXISTS ix_orders_payment_expires_at"))
+        await connection.execute(text("ALTER TABLE orders DROP COLUMN payment_expires_at"))
+        await connection.execute(text("ALTER TABLE orders DROP COLUMN fulfillment_overdue_notified_at"))
+        await connection.execute(text("DROP INDEX IF EXISTS ix_expenses_is_voided_tanggal"))
+        await connection.execute(text("ALTER TABLE expenses DROP CONSTRAINT IF EXISTS ck_expenses_payment_method"))
+        await connection.execute(text("ALTER TABLE expenses DROP CONSTRAINT IF EXISTS ck_expenses_void_metadata"))
+        for column in (
+            "deskripsi", "penerima", "metode_pembayaran", "bukti_url", "is_voided",
+            "void_reason", "voided_by", "voided_at", "updated_by",
+        ):
+            await connection.execute(text(f'ALTER TABLE expenses DROP COLUMN IF EXISTS "{column}"'))
+        await connection.execute(text(
+            "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+        ))
+        await connection.execute(text(
+            "INSERT INTO alembic_version (version_num) VALUES ('20261026_02')"
+        ))
+
+    child_env = os.environ.copy()
+    child_env.update({
+        "DATABASE_URL": url,
+        "SECRET_KEY": "local-test-only",
+        "SERVICE_API_KEY": "local-test-only",
+        "ENVIRONMENT": "test",
+    })
+    result = subprocess.run(
+        [sys.executable, "-c", "from alembic.config import main; main()", "upgrade", "head"],
+        cwd=os.getcwd(), env=child_env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    async with engine.connect() as connection:
+        revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
+        tables = set(await connection.run_sync(lambda sync: inspect(sync).get_table_names()))
+        order_columns = {column["name"] for column in await connection.run_sync(
+            lambda sync: inspect(sync).get_columns("orders")
+        )}
+        expense_columns = {column["name"] for column in await connection.run_sync(
+            lambda sync: inspect(sync).get_columns("expenses")
+        )}
+        expense_indexes = {index["name"] for index in await connection.run_sync(
+            lambda sync: inspect(sync).get_indexes("expenses")
+        )}
+    assert revision == _expected_head_revision()
+    assert {"expense_audits", "email_sender_settings"} <= tables
+    assert {"payment_expires_at", "fulfillment_overdue_notified_at"} <= order_columns
+    assert {
+        "deskripsi", "penerima", "metode_pembayaran", "bukti_url", "is_voided",
+        "void_reason", "voided_by", "voided_at", "updated_by",
+    } <= expense_columns
+    assert "ix_expenses_is_voided_tanggal" in expense_indexes
+    await engine.dispose()
+

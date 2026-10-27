@@ -321,6 +321,12 @@ async def test_global_reviews_latest_contract(setup_test_app):
         assert data[0]["rating"] == 4
         assert data[0]["product_name"] == "Bolu Keju Lembut"
         assert data[0]["customer_name"] == "Bunga Lestari"
+        assert "order_id" not in data[0]
+        assert "customer_id" not in data[0]
+        assert set(data[0]["customer"]) == {"nama"}
+        assert set(data[0]["product"]).issubset({"nama_produk", "image_url"})
+        assert not ({"nomor_wa", "alamat", "is_verified", "human_takeover_active"} & set(data[0]["customer"]))
+        assert not ({"hpp_total", "harga_jual", "stock_quantity", "recipes"} & set(data[0]["product"]))
 
         assert data[1]["id"] == 1
         assert data[1]["rating"] == 5
