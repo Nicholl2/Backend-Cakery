@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
-from typing import Optional
+from typing import Optional, Union
+from decimal import Decimal
 from datetime import datetime
 from app.schemas.product import ProductOut
 from app.schemas.customer import CustomerOut
@@ -52,11 +53,31 @@ class ReviewUpdate(BaseModel):
         return self
 
 
+
 class ReviewImageOut(BaseModel):
     id: int
     review_id: Optional[int] = None
     image_url: str
     created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReviewProductOut(BaseModel):
+    id: int
+    nama_produk: str
+    deskripsi: Optional[str] = None
+    harga_jual: Optional[Decimal] = None
+    image_url: Optional[str] = None
+    rating: Optional[float] = 0.0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReviewCustomerOut(BaseModel):
+    id: int
+    nama: str = "Customer"
+    nomor_wa: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -77,8 +98,8 @@ class ReviewOut(BaseModel):
     customer_name: Optional[str] = None
 
     # Nested response objects
-    product: Optional[ProductOut] = None
-    customer: Optional[CustomerOut] = None
+    product: Optional[Union[ReviewProductOut, ProductOut]] = None
+    customer: Optional[Union[ReviewCustomerOut, CustomerOut]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -92,6 +113,11 @@ class ReviewOut(BaseModel):
             self.product_name = getattr(self.product, "nama_produk", None) or getattr(self.product, "name", None)
         if self.customer_name is None and self.customer is not None:
             self.customer_name = getattr(self.customer, "nama", None)
+        if not self.customer_name:
+            self.customer_name = "Pelanggan"
+        if not self.product_name:
+            self.product_name = "Produk Toti"
         return self
+
 
 

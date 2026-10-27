@@ -6,7 +6,7 @@ from sqlalchemy import (
     Column, Integer, String, Text, Numeric, ForeignKey,
     DateTime, Enum as SAEnum,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, attributes
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -110,7 +110,8 @@ class OrderItem(Base):
             return self.product_name_snapshot
         if self.custom_product_name:
             return self.custom_product_name
-        if self.product:
+        state = attributes.instance_state(self)
+        if "product" not in state.unloaded and self.product:
             return getattr(self.product, "nama_produk", None) or getattr(self.product, "name", None)
         return None
 

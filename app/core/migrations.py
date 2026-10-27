@@ -258,6 +258,8 @@ async def ensure_order_columns(conn: AsyncConnection):
     await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS notes VARCHAR(1000);"))
     await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS due_date TIMESTAMPTZ;"))
     await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method_preference VARCHAR(50);"))
+    await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_expires_at TIMESTAMPTZ;"))
+    await conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfillment_overdue_notified_at TIMESTAMPTZ;"))
 
     # OrderItem columns & nullable product_id
     await conn.execute(text("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS custom_product_name VARCHAR(255);"))
@@ -267,6 +269,17 @@ async def ensure_order_columns(conn: AsyncConnection):
 
     # Invoice column length
     await conn.execute(text("ALTER TABLE invoices ALTER COLUMN nomor_invoice TYPE VARCHAR(50);"))
+
+
+async def ensure_customer_columns(conn: AsyncConnection):
+    """
+    Ensure buyer_id and relevant columns/indices exist on customers table on PostgreSQL.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    await conn.execute(text("ALTER TABLE customers ADD COLUMN IF NOT EXISTS buyer_id INTEGER REFERENCES buyers(id) ON DELETE SET NULL;"))
+    await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_customers_buyer_id ON customers (buyer_id) WHERE buyer_id IS NOT NULL;"))
 
 async def ensure_fulfillment_columns(conn: AsyncConnection):
     """
@@ -632,6 +645,7 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_otp_columns(conn)
     await ensure_user_columns(conn)
     await ensure_order_columns(conn)
+    await ensure_customer_columns(conn)
     await ensure_fulfillment_columns(conn)
     await ensure_order_accessories_table(conn)
     await ensure_payment_columns(conn)

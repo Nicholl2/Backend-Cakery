@@ -8,14 +8,13 @@ from typing import Optional
 
 
 async def get_by_id(db: AsyncSession, review_id: int) -> Optional[Review]:
-    """Get review by ID with product, customer, order, and images relationships preloaded."""
+    """Get review by ID with product, customer, and images relationships preloaded."""
     stmt = (
         select(Review)
         .where(Review.id == review_id)
         .options(
             selectinload(Review.product),
             selectinload(Review.customer),
-            selectinload(Review.order),
             selectinload(Review.images),
         )
         .execution_options(populate_existing=True)
@@ -33,7 +32,6 @@ async def get_by_product(db: AsyncSession, product_id: int) -> list[Review]:
         .options(
             selectinload(Review.product),
             selectinload(Review.customer),
-            selectinload(Review.order),
             selectinload(Review.images),
         )
         .execution_options(populate_existing=True)
@@ -50,7 +48,6 @@ async def get_all(db: AsyncSession, limit: int = 100, offset: int = 0) -> list[R
         .options(
             selectinload(Review.product),
             selectinload(Review.customer),
-            selectinload(Review.order),
             selectinload(Review.images),
         )
         .limit(limit)
@@ -71,7 +68,6 @@ async def get_latest(db: AsyncSession, limit: int = 6) -> list[Review]:
         .options(
             selectinload(Review.product),
             selectinload(Review.customer),
-            selectinload(Review.order),
             selectinload(Review.images),
         )
         .execution_options(populate_existing=True)
@@ -91,7 +87,6 @@ async def get_by_order_and_product(db: AsyncSession, order_id: int, product_id: 
         .options(
             selectinload(Review.product),
             selectinload(Review.customer),
-            selectinload(Review.order),
             selectinload(Review.images),
         )
         .execution_options(populate_existing=True)

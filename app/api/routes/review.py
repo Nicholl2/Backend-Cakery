@@ -1,9 +1,12 @@
+import logging
 from fastapi import APIRouter, Depends, status, HTTPException, Query, Request, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.dependencies import get_current_buyer_id, security
 from app.schemas.review import ReviewCreate, ReviewUpdate, ReviewOut
 from app.services import review_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Reviews"])
 
@@ -74,7 +77,11 @@ async def list_latest_reviews(
     limit: int = Query(default=6, ge=1, le=50, description="Jumlah ulasan terbaru"),
     db: AsyncSession = Depends(get_db)
 ):
-    return await review_service.get_latest_reviews(db, limit)
+    try:
+        return await review_service.get_latest_reviews(db, limit)
+    except Exception as e:
+        logger.error(f"Error fetching latest reviews: {e}", exc_info=True)
+        return []
 
 
 @router.get("/product/{product_id}", response_model=list[ReviewOut],

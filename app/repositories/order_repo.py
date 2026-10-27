@@ -81,7 +81,7 @@ async def get_latest_order_by_wa(db: AsyncSession, nomor_wa: str) -> Optional[Or
         .order_by(Order.created_at.desc())
         .options(
             selectinload(Order.customer),
-            selectinload(Order.invoice).selectinload(Invoice.payments),
+            selectinload(Order.invoice),
             selectinload(Order.order_items).selectinload(OrderItem.product),
             selectinload(Order.accessories),
         )
@@ -98,8 +98,9 @@ async def get_order_by_id(db: AsyncSession, order_id: int) -> Optional[Order]:
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
             selectinload(Order.accessories),
-            selectinload(Order.invoice).selectinload(Invoice.payments),
+            selectinload(Order.invoice),
         )
+        .execution_options(populate_existing=True)
     )
     return result.scalars().first()
 
@@ -112,8 +113,9 @@ async def update_order_status(db: AsyncSession, order_id: int, status: str) -> O
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
             selectinload(Order.accessories),
-            selectinload(Order.invoice).selectinload(Invoice.payments),
+            selectinload(Order.invoice),
         )
+        .execution_options(populate_existing=True)
     )
     order = result.scalars().first()
     if order:
@@ -138,8 +140,9 @@ async def get_orders_by_customer_id(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
             selectinload(Order.accessories),
-            selectinload(Order.invoice).selectinload(Invoice.payments),
+            selectinload(Order.invoice),
         )
+        .execution_options(populate_existing=True)
     )
     if status:
         status_val = status.value if hasattr(status, "value") else str(status)
@@ -166,8 +169,9 @@ async def get_order_by_id_and_customer(db: AsyncSession, order_id: int, customer
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
             selectinload(Order.accessories),
-            selectinload(Order.invoice).selectinload(Invoice.payments),
+            selectinload(Order.invoice),
         )
+        .execution_options(populate_existing=True)
     )
     return result.scalars().first()
 
@@ -186,8 +190,9 @@ async def get_all_orders(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
             selectinload(Order.accessories),
-            selectinload(Order.invoice).selectinload(Invoice.payments),
+            selectinload(Order.invoice),
         )
+        .execution_options(populate_existing=True)
     )
     if status:
         status_val = status.value if hasattr(status, "value") else str(status)

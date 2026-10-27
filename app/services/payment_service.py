@@ -758,8 +758,14 @@ async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
                 await db.refresh(payment)
     except Exception as e:
         logger.error(f"Failed to refresh pending payment {payment.id} status: {e}")
+        payment_id = payment.id
         await db.rollback()
-        # Ignored and fallback to original payment object
+        try:
+            re_payment = await db.get(Payment, payment_id)
+            if re_payment:
+                payment = re_payment
+        except Exception:
+            pass
     return payment
 
 
