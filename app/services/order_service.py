@@ -761,18 +761,38 @@ async def get_or_create_customer_for_buyer(db: AsyncSession, buyer: Buyer) -> Cu
 
 async def get_customer_for_buyer(db: AsyncSession, buyer: Buyer) -> Optional[Customer]:
     """Resolve a buyer's stable customer record, linking legacy phone matches once."""
-    result = await db.execute(select(Customer).where(Customer.buyer_id == buyer.id))
+    buyer_id = buyer.id
+    result = await db.execute(select(Customer).where(Customer.buyer_id == buyer_id))
     customer = result.scalars().first()
     if customer:
         return customer
     customer = await customer_repo.get_by_nomor_wa(db, buyer.phone)
-    if customer and customer.buyer_id in (None, buyer.id):
+    if customer and customer.buyer_id in (None, buyer_id):
+        customer_id = customer.id
         try:
-            customer.buyer_id = buyer.id
-            await db.flush()
-        except Exception as e:
-            logger.warning(f"Could not link customer {customer.id} to buyer {buyer.id}: {e}")
-            await db.rollback()
+            async with db.begin_nested():
+                customer.buyer_id = buyer_id
+                await db.flush()
+        except Exception as exc:
+            logger.warning(
+                "Could not link customer %s to buyer %s: %s",
+                customer_id,
+                buyer_id,
+                exc,
+            )
+
+            # Rollback expires ORM state. Only return a customer if this
+            # buyer's ownership link is confirmed from a fresh query.
+            result = await db.execute(
+                select(Customer).where(Customer.buyer_id == buyer_id)
+            )
+            linked_customer = result.scalars().first()
+            if linked_customer:
+                return linked_customer
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Data customer belum dapat diverifikasi. Silakan coba lagi.",
+            ) from exc
         return customer
     return None
 
