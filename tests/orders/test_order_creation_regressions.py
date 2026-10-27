@@ -157,6 +157,37 @@ async def test_buyer_phone_change_preserves_order_and_payment_customer_link(orde
 
 
 @pytest.mark.asyncio
+async def test_failed_customer_link_does_not_return_unverified_phone_match(order_db, monkeypatch):
+    db, _ = order_db
+    buyer = Buyer(
+        name="Legacy Buyer",
+        email="legacy-link@example.test",
+        phone="081299900001",
+        password_hash=hash_password("current-password"),
+        is_verified=True,
+    )
+    db.add(buyer)
+    await db.commit()
+    customer = await db.get(Customer, 1)
+    original_flush = db.flush
+
+    async def fail_flush():
+        if customer.buyer_id == buyer.id:
+            raise RuntimeError("injected customer-link failure")
+        await original_flush()
+
+    monkeypatch.setattr(db, "flush", fail_flush)
+
+    with pytest.raises(HTTPException) as error:
+        await order_service.get_customer_for_buyer(db, buyer)
+
+    assert error.value.status_code == 503
+    assert await db.scalar(
+        select(Customer.buyer_id).where(Customer.id == 1)
+    ) is None
+
+
+@pytest.mark.asyncio
 async def test_customer_cancellation_hides_internal_error_and_rolls_back(order_db, monkeypatch):
     db, _ = order_db
     order = await make_order(db)
