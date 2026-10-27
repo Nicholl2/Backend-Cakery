@@ -188,6 +188,18 @@ app.include_router(notification_router)
 app.include_router(admin_whatsapp.router)
 app.include_router(public.router)
 
+from app.schemas.order import OrderOut
+from app.api.routes.order import list_buyer_orders
+
+app.add_api_route(
+    "/buyer",
+    list_buyer_orders,
+    methods=["GET"],
+    response_model=list[OrderOut],
+    tags=["Orders"],
+    include_in_schema=False,
+)
+
 
 # ── HEALTH CHECK ─────────────────────────────────────────────────────────────
 from sqlalchemy import text

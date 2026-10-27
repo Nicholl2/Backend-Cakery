@@ -18,7 +18,7 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, cast, String
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, attributes
 
 from app.models.order import Order, OrderItem, OrderAccessory, Invoice, MetodePengirimanEnum, OrderStatusEnum, InvoiceStatusEnum
 from app.models.product import Product
@@ -656,13 +656,11 @@ async def _attach_payment_amounts(db: AsyncSession, order: Order) -> Order:
     amount_paid = Decimal("0.00")
     if order.invoice:
         from app.services.payment_service import invoice_payment_totals
-        amount_paid = (await invoice_payment_totals(db, order.invoice.id))["net_paid"]
+        totals = await invoice_payment_totals(db, order.invoice.id)
+        amount_paid = totals.get("net_paid", Decimal("0.00"))
             
     if order.invoice and order.invoice.total_tagihan is not None:
-        try:
-            amount_due = max(Decimal("0.00"), Decimal(str(order.invoice.total_tagihan)) - amount_paid)
-        except Exception:
-            amount_due = Decimal("0.00")
+        amount_due = max(Decimal("0.00"), Decimal(str(order.invoice.total_tagihan)) - amount_paid)
     else:
         amount_due = Decimal("0.00")
         
@@ -673,7 +671,8 @@ async def _attach_payment_amounts(db: AsyncSession, order: Order) -> Order:
     if order.order_items:
         for item in order.order_items:
             if not getattr(item, "product_name", None):
-                if item.product:
+                state = attributes.instance_state(item)
+                if "product" not in state.unloaded and item.product:
                     item.product_name = getattr(item.product, "nama_produk", None) or getattr(item.product, "name", None)
                 elif item.custom_product_name:
                     item.product_name = item.custom_product_name
@@ -768,8 +767,12 @@ async def get_customer_for_buyer(db: AsyncSession, buyer: Buyer) -> Optional[Cus
         return customer
     customer = await customer_repo.get_by_nomor_wa(db, buyer.phone)
     if customer and customer.buyer_id in (None, buyer.id):
-        customer.buyer_id = buyer.id
-        await db.flush()
+        try:
+            customer.buyer_id = buyer.id
+            await db.flush()
+        except Exception as e:
+            logger.warning(f"Could not link customer {customer.id} to buyer {buyer.id}: {e}")
+            await db.rollback()
         return customer
     return None
 

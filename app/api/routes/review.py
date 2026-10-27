@@ -1,9 +1,12 @@
+import logging
 from fastapi import APIRouter, Depends, status, HTTPException, Query, Request, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.dependencies import get_current_buyer_id, security
 from app.schemas.review import ReviewCreate, ReviewUpdate, ReviewPublicOut
 from app.services import review_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Reviews"])
 

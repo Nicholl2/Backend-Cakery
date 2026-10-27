@@ -30,14 +30,21 @@ class CustomerUpsert(BaseModel):
 
 class CustomerOut(BaseModel):
     id: int
-    nama: str
+    nama: str = "Customer"
     nomor_wa: str
     alamat: Optional[str] = None
-    is_verified: bool
-    human_takeover_active: bool
+    is_verified: bool = False
+    human_takeover_active: bool = False
     takeover_expires_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    @field_validator("is_verified", "human_takeover_active", mode="before")
+    @classmethod
+    def fallback_boolean(cls, v):
+        if v is None:
+            return False
+        return bool(v)
 
     model_config = ConfigDict(from_attributes=True)
 

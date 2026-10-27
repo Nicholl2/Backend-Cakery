@@ -59,7 +59,7 @@ class ReviewImageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class ReviewPublicProductOut(BaseModel):
+class ReviewProductOut(BaseModel):
     """Product fields safe to expose alongside a public review."""
     nama_produk: str
     image_url: Optional[str] = None
@@ -67,11 +67,17 @@ class ReviewPublicProductOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class ReviewPublicCustomerOut(BaseModel):
+ReviewPublicProductOut = ReviewProductOut
+
+
+class ReviewCustomerOut(BaseModel):
     """A public display name only; customer identifiers and contact data stay private."""
-    nama: str
+    nama: str = "Customer"
 
     model_config = ConfigDict(from_attributes=True)
+
+
+ReviewPublicCustomerOut = ReviewCustomerOut
 
 
 class ReviewPublicOut(BaseModel):
@@ -85,8 +91,8 @@ class ReviewPublicOut(BaseModel):
     images: list[ReviewImageOut] = Field(default_factory=list)
     product_name: Optional[str] = None
     customer_name: Optional[str] = None
-    product: Optional[ReviewPublicProductOut] = None
-    customer: Optional[ReviewPublicCustomerOut] = None
+    product: Optional[ReviewProductOut] = None
+    customer: Optional[ReviewCustomerOut] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -100,11 +106,13 @@ class ReviewPublicOut(BaseModel):
             self.product_name = self.product.nama_produk
         if self.customer_name is None and self.customer is not None:
             self.customer_name = self.customer.nama
+        if not self.customer_name:
+            self.customer_name = "Pelanggan"
+        if not self.product_name:
+            self.product_name = "Produk Toti"
         return self
 
 
 # Backwards-compatible schema name. Keep it safe so new routes cannot
 # accidentally reintroduce customer contact or internal product fields.
 ReviewOut = ReviewPublicOut
-
-

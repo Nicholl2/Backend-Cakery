@@ -8,7 +8,7 @@ from typing import Optional
 
 
 async def get_by_id(db: AsyncSession, review_id: int) -> Optional[Review]:
-    """Get review by ID with product, customer, order, and images relationships preloaded."""
+    """Get review by ID with product, customer, and images relationships preloaded."""
     stmt = (
         select(Review)
         .where(Review.id == review_id)

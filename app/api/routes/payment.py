@@ -170,17 +170,14 @@ async def get_order_payment_status(
         payments = await payment_service.get_payments_by_order(db, order_id)
         
         # Refresh status if any payment is pending
-        refreshed_payments = []
         for p in payments:
             try:
-                refreshed = await payment_service.refresh_if_pending(db, p)
-                refreshed_payments.append(refreshed)
+                await payment_service.refresh_if_pending(db, p)
             except Exception as e:
                 logger.warning(f"[PAYMENT_STATUS_REFRESH] Failed refreshing payment {p.id}: {e}")
-                refreshed_payments.append(p)
-        payments = refreshed_payments
 
-        # Re-fetch order dengan relasi terupdate jika invoice/order berubah saat refresh
+        # Re-fetch payments and order fresh from db with populate_existing
+        payments = await payment_service.get_payments_by_order(db, order_id)
         order = await order_repo.get_order_by_id(db, order_id) or order
             
         amount_paid = Decimal("0.00")
