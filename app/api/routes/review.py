@@ -2,13 +2,13 @@ from fastapi import APIRouter, Depends, status, HTTPException, Query, Request, U
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.dependencies import get_current_buyer_id, security
-from app.schemas.review import ReviewCreate, ReviewUpdate, ReviewOut
+from app.schemas.review import ReviewCreate, ReviewUpdate, ReviewPublicOut
 from app.services import review_service
 
 router = APIRouter(tags=["Reviews"])
 
 
-@router.post("/", response_model=ReviewOut, status_code=status.HTTP_201_CREATED,
+@router.post("/", response_model=ReviewPublicOut, status_code=status.HTTP_201_CREATED,
              summary="Buat ulasan produk baru (khusus Buyer, mendukung upload multiple foto)")
 async def create_review(
     request: Request,
@@ -68,7 +68,7 @@ async def create_review(
         return await review_service.create_review(db, buyer_id, data, files=None)
 
 
-@router.get("/latest", response_model=list[ReviewOut],
+@router.get("/latest", response_model=list[ReviewPublicOut],
             summary="List ulasan terbaru secara global (Landing page / Frontend)")
 async def list_latest_reviews(
     limit: int = Query(default=6, ge=1, le=50, description="Jumlah ulasan terbaru"),
@@ -77,7 +77,7 @@ async def list_latest_reviews(
     return await review_service.get_latest_reviews(db, limit)
 
 
-@router.get("/product/{product_id}", response_model=list[ReviewOut],
+@router.get("/product/{product_id}", response_model=list[ReviewPublicOut],
             summary="List semua ulasan untuk suatu produk")
 async def list_product_reviews(
     product_id: int,
@@ -86,7 +86,7 @@ async def list_product_reviews(
     return await review_service.get_reviews_by_product(db, product_id)
 
 
-@router.get("/{review_id}", response_model=ReviewOut,
+@router.get("/{review_id}", response_model=ReviewPublicOut,
             summary="Lihat detail ulasan berdasarkan ID")
 async def get_review(
     review_id: int,
@@ -95,7 +95,7 @@ async def get_review(
     return await review_service.get_review_or_404(db, review_id)
 
 
-@router.put("/{review_id}", response_model=ReviewOut,
+@router.put("/{review_id}", response_model=ReviewPublicOut,
             summary="Edit ulasan sendiri (khusus Buyer pemilik ulasan)")
 async def update_review(
     review_id: int,
@@ -112,7 +112,7 @@ async def update_review(
     )
 
 
-@router.post("/{review_id}/images", response_model=ReviewOut,
+@router.post("/{review_id}/images", response_model=ReviewPublicOut,
              summary="Upload multiple foto ke ulasan yang sudah ada (khusus Buyer pemilik ulasan)")
 async def upload_review_images(
     review_id: int,

@@ -6,6 +6,13 @@ Dokumen ini merangkum seluruh perubahan kode terbaru pada Backend Toti Cakery, p
 
 ## 📌 Daftar Perubahan Kode Terbaru
 
+### Public Review Data, Payment Status Authorization, and Stamped Schema Repair — 2026-10-27
+- Endpoint GET review publik kini memakai `ReviewPublicOut` dengan nama produk/pelanggan dan data display yang diperlukan saja. Tidak ada `order_id`, `customer_id`, kontak pelanggan, HPP, stok, atau resep pada respons publik. Relasi Order tidak lagi dimuat otomatis saat membaca review.
+- `GET /payments/{order_id}/status` memvalidasi caller sebelum mencari order: Buyer harus memiliki order, Chatbot harus memiliki scope `payments:read` dan mencocokkan nomor WA, internal role level 1–3 tetap diizinkan, dan role internal di atas level tersebut ditolak dengan 403.
+- Migration korektif `20261027_01_repair_stamped_schema_drift` memulihkan kolom workflow expenses/orders, `expense_audits`, dan `email_sender_settings` ketika database sudah tercatat pada revision sebelumnya tetapi objek fisiknya hilang. Migration menjaga data yang ada; jika isi parsial tidak bisa direkonstruksi aman, migration berhenti dengan error eksplisit. Ini migration forward-only; jangan downgrade.
+- Deploy Neon/VPS harus menjalankan `alembic upgrade head` sebagai langkah release yang menunjuk ke database target. Startup aplikasi tidak menjalankan migrasi otomatis. Verifikasi table/column fisik setelah upgrade; status `alembic current` saja tidak memvalidasi schema.
+- Regresi mencakup pembatasan field review publik, penolakan role internal yang tidak berhak, dan integrasi PostgreSQL untuk memulihkan schema dari revision `20261026_02` yang sudah tercatat.
+
 ### Order Payment Expiry, Overdue Alerts, and Buyer Status Events — 2026-10-26
 - Checkout dari Buyer/Web dan Chatbot kini mendapat `payment_expires_at` 60 menit setelah dibuat (dapat diatur `ORDER_UNPAID_TIMEOUT_MINUTES`, validasi 5–1440 menit). Seller-created orders dikecualikan. Midtrans Core API charge mengirim `custom_expiry` yang diselaraskan ke waktu checkout; charge yang dimulai setelah batas ditolak bila invoice unpaid.
 - Worker lifecycle opsional `ORDER_LIFECYCLE_WORKER_ENABLED` memeriksa unpaid checkout, merekonsiliasi transaksi Midtrans pending sebelum pembatalan, mengunci ulang order, memulihkan stok lewat ledger reversal, mempertahankan riwayat cancelled, dan mengirim notifikasi/email. Worker juga memberi alert satu kali pada order DP/lunas yang melewati `fulfillment_date`; tidak melakukan refund otomatis.

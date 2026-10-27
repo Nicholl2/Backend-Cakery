@@ -206,7 +206,8 @@ async def test_create_review_success_for_completed_order(test_env):
         )
         assert response.status_code == 201, response.text
         data = response.json()
-        assert data["order_id"] == test_env["order_completed_id"]
+        assert "order_id" not in data
+        assert "customer_id" not in data
         assert data["product_id"] == test_env["prod1_id"]
         assert data["rating"] == 5
         assert data["comment"] == "Kue coklatnya luar biasa lezat dan lembut!"

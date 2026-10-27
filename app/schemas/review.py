@@ -1,8 +1,6 @@
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from typing import Optional
 from datetime import datetime
-from app.schemas.product import ProductOut
-from app.schemas.customer import CustomerOut
 from app.utils.sanitize import sanitize_text
 
 
@@ -61,37 +59,52 @@ class ReviewImageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class ReviewOut(BaseModel):
+class ReviewPublicProductOut(BaseModel):
+    """Product fields safe to expose alongside a public review."""
+    nama_produk: str
+    image_url: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReviewPublicCustomerOut(BaseModel):
+    """A public display name only; customer identifiers and contact data stay private."""
+    nama: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReviewPublicOut(BaseModel):
+    """Public review contract with no order, buyer, or internal product data."""
     id: int
-    order_id: int
     product_id: int
-    customer_id: int
     rating: int
     komentar: Optional[str] = None
     comment: Optional[str] = None
     created_at: datetime
     images: list[ReviewImageOut] = Field(default_factory=list)
-
-    # Direct name fields for frontend convenience
     product_name: Optional[str] = None
     customer_name: Optional[str] = None
-
-    # Nested response objects
-    product: Optional[ProductOut] = None
-    customer: Optional[CustomerOut] = None
+    product: Optional[ReviewPublicProductOut] = None
+    customer: Optional[ReviewPublicCustomerOut] = None
 
     model_config = ConfigDict(from_attributes=True)
 
     @model_validator(mode="after")
-    def populate_extra_fields(self):
+    def populate_public_names(self):
         if self.comment is None and self.komentar is not None:
             self.comment = self.komentar
         elif self.komentar is None and self.comment is not None:
             self.komentar = self.comment
         if self.product_name is None and self.product is not None:
-            self.product_name = getattr(self.product, "nama_produk", None) or getattr(self.product, "name", None)
+            self.product_name = self.product.nama_produk
         if self.customer_name is None and self.customer is not None:
-            self.customer_name = getattr(self.customer, "nama", None)
+            self.customer_name = self.customer.nama
         return self
+
+
+# Backwards-compatible schema name. Keep it safe so new routes cannot
+# accidentally reintroduce customer contact or internal product fields.
+ReviewOut = ReviewPublicOut
 
 
