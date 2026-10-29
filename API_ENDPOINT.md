@@ -15,7 +15,7 @@ Dokumentasi lengkap seluruh endpoint REST API Backend Toti Cakery (FastAPI).
 | **Buyer Site (Pelanggan)** | JWT Bearer Token | `Authorization: Bearer <token>` (`get_current_buyer_id`) | Akses akun buyer, buat review, transaksi web |
 | **Chatbot & Internal Services** | Pre-shared Service Key | `X-Service-Key: <key>` / `?service_key=<key>` (atau `X-Internal-Key`) | Komunikasi headless dengan scoping granular: `orders:create`, `orders:read`, `orders:cancel`, `payments:create`, `payments:read`, `customers:manage`, `refunds:request`, `reports:summary`, `owners:read`, `settlements:check`, `identity:verify` |
 | **Public Webhook Midtrans** | SHA512 Signature Hash | Signature di payload webhook | Verifikasi integritas pembayaran Midtrans tanpa token |
-| **Public Endpoint** | Tanpa Autentikasi | - | Katalog produk, FAQ, cek status ulasan |
+| **Public Endpoint** | Tanpa Autentikasi | - | Katalog produk, FAQ, pencarian konten publik, cek status ulasan |
 
 ### B. Validasi Input & Pencegahan XSS
 
@@ -25,6 +25,7 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 - **Email**: Format email standar, maksimal 100 karakter.
 - **Teks Bebas (Nama, Alamat, Notes, Review)**: Maksimal karakter ketat diberlakukan (contoh: notes/alamat maks 500 karakter, komentar review maks 1000). 
 - **Pencegahan XSS / Script Injection**: Seluruh field berupa string/teks akan menolak string yang mengandung tag berbahaya (seperti `<script>`, `javascript:`, `<iframe>`, `<object>`, `<form>`). API akan langsung mengembalikan HTTP 422 Unprocessable Entity atau HTTP 400 Bad Request jika mendeteksi payload berbahaya.
+- **Pencarian publik**: Query pencarian dibatasi 2–80 karakter setelah normalisasi spasi, menolak tag `<`/`>` dan karakter kontrol, membatasi 30 request/menit/IP, dan memakai parameter query terikat serta wildcard literal pada pencarian database. Hasil JSON harus dirender frontend sebagai teks biasa, bukan HTML mentah.
 - **Upload Size Limit (Max 5MB)**: Middleware `MaxBodySizeMiddleware` menolak setiap request yang payload/body-nya melebihi 5MB (5,242,880 bytes) dengan response `HTTP 413 Payload Too Large`.
 - **Spending Cap / Transaction Limit**: Proteksi nilai pesanan anomali membatasi transaksi maksimal **Rp 50.000.000** per order pada `create_new_order` dan `create_custom_order`. Request yang melebihi batas ini ditolak dengan `HTTP 400 Bad Request`.
 
@@ -357,3 +358,4 @@ Endpoint pemantauan status liveness dan konektivitas database untuk load balance
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/public/kontak-toko` | Public (Tanpa login) | Mengambil nomor WhatsApp aktif toko/chatbot (`{"whatsapp": "..."}`) dengan in-memory caching ±60 detik (fallback ke config jika offline) |
+| `GET` | `/public/search?q=bolu` | Public (Tanpa login) | Pencarian lintas konten produk aktif (nama, deskripsi, kategori), FAQ aktif (pertanyaan, jawaban), dan metadata kontak toko. Respons berisi `query`, `products` (`id`, `nama_produk`, `slug`, `deskripsi`, `kategori`, `harga_jual`, `image_url`), `faqs` (`id`, `pertanyaan`, `jawaban`), `store_info` (`key`, `title`, `description`, `action`), dan `total`; maksimal 5 hasil per jenis. `q` wajib 2–80 karakter setelah normalisasi, menolak tag/karakter kontrol, serta dibatasi 30 request/menit/IP dengan limiter in-memory. Item kontak memakai `action: fetch_contact_endpoint`; FE dapat mengambil nomor terbaru dari `/public/kontak-toko`. Backend saat ini belum menyimpan alamat, jam operasional, atau profil toko terstruktur. Tidak memuat pesanan atau data personal. Hasil teks harus dirender FE sebagai teks biasa. |
