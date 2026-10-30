@@ -25,6 +25,10 @@ from app.services.payment_service import (
 from app.services.order_service import cancel_order_by_customer, update_order_status
 
 
+async def _async_noop(*args, **kwargs):
+    return None
+
+
 @pytest.fixture
 async def db_session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool)
@@ -477,7 +481,7 @@ async def test_charge_retry_recovers_instructions_from_midtrans_status(db_sessio
 
 
 @pytest.mark.asyncio
-async def test_cancel_and_manual_payment_are_blocked_while_online_charge_pending(db_session):
+async def test_manual_payment_is_blocked_while_online_charge_pending(db_session):
     db, order, invoice, _ = db_session
     order_id = order.id
     invoice.status = InvoiceStatusEnum.unpaid
@@ -486,14 +490,202 @@ async def test_cancel_and_manual_payment_are_blocked_while_online_charge_pending
                       payment_status=PaymentStatusEnum.pending, payment_type=PaymentTypeEnum.final)
     db.add(pending)
     await db.commit()
-    with pytest.raises(HTTPException) as cancel_exc:
-        await cancel_order_by_customer(db, order_id)
-    assert cancel_exc.value.status_code == 409
     with pytest.raises(HTTPException) as manual_exc:
         await process_manual_payment(db, order_id, Decimal("100000"), "CASH")
     assert manual_exc.value.status_code == 409
     await db.refresh(order)
     assert order.status == OrderStatusEnum.pending
+
+
+@pytest.mark.asyncio
+async def test_cancel_reconciles_and_cancels_pending_midtrans_transaction(db_session, monkeypatch):
+    db, order, invoice, dp = db_session
+    invoice.status = InvoiceStatusEnum.unpaid
+    dp.payment_status = PaymentStatusEnum.failed
+    pending = Payment(
+        invoice_id=invoice.id,
+        pg_order_id="pending-midtrans-order",
+        pg_transaction_id="pending-midtrans-transaction",
+        jumlah_bayar=Decimal("1000000"),
+        payment_method="qris",
+        payment_status=PaymentStatusEnum.pending,
+        payment_type=PaymentTypeEnum.final,
+    )
+    db.add(pending)
+    await db.commit()
+    monkeypatch.setattr(settings, "midtrans_server_key", "test-server-key")
+    monkeypatch.setattr("app.services.payment_service.notify_payment_status", _async_noop)
+    monkeypatch.setattr("app.services.payment_service.notify_chatbot_order_event", _async_noop)
+
+    class FakeResponse:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    pending_payload = {
+        "transaction_id": "pending-midtrans-transaction",
+        "order_id": "pending-midtrans-order",
+        "gross_amount": "1000000.00",
+        "transaction_status": "pending",
+    }
+    cancelled_payload = {**pending_payload, "transaction_status": "cancel"}
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, url, **kwargs):
+            calls.append(("get", url))
+            return FakeResponse(200, pending_payload)
+        async def post(self, url, **kwargs):
+            calls.append(("post", url))
+            return FakeResponse(200, cancelled_payload)
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    result = await cancel_order_by_customer(db, order.id)
+
+    await db.refresh(order)
+    await db.refresh(pending)
+    await db.refresh(invoice)
+    assert result["status"] == "success"
+    assert order.status == OrderStatusEnum.cancelled
+    assert pending.payment_status == PaymentStatusEnum.failed
+    assert invoice.status == InvoiceStatusEnum.unpaid
+    assert [method for method, _url in calls] == ["get", "post"]
+    assert calls[1][1].endswith("/pending-midtrans-order/cancel")
+
+
+@pytest.mark.asyncio
+async def test_cancel_keeps_order_active_when_midtrans_cancel_is_unconfirmed(db_session, monkeypatch):
+    db, order, invoice, dp = db_session
+    invoice.status = InvoiceStatusEnum.unpaid
+    dp.payment_status = PaymentStatusEnum.failed
+    pending = Payment(
+        invoice_id=invoice.id,
+        pg_order_id="pending-midtrans-order",
+        pg_transaction_id="pending-midtrans-transaction",
+        jumlah_bayar=Decimal("1000000"),
+        payment_method="qris",
+        payment_status=PaymentStatusEnum.pending,
+        payment_type=PaymentTypeEnum.final,
+    )
+    db.add(pending)
+    await db.commit()
+    monkeypatch.setattr(settings, "midtrans_server_key", "test-server-key")
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return {
+                "transaction_id": "pending-midtrans-transaction",
+                "order_id": "pending-midtrans-order",
+                "gross_amount": "1000000.00",
+                "transaction_status": "pending",
+            }
+
+    class RejectedCancelResponse:
+        status_code = 412
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, url, **kwargs): return FakeResponse()
+        async def post(self, url, **kwargs): return RejectedCancelResponse()
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    with pytest.raises(HTTPException) as exc:
+        await cancel_order_by_customer(db, order.id)
+
+    await db.refresh(order)
+    await db.refresh(pending)
+    assert exc.value.status_code == 409
+    assert order.status == OrderStatusEnum.pending
+    assert pending.payment_status == PaymentStatusEnum.pending
+
+
+@pytest.mark.asyncio
+async def test_cancel_does_not_release_stock_for_legacy_pending_gateway_reference(db_session, monkeypatch):
+    db, order, invoice, dp = db_session
+    invoice.status = InvoiceStatusEnum.unpaid
+    dp.payment_status = PaymentStatusEnum.failed
+    pending = Payment(
+        invoice_id=invoice.id,
+        pg_transaction_id="legacy-midtrans-transaction",
+        jumlah_bayar=Decimal("1000000"),
+        payment_method="qris",
+        payment_status=PaymentStatusEnum.pending,
+        payment_type=PaymentTypeEnum.final,
+    )
+    db.add(pending)
+    await db.commit()
+    monkeypatch.setattr(settings, "midtrans_server_key", "test-server-key")
+
+    def unexpected_gateway_request(*args, **kwargs):
+        pytest.fail("Legacy payment without a verified order reference must not reach Midtrans")
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", unexpected_gateway_request)
+    with pytest.raises(HTTPException) as exc:
+        await cancel_order_by_customer(db, order.id)
+
+    await db.refresh(order)
+    await db.refresh(pending)
+    assert exc.value.status_code == 409
+    assert order.status == OrderStatusEnum.pending
+    assert pending.payment_status == PaymentStatusEnum.pending
+
+
+@pytest.mark.asyncio
+async def test_cancel_blocks_if_status_reconciliation_finds_settlement(db_session, monkeypatch):
+    db, order, invoice, dp = db_session
+    invoice.status = InvoiceStatusEnum.unpaid
+    dp.payment_status = PaymentStatusEnum.failed
+    pending = Payment(
+        invoice_id=invoice.id,
+        pg_order_id="pending-midtrans-order",
+        pg_transaction_id="pending-midtrans-transaction",
+        jumlah_bayar=Decimal("1000000"),
+        payment_method="qris",
+        payment_status=PaymentStatusEnum.pending,
+        payment_type=PaymentTypeEnum.final,
+    )
+    db.add(pending)
+    await db.commit()
+    monkeypatch.setattr(settings, "midtrans_server_key", "test-server-key")
+    monkeypatch.setattr("app.services.payment_service.notify_payment_status", _async_noop)
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return {
+                "transaction_id": "pending-midtrans-transaction",
+                "order_id": "pending-midtrans-order",
+                "gross_amount": "1000000.00",
+                "transaction_status": "settlement",
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, url, **kwargs): return FakeResponse()
+        async def post(self, url, **kwargs): pytest.fail("Settled payment must not be cancelled")
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeClient)
+    with pytest.raises(HTTPException) as exc:
+        await cancel_order_by_customer(db, order.id)
+
+    await db.refresh(order)
+    await db.refresh(pending)
+    await db.refresh(invoice)
+    assert exc.value.status_code == 409
+    assert order.status == OrderStatusEnum.pending
+    assert pending.payment_status == PaymentStatusEnum.success
+    assert invoice.status == InvoiceStatusEnum.paid
 
 
 @pytest.mark.asyncio

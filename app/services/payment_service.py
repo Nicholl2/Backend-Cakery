@@ -8,10 +8,11 @@ from typing import Optional, List
 import httpx
 import secrets
 import time
+from urllib.parse import quote
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from app.core.config import settings
 from app.core.state_machine import is_valid_payment_transition, is_payment_terminal
@@ -510,7 +511,7 @@ async def _apply_transaction_status(
                     Payment.invoice_id == invoice.id,
                     Payment.id != payment.id,
                     Payment.payment_status == PaymentStatusEnum.pending,
-                    Payment.pg_order_id.is_not(None),
+                    or_(Payment.pg_order_id.is_not(None), Payment.pg_transaction_id.is_not(None)),
                 ).limit(1))
                 if order and order.status == OrderStatusEnum.pending and not other_pending:
                     from app.services.order_service import _rollback_order_stock
@@ -767,6 +768,202 @@ async def refresh_if_pending(db: AsyncSession, payment: Payment) -> Payment:
         except Exception:
             pass
     return payment
+
+
+async def _reconcile_midtrans_payment_for_cancel(
+    db: AsyncSession, payment_id: int
+) -> Payment | None:
+    """Require a valid authenticated Midtrans status response before cancellation."""
+    latest_result = await db.execute(
+        select(Payment).where(Payment.id == payment_id)
+        .execution_options(populate_existing=True)
+    )
+    payment = latest_result.scalars().first()
+    if not payment or payment.payment_status != PaymentStatusEnum.pending:
+        return payment
+    if not payment.pg_order_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Referensi transaksi Midtrans tidak lengkap; pesanan tetap aktif.",
+        )
+    if not settings.midtrans_server_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Layanan pembayaran belum dapat memastikan pembatalan transaksi.",
+        )
+
+    encoded_key = base64.b64encode(f"{settings.midtrans_server_key}:".encode()).decode()
+    headers = {"Authorization": f"Basic {encoded_key}", "Accept": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{settings.midtrans_api_url}/{quote(payment.pg_transaction_id or payment.pg_order_id, safe='')}/status",
+                headers=headers,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Status pembayaran Midtrans belum dapat dipastikan; pesanan tetap aktif.",
+        ) from exc
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Midtrans belum memberikan status pembayaran yang dapat diverifikasi; pesanan tetap aktif.",
+        )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Respons status Midtrans tidak dapat diverifikasi; pesanan tetap aktif.",
+        )
+
+    invoice = await db.get(Invoice, payment.invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invoice transaksi tidak ditemukan.")
+    await db.execute(select(Order.id).where(Order.id == invoice.order_id).with_for_update())
+    locked_result = await db.execute(
+        select(Payment).where(Payment.id == payment_id).with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    payment = locked_result.scalars().first()
+    if not payment or payment.payment_status != PaymentStatusEnum.pending:
+        await db.commit()
+        return payment
+
+    try:
+        await _validate_midtrans_payment_payload(db, payment, payload)
+    except ValueError as exc:
+        await db.rollback()
+        logger.warning("[PAYMENT_AUDIT] cancel_response_mismatch | payment_id=%s", payment_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Respons pembatalan Midtrans tidak cocok dengan tagihan; pesanan tetap aktif.",
+        ) from exc
+
+    transaction_status = str(payload.get("transaction_status") or "").lower()
+    if transaction_status == "capture" and str(payload.get("fraud_status") or "").lower() != "accept":
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Status pembayaran kartu belum final; pesanan tetap aktif.",
+        )
+    if transaction_status not in {"pending", "cancel", "expire", "deny", "settlement", "capture"}:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Status pembayaran Midtrans belum dapat dipastikan; pesanan tetap aktif.",
+        )
+
+    if transaction_status == "pending":
+        _apply_midtrans_payment_instructions(payment, payload)
+        await db.commit()
+    else:
+        await _apply_transaction_status(db, payment, {**payload, "transaction_status": transaction_status}, commit=True)
+    return await db.get(Payment, payment_id)
+
+
+async def cancel_pending_midtrans_payment(db: AsyncSession, payment_id: int) -> Payment | None:
+    """Cancel a pending gateway transaction only after authenticated reconciliation."""
+    payment = await _reconcile_midtrans_payment_for_cancel(db, payment_id)
+    if not payment or payment.payment_status != PaymentStatusEnum.pending:
+        return payment
+    # A webhook may have settled the charge immediately after the status query.
+    latest_result = await db.execute(
+        select(Payment).where(Payment.id == payment_id)
+        .execution_options(populate_existing=True)
+    )
+    payment = latest_result.scalars().first()
+    if not payment or payment.payment_status != PaymentStatusEnum.pending:
+        return payment
+
+    encoded_key = base64.b64encode(f"{settings.midtrans_server_key}:".encode()).decode()
+    headers = {"Authorization": f"Basic {encoded_key}", "Accept": "application/json"}
+    url = f"{settings.midtrans_api_url}/{quote(payment.pg_order_id, safe='')}/cancel"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, headers=headers)
+    except httpx.HTTPError as exc:
+        # A timed-out cancel may still have reached Midtrans. Reconcile again;
+        # preserve order and stock if the outcome remains pending or unknown.
+        payment = await _reconcile_midtrans_payment_for_cancel(db, payment_id)
+        if payment and payment.payment_status != PaymentStatusEnum.pending:
+            return payment
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Status pembatalan Midtrans belum dapat dipastikan; pesanan tetap aktif.",
+        ) from exc
+
+    if response.status_code != 200:
+        payment = await _reconcile_midtrans_payment_for_cancel(db, payment_id)
+        if payment and payment.payment_status != PaymentStatusEnum.pending:
+            return payment
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Midtrans belum mengonfirmasi pembatalan; pesanan tetap aktif.",
+        )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        payment = await _reconcile_midtrans_payment_for_cancel(db, payment_id)
+        if payment and payment.payment_status != PaymentStatusEnum.pending:
+            return payment
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Respons pembatalan Midtrans tidak dapat diverifikasi; pesanan tetap aktif.",
+        )
+
+    invoice = await db.get(Invoice, payment.invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invoice transaksi tidak ditemukan.")
+    await db.execute(select(Order.id).where(Order.id == invoice.order_id).with_for_update())
+    locked_result = await db.execute(
+        select(Payment).where(Payment.id == payment_id).with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    payment = locked_result.scalars().first()
+    if not payment or payment.payment_status != PaymentStatusEnum.pending:
+        await db.commit()
+        return payment
+
+    try:
+        await _validate_midtrans_payment_payload(db, payment, payload)
+    except ValueError as exc:
+        await db.rollback()
+        logger.warning("[PAYMENT_AUDIT] cancel_response_mismatch | payment_id=%s", payment_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Respons pembatalan Midtrans tidak cocok dengan tagihan; pesanan tetap aktif.",
+        ) from exc
+
+    transaction_status = str(payload.get("transaction_status") or "").lower()
+    if transaction_status == "capture" and str(payload.get("fraud_status") or "").lower() != "accept":
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Status pembayaran kartu belum final; pesanan tetap aktif.",
+        )
+    if transaction_status not in {"cancel", "expire", "deny", "settlement", "capture"}:
+        await db.commit()
+        payment = await _reconcile_midtrans_payment_for_cancel(db, payment_id)
+        if payment and payment.payment_status != PaymentStatusEnum.pending:
+            return payment
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Midtrans belum mengonfirmasi pembatalan; pesanan tetap aktif.",
+        )
+
+    await _apply_transaction_status(
+        db, payment, {**payload, "transaction_status": transaction_status}, commit=True
+    )
+    return await db.get(Payment, payment_id)
 
 
 async def get_payments_by_order(db: AsyncSession, order_id: int) -> List[Payment]:
@@ -1047,7 +1244,7 @@ async def process_manual_payment(
     pending_online = await db.scalar(select(Payment.id).where(
         Payment.invoice_id == invoice.id,
         Payment.payment_status == PaymentStatusEnum.pending,
-        Payment.pg_order_id.is_not(None),
+        or_(Payment.pg_order_id.is_not(None), Payment.pg_transaction_id.is_not(None)),
     ).limit(1))
     if pending_online:
         raise HTTPException(status_code=409, detail="Pembayaran online masih pending; tunggu status gateway sebelum mencatat pembayaran manual")
@@ -1177,7 +1374,7 @@ async def check_expired_settlements(db: AsyncSession) -> int:
                     pending_online = await order_db.scalar(select(Payment.id).where(
                         Payment.invoice_id == order.invoice.id,
                         Payment.payment_status == PaymentStatusEnum.pending,
-                        Payment.pg_order_id.is_not(None),
+                        or_(Payment.pg_order_id.is_not(None), Payment.pg_transaction_id.is_not(None)),
                     ).limit(1))
                     if pending_online:
                         continue

@@ -110,6 +110,7 @@ def test_alembic_revision_graph_is_connected_and_payment_migration_reaches_head(
     assert revision_to_parent["20261015_01"] == "20261014_03"
     assert revision_to_parent["20261027_01"] == "20261026_02"
     assert revision_to_parent["20261030_01"] == "20261027_01"
+    assert revision_to_parent["20261030_02"] == "20261030_01"
     assert "20261014_03" in _ancestors(next(iter(heads)), revision_to_parent)
 
 

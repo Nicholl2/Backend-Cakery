@@ -182,6 +182,25 @@ async def test_postgres_payment_settlement_serializes_with_cancellation(pg_sessi
     monkeypatch.setattr("app.services.chatbot_notify.notify_chatbot_order_event", noop)
     key = "postgres-order-race-test-key"
     monkeypatch.setattr(settings, "midtrans_server_key", key)
+
+    class FakeStatusResponse:
+        status_code = 200
+        def json(self):
+            return {
+                "order_id": pg_order_id,
+                "transaction_id": "race-transaction",
+                "gross_amount": "5000.00",
+                "transaction_status": "settlement",
+            }
+
+    class FakeMidtransClient:
+        def __init__(self, *args, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, url, **kwargs): return FakeStatusResponse()
+        async def post(self, url, **kwargs): pytest.fail("Settlement must not be cancelled")
+
+    monkeypatch.setattr("app.services.payment_service.httpx.AsyncClient", FakeMidtransClient)
     async with pg_sessions() as db:
         customer = (await db.execute(select(Customer).order_by(Customer.id))).scalars().first()
         order = Order(customer_id=customer.id, status=OrderStatusEnum.pending,

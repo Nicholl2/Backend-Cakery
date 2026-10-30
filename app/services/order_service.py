@@ -17,7 +17,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update, cast, String
+from sqlalchemy import select, func, update, cast, String, or_
 from sqlalchemy.orm import selectinload, attributes
 
 from app.models.order import Order, OrderItem, OrderAccessory, Invoice, MetodePengirimanEnum, OrderStatusEnum, InvoiceStatusEnum
@@ -867,61 +867,89 @@ async def create_buyer_order(
 
 async def cancel_order_by_customer(db: AsyncSession, order_id: int) -> dict:
     try:
-        # Lock Order row untuk mencegah double-cancel bersamaan
-        result = await db.execute(
-            select(Order)
-            .where(Order.id == order_id)
-            .options(
-                selectinload(Order.invoice),
-                selectinload(Order.order_items)
-                .selectinload(OrderItem.product)
-                .selectinload(Product.recipes)
-                .selectinload(Recipe.stock_item)
+        from app.services.payment_service import cancel_pending_midtrans_payment
+
+        for attempt in range(3):
+            # Keep payment creation serialized against the final local cancellation.
+            result = await db.execute(
+                select(Order)
+                .where(Order.id == order_id)
+                .options(
+                    selectinload(Order.invoice),
+                    selectinload(Order.order_items)
+                    .selectinload(OrderItem.product)
+                    .selectinload(Product.recipes)
+                    .selectinload(Recipe.stock_item)
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
-            .with_for_update()
-            .execution_options(populate_existing=True)
+            order = result.scalars().first()
+            if not order:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Order tidak ditemukan",
+                )
+
+            # A validated terminal gateway response can already cancel an
+            # unpaid order inside _apply_transaction_status. Treat that as the
+            # successful result of this cancellation request, not a duplicate.
+            if attempt > 0 and order.status == OrderStatusEnum.cancelled:
+                if order.invoice and order.invoice.status == InvoiceStatusEnum.unpaid:
+                    await db.commit()
+                    return {"status": "success", "message": "Pesanan berhasil dibatalkan"}
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Status pesanan berubah saat pembatalan diproses.",
+                )
+
+            if order.status != OrderStatusEnum.pending:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Pesanan berstatus '{order.status.value}' tidak dapat dibatalkan kembali.",
+                )
+
+            if not order.invoice or order.invoice.status != InvoiceStatusEnum.unpaid:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Pesanan yang sudah dibayar atau dicicil tidak dapat dibatalkan secara otomatis",
+                )
+
+            pending_payment_ids = (await db.scalars(select(Payment.id).where(
+                Payment.invoice_id == order.invoice.id,
+                Payment.payment_status == PaymentStatusEnum.pending,
+                or_(Payment.pg_order_id.is_not(None), Payment.pg_transaction_id.is_not(None)),
+            ))).all()
+            if pending_payment_ids:
+                # Do not hold the order lock across network calls. Reacquire it and
+                # recheck every condition after Midtrans reconciliation/cancellation.
+                await db.rollback()
+                for payment_id in pending_payment_ids:
+                    await cancel_pending_midtrans_payment(db, payment_id)
+                continue
+
+            successful_payment = await db.scalar(select(Payment.id).where(
+                Payment.invoice_id == order.invoice.id,
+                Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.refunded]),
+            ).limit(1))
+            if successful_payment:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Pembayaran sudah diterima; gunakan alur refund untuk membatalkan order",
+                )
+
+            await _rollback_order_stock(db, order)
+            order.status = OrderStatusEnum.cancelled
+            await _enqueue_order_status_email_best_effort(
+                db, order, OrderStatusEnum.cancelled.value
+            )
+            await db.commit()
+            return {"status": "success", "message": "Pesanan berhasil dibatalkan"}
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ada transaksi pembayaran baru yang belum selesai diproses; coba batalkan kembali.",
         )
-        order = result.scalars().first()
-        if not order:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Order tidak ditemukan",
-            )
-
-        if order.status != OrderStatusEnum.pending:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Pesanan berstatus '{order.status.value}' tidak dapat dibatalkan kembali.",
-            )
-            
-        if not order.invoice or order.invoice.status != InvoiceStatusEnum.unpaid:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Pesanan yang sudah dibayar atau dicicil tidak dapat dibatalkan secara otomatis",
-            )
-
-        pending_online = await db.scalar(select(Payment.id).where(
-            Payment.invoice_id == order.invoice.id,
-            Payment.payment_status == PaymentStatusEnum.pending,
-            Payment.pg_order_id.is_not(None),
-        ).limit(1))
-        if pending_online:
-            raise HTTPException(status_code=409, detail="Pembayaran online masih pending; order tidak dapat dibatalkan sebelum status gateway dipastikan")
-        successful_payment = await db.scalar(select(Payment.id).where(
-            Payment.invoice_id == order.invoice.id,
-            Payment.payment_status.in_([PaymentStatusEnum.success, PaymentStatusEnum.refunded]),
-        ).limit(1))
-        if successful_payment:
-            raise HTTPException(status_code=409, detail="Pembayaran sudah diterima; gunakan alur refund untuk membatalkan order")
-            
-        await _rollback_order_stock(db, order)
-
-        order.status = OrderStatusEnum.cancelled
-        await _enqueue_order_status_email_best_effort(
-            db, order, OrderStatusEnum.cancelled.value
-        )
-        await db.commit()
-        return {"status": "success", "message": "Pesanan berhasil dibatalkan"}
 
     except HTTPException:
         await db.rollback()
@@ -992,7 +1020,7 @@ async def update_order_status(db: AsyncSession, order_id: int, new_status: str, 
         pending_online = await db.scalar(select(Payment.id).where(
             Payment.invoice_id == order.invoice.id,
             Payment.payment_status == PaymentStatusEnum.pending,
-            Payment.pg_order_id.is_not(None),
+            or_(Payment.pg_order_id.is_not(None), Payment.pg_transaction_id.is_not(None)),
         ).limit(1))
         if pending_online:
             raise HTTPException(status_code=409, detail="Pembayaran online masih pending; order tidak dapat dibatalkan sebelum status gateway dipastikan")
@@ -1283,7 +1311,7 @@ async def cancel_and_refund_order(
     pending_online = await db.scalar(select(Payment.id).where(
         Payment.invoice_id == order.invoice.id,
         Payment.payment_status == PaymentStatusEnum.pending,
-        Payment.pg_order_id.is_not(None),
+        or_(Payment.pg_order_id.is_not(None), Payment.pg_transaction_id.is_not(None)),
     ).limit(1))
     if pending_online:
         raise HTTPException(status_code=409, detail="Pembayaran online masih pending; pastikan status gateway sebelum refund atau pembatalan")

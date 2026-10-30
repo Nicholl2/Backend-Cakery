@@ -321,7 +321,7 @@ async def ensure_order_status_enum(conn: AsyncConnection):
         return
     try:
         autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
-        for val in ["completed", "refunded"]:
+        for val in ["completed", "refunded", "cancelled_settlement_expired"]:
             await autocommit_conn.execute(text(
                 f"ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS '{val}';"
             ))
@@ -330,7 +330,7 @@ async def ensure_order_status_enum(conn: AsyncConnection):
         try:
             async with conn.engine.connect() as auto_conn:
                 autocommit_conn = await auto_conn.execution_options(isolation_level="AUTOCOMMIT")
-                for val in ["completed", "refunded"]:
+                for val in ["completed", "refunded", "cancelled_settlement_expired"]:
                     await autocommit_conn.execute(text(
                         f"ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS '{val}';"
                     ))
@@ -647,6 +647,7 @@ async def run_auto_migrations(conn: AsyncConnection):
     await ensure_order_columns(conn)
     await ensure_customer_columns(conn)
     await ensure_fulfillment_columns(conn)
+    await ensure_order_status_enum(conn)
     await ensure_order_accessories_table(conn)
     await ensure_payment_columns(conn)
     await ensure_review_columns(conn)

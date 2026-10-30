@@ -43,7 +43,9 @@ async def test_ensure_order_status_enum():
 
     await ensure_order_status_enum(mock_conn)
     mock_conn.execution_options.assert_called_once_with(isolation_level="AUTOCOMMIT")
-    assert "ALTER TYPE orderstatusenum ADD VALUE IF NOT EXISTS 'refunded';" in str(mock_autocommit_c.execute.call_args[0][0])
+    executed_sql = [str(call.args[0]) for call in mock_autocommit_c.execute.call_args_list]
+    assert any("'refunded'" in statement for statement in executed_sql)
+    assert any("'cancelled_settlement_expired'" in statement for statement in executed_sql)
 
 
 @pytest.mark.asyncio
@@ -186,6 +188,7 @@ async def test_run_auto_migrations_calls_payment_schema_repair(monkeypatch):
         "ensure_order_accessories_table", "ensure_payment_columns", "ensure_review_columns",
         "ensure_trigram_and_schema_optimizations", "ensure_product_images_table",
         "ensure_notification_table", "ensure_review_images_table", "ensure_email_outbox_indexes",
+        "ensure_order_status_enum",
     )
     replacements = {name: AsyncMock() for name in migration_names}
     for name, replacement in replacements.items():
@@ -194,6 +197,7 @@ async def test_run_auto_migrations_calls_payment_schema_repair(monkeypatch):
     await migrations.run_auto_migrations(SimpleNamespace())
 
     replacements["ensure_payment_columns"].assert_awaited_once()
+    replacements["ensure_order_status_enum"].assert_awaited_once()
 
 
 @pytest.mark.asyncio

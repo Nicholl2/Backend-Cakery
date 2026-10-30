@@ -436,6 +436,21 @@ async def test_postgres_repairs_missing_objects_when_database_was_already_stampe
         await connection.execute(text("DROP INDEX IF EXISTS ix_orders_payment_expires_at"))
         await connection.execute(text("ALTER TABLE orders DROP COLUMN payment_expires_at"))
         await connection.execute(text("ALTER TABLE orders DROP COLUMN fulfillment_overdue_notified_at"))
+        await connection.execute(text("ALTER TABLE orders DROP COLUMN IF EXISTS fulfillment_date"))
+        await connection.execute(text("ALTER TABLE orders DROP COLUMN IF EXISTS settlement_due_date"))
+        # Recreate the historical production enum exactly as reported: all
+        # current values except the settlement-expiry value from 20261001_01.
+        await connection.execute(text("ALTER TYPE orderstatusenum RENAME TO orderstatusenum_current"))
+        await connection.execute(text(
+            "CREATE TYPE orderstatusenum AS ENUM "
+            "('pending', 'in_process', 'ready', 'delivered', 'picked_up', "
+            "'cancelled', 'refunded', 'completed')"
+        ))
+        await connection.execute(text(
+            "ALTER TABLE orders ALTER COLUMN status TYPE orderstatusenum "
+            "USING status::text::orderstatusenum"
+        ))
+        await connection.execute(text("DROP TYPE orderstatusenum_current"))
         await connection.execute(text("DROP INDEX IF EXISTS ix_expenses_is_voided_tanggal"))
         await connection.execute(text("ALTER TABLE expenses DROP CONSTRAINT IF EXISTS ck_expenses_payment_method"))
         await connection.execute(text("ALTER TABLE expenses DROP CONSTRAINT IF EXISTS ck_expenses_void_metadata"))
@@ -476,9 +491,16 @@ async def test_postgres_repairs_missing_objects_when_database_was_already_stampe
         expense_indexes = {index["name"] for index in await connection.run_sync(
             lambda sync: inspect(sync).get_indexes("expenses")
         )}
+        enum_labels = (await connection.execute(text(
+            "SELECT e.enumlabel FROM pg_enum e "
+            "JOIN pg_type t ON t.oid = e.enumtypid "
+            "WHERE t.typname = 'orderstatusenum' ORDER BY e.enumsortorder"
+        ))).scalars().all()
     assert revision == _expected_head_revision()
     assert {"expense_audits", "email_sender_settings", "store_customization"} <= tables
     assert {"payment_expires_at", "fulfillment_overdue_notified_at"} <= order_columns
+    assert {"fulfillment_date", "settlement_due_date"} <= order_columns
+    assert "cancelled_settlement_expired" in enum_labels
     assert {
         "deskripsi", "penerima", "metode_pembayaran", "bukti_url", "is_voided",
         "void_reason", "voided_by", "voided_at", "updated_by",
