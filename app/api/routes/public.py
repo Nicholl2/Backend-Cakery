@@ -7,7 +7,9 @@ from app.core.database import get_db
 from app.core.cache import app_cache
 from app.core.rate_limiter import limiter
 from app.schemas.search import PublicSearchResponse
+from app.schemas.store_customization import StoreCustomizationOut
 from app.services.public_search_service import search_public_content
+from app.services.store_customization_service import get_store_customization
 from app.services.chatbot_notify import fetch_whatsapp_number
 
 logger = logging.getLogger(__name__)
@@ -19,6 +21,19 @@ router = APIRouter(
 
 CACHE_KEY_KONTAK_WA = "public_kontak_wa"
 CACHE_TTL_SECONDS = 60
+
+
+@router.get(
+    "/store-customization",
+    response_model=StoreCustomizationOut,
+    status_code=status.HTTP_200_OK,
+    summary="Ambil konten homepage toko (Publik)",
+)
+async def read_store_customization(
+    db: AsyncSession = Depends(get_db),
+) -> StoreCustomizationOut:
+    """Return only the public, owner-managed homepage fields."""
+    return await get_store_customization(db)
 
 
 @router.get("/search", response_model=PublicSearchResponse, status_code=status.HTTP_200_OK)

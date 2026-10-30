@@ -178,6 +178,14 @@ Contoh item purchase baru: `{"stock_item_id":12,"jumlah":100,"harga_total":25000
 | :--- | :--- | :--- | :--- |
 | `GET` | `/settings/email-sender` | Owner JWT | Baca alamat/nama pengirim email aktif; fallback ke `SMTP_FROM_EMAIL`/`SMTP_FROM_NAME` jika belum disetel di database. |
 | `PATCH` | `/settings/email-sender` | Owner JWT | Ubah `from_email` dan `from_name` untuk email yang dikirim berikutnya. Batas 5 request/menit. Memvalidasi format email, panjang nama, dan menolak karakter kontrol. Kredensial SMTP tidak dibaca/ditulis oleh endpoint ini. Alamat harus sudah diverifikasi di provider email sebelum dipakai. |
+| `PATCH` | `/settings/store-customization` | Owner JWT | Ubah sebagian konten homepage. `content.id` dan `content.en` menerima `hero_title`, `hero_subtitle`, `about_title`, dan `about_description`; field bersama adalah `hero_image_url`, `store_address`, dan `maps_embed_url`. Field yang tidak dikirim tidak berubah; `null` mengembalikan field ke fallback FE. Batas 5 request/menit. Menolak HTML/karakter kontrol, URL gambar selain HTTPS Cloudinary, URL peta selain Google Maps embed, dan field yang tidak dikenal. |
+| `POST` | `/settings/store-customization/hero-image` | Owner JWT | Upload banner ke Cloudinary (`JPEG`, `PNG`, atau `WEBP`, maks. 5 MB). Memeriksa ekstensi, MIME, dan signature file; response berisi `hero_image_url` untuk dikirim kemudian ke `PATCH /settings/store-customization`. Batas 5 request/menit. |
+
+### Public Store Customization (`/public`)
+
+| Method | Endpoint | Auth / Permission | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/public/store-customization` | Public (Tanpa login) | Ambil konten homepage publik dalam bahasa `id` dan `en`, gambar banner, alamat opsional, dan URL embed Google Maps. Response hanya berisi field tampilan publik dan `updated_at`; tidak memuat ID Owner atau informasi privat. |
 
 Order lifecycle automation dijalankan oleh worker aplikasi saat `ORDER_LIFECYCLE_WORKER_ENABLED=true`. Worker membatalkan checkout unpaid setelah timeout (default 60 menit), setelah merekonsiliasi transaksi Midtrans yang masih pending; menjalankan pembatalan settlement DP yang melewati `settlement_due_date`; dan mengirim alert satu kali untuk order berbayar yang melewati tanggal pemenuhan. Field `payment_expires_at` dan `fulfillment_overdue_notified_at` tersedia di respons order. Keterlambatan pemenuhan tidak memicu refund otomatis. Untuk worker pada deployment persisten, atur `ORDER_LIFECYCLE_WORKER_ENABLED=true`; deployment serverless memerlukan worker persisten terpisah.
 

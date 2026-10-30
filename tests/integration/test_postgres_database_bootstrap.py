@@ -182,6 +182,7 @@ async def test_postgres_upgrade_from_existing_revision_preserves_payment_stock_a
         await connection.execute(text("ALTER TABLE orders DROP COLUMN IF EXISTS payment_expires_at"))
         await connection.execute(text("ALTER TABLE orders DROP COLUMN IF EXISTS fulfillment_overdue_notified_at"))
         await connection.execute(text("DROP TABLE IF EXISTS email_sender_settings"))
+        await connection.execute(text("DROP TABLE IF EXISTS store_customization"))
         await connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
         await connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20261013_01')"))
 
@@ -373,6 +374,7 @@ async def test_postgres_adopts_verified_refund_revision_then_upgrades_to_head():
         await connection.execute(text("ALTER TABLE orders DROP COLUMN IF EXISTS payment_expires_at"))
         await connection.execute(text("ALTER TABLE orders DROP COLUMN IF EXISTS fulfillment_overdue_notified_at"))
         await connection.execute(text("DROP TABLE IF EXISTS email_sender_settings"))
+        await connection.execute(text("DROP TABLE IF EXISTS store_customization"))
         await connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await connection.execute(text(
             "CREATE UNIQUE INDEX uq_stock_items_normalized_name "
@@ -430,6 +432,7 @@ async def test_postgres_repairs_missing_objects_when_database_was_already_stampe
         await connection.run_sync(Base.metadata.create_all)
         await connection.execute(text("DROP TABLE expense_audits"))
         await connection.execute(text("DROP TABLE email_sender_settings"))
+        await connection.execute(text("DROP TABLE store_customization"))
         await connection.execute(text("DROP INDEX IF EXISTS ix_orders_payment_expires_at"))
         await connection.execute(text("ALTER TABLE orders DROP COLUMN payment_expires_at"))
         await connection.execute(text("ALTER TABLE orders DROP COLUMN fulfillment_overdue_notified_at"))
@@ -474,7 +477,7 @@ async def test_postgres_repairs_missing_objects_when_database_was_already_stampe
             lambda sync: inspect(sync).get_indexes("expenses")
         )}
     assert revision == _expected_head_revision()
-    assert {"expense_audits", "email_sender_settings"} <= tables
+    assert {"expense_audits", "email_sender_settings", "store_customization"} <= tables
     assert {"payment_expires_at", "fulfillment_overdue_notified_at"} <= order_columns
     assert {
         "deskripsi", "penerima", "metode_pembayaran", "bukti_url", "is_voided",

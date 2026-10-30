@@ -17,6 +17,7 @@ from .otp_code import OTPCode
 from .notification import Notification
 from .email_outbox import EmailOutbox, EmailOutboxAudit
 from .email_sender_settings import EmailSenderSettings
+from .store_customization import StoreCustomization
 
 __all__ = [
     "Base",
@@ -50,4 +51,5 @@ __all__ = [
     "EmailOutbox",
     "EmailOutboxAudit",
     "EmailSenderSettings",
+    "StoreCustomization",
 ]

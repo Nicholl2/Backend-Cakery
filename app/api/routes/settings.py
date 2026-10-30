@@ -1,6 +1,6 @@
 from datetime import timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,12 @@ from app.core.database import get_db
 from app.core.rate_limiter import limiter
 from app.models.email_sender_settings import EmailSenderSettings
 from app.schemas.email_settings import EmailSenderSettingsOut, EmailSenderSettingsUpdate
+from app.schemas.store_customization import (
+    StoreCustomizationOut,
+    StoreCustomizationPatch,
+    StoreHeroImageOut,
+)
+from app.services import store_customization_service
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
@@ -59,3 +65,38 @@ async def update_email_sender_settings(
     await db.commit()
     await db.refresh(row)
     return await _get_sender(db)
+
+
+@router.patch(
+    "/store-customization",
+    response_model=StoreCustomizationOut,
+    dependencies=[Depends(require_owner)],
+    summary="Ubah konten homepage toko (Owner only)",
+)
+@limiter.limit("5/minute")
+async def update_store_customization_settings(
+    request: Request,
+    data: StoreCustomizationPatch,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> StoreCustomizationOut:
+    return await store_customization_service.update_store_customization(
+        db,
+        data,
+        updated_by=user_id,
+    )
+
+
+@router.post(
+    "/store-customization/hero-image",
+    response_model=StoreHeroImageOut,
+    dependencies=[Depends(require_owner)],
+    summary="Unggah banner homepage ke Cloudinary (Owner only)",
+)
+@limiter.limit("5/minute")
+async def upload_store_customization_hero_image(
+    request: Request,
+    file: UploadFile = File(...),
+) -> StoreHeroImageOut:
+    secure_url = await store_customization_service.upload_hero_image(file)
+    return StoreHeroImageOut(hero_image_url=secure_url)
