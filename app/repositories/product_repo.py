@@ -11,7 +11,8 @@ from typing import Optional
 
 
 async def create(db: AsyncSession, data: ProductCreate) -> Product:
-    product = Product(**data.model_dump())
+    values = data.model_dump(exclude={"deskripsi_id"})
+    product = Product(**values)
     db.add(product)
     await db.commit()
     await db.refresh(product)
@@ -79,6 +80,8 @@ async def update(
     changed_by: Optional[str] = None,
 ) -> Product:
     changes = data.model_dump(exclude_unset=True)
+    # deskripsi_id is an API alias for the legacy Indonesian column.
+    changes.pop("deskripsi_id", None)
     new_price = changes.get("harga_jual")
     if new_price is not None and Decimal(str(new_price)) != Decimal(str(product.harga_jual or 0)):
         db.add(PriceHistory(

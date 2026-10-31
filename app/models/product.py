@@ -25,6 +25,7 @@ class Product(Base):
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     nama_produk = Column(String(100), nullable=False)
     deskripsi = Column(Text, nullable=True)
+    deskripsi_en = Column(Text, nullable=True)
     kategori = Column(String(50), nullable=True)
     harga_jual = Column(Numeric(10, 2), nullable=True)
     hpp_total = Column(Numeric(10, 2), nullable=True, default=0)
@@ -51,6 +52,11 @@ class Product(Base):
     @property
     def name(self) -> str:
         return self.nama_produk
+
+    @property
+    def deskripsi_id(self) -> Optional[str]:
+        """Indonesian API field; stored in the legacy deskripsi column."""
+        return self.deskripsi
     
     # Relationships
     category_rel = relationship("Category", back_populates="products")

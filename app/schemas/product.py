@@ -1,3 +1,4 @@
+import re
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
@@ -8,6 +9,35 @@ def _round2(v, default=None) -> Optional[Decimal]:
     if v is None:
         return default
     return Decimal(str(v)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def _validate_product_description(value: str | None, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} harus berupa teks.")
+    value = value.strip()
+    if len(value) > 5000:
+        raise ValueError(f"{field_name} maksimal 5000 karakter.")
+    if "<" in value or ">" in value:
+        raise ValueError(f"{field_name} hanya menerima teks biasa, bukan HTML.")
+    if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", value):
+        raise ValueError(f"{field_name} mengandung karakter kontrol yang tidak diizinkan.")
+    return value or None
+
+
+def _normalize_indonesian_description(data):
+    if not isinstance(data, dict):
+        return data
+    values = dict(data)
+    localized_present = "deskripsi_id" in values
+    localized = values.pop("deskripsi_id", None)
+    legacy_present = "deskripsi" in values
+    if localized_present:
+        if legacy_present and values["deskripsi"] != localized:
+            raise ValueError("Kirim salah satu dari deskripsi_id atau deskripsi, atau isi keduanya dengan nilai yang sama.")
+        values["deskripsi"] = localized
+    return values
 
 # ── CATEGORY ────────────────────────────────────────────────────────────────
 class CategoryBase(BaseModel):
@@ -32,6 +62,8 @@ class CategoryResponse(CategoryBase):
 class ProductCreate(BaseModel):
     nama_produk: str = Field(..., min_length=1, max_length=100)
     deskripsi: Optional[str] = None
+    deskripsi_id: Optional[str] = Field(None, max_length=5000)
+    deskripsi_en: Optional[str] = Field(None, max_length=5000)
     kategori: Optional[str] = Field(None, max_length=50)
     category_id: Optional[int] = None
     harga_jual: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
@@ -39,16 +71,38 @@ class ProductCreate(BaseModel):
     is_available: bool = True
     minimum_order: int = Field(1, ge=1)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_description(cls, data):
+        return _normalize_indonesian_description(data)
+
+    @field_validator("deskripsi", "deskripsi_en", mode="before")
+    @classmethod
+    def validate_description(cls, value, info):
+        return _validate_product_description(value, field_name=info.field_name)
+
 
 # ── UPDATE (Hanya edit deskripsi, harga_jual, is_active, is_available, image_url, minimum_order) ──
 class ProductUpdate(BaseModel):
     deskripsi: Optional[str] = None
+    deskripsi_id: Optional[str] = Field(None, max_length=5000)
+    deskripsi_en: Optional[str] = Field(None, max_length=5000)
     category_id: Optional[int] = None
     harga_jual: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     is_active: Optional[bool] = None
     is_available: Optional[bool] = None
     image_url: Optional[str] = None
     minimum_order: Optional[int] = Field(None, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_description(cls, data):
+        return _normalize_indonesian_description(data)
+
+    @field_validator("deskripsi", "deskripsi_en", mode="before")
+    @classmethod
+    def validate_description(cls, value, info):
+        return _validate_product_description(value, field_name=info.field_name)
 
 
 # ── SET PRICE (khusus Owner — Use Case 2 / TOTI-02) ─────────────────────────
@@ -89,6 +143,8 @@ class ProductOut(BaseModel):
     id: int
     nama_produk: str
     deskripsi: Optional[str] = None
+    deskripsi_id: Optional[str] = None
+    deskripsi_en: Optional[str] = None
     kategori: Optional[str] = None
     category_id: Optional[int] = None
     category: Optional[CategoryResponse] = Field(None, alias='category_rel')

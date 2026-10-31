@@ -60,10 +60,10 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 
 | Method | Endpoint | Auth / Permission | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/products/` | Admin / Owner | Buat master produk baru (HPP default 0 sebelum resep diisi, `is_available` default `true`) |
+| `POST` | `/products/` | Admin / Owner | Buat master produk baru (HPP default 0 sebelum resep diisi, `is_available` default `true`). Deskripsi menerima `deskripsi_id` dan `deskripsi_en`; `deskripsi` lama tetap diterima sebagai Bahasa Indonesia. |
 | `GET` | `/products/` | Public | List katalog produk (Filter: `only_active`, `kategori`, `only_available`). Dilengkapi **in-memory TTL cache (5 menit)** dengan auto-invalidation saat ada operasi create/update/delete/pricing/image produk. Default menampilkan semua produk aktif (termasuk yang stok habis). Field response memuat `is_available: bool` (manual seller), `stock_quantity: int` (ketersediaan bahan/resep), dan `is_in_stock: bool` (computed property). Filter `only_available=true` hanya mereturn produk dengan `is_in_stock == true`. |
 | `GET` | `/products/{product_id}` | Public | Detail produk lengkap beserta ketersediaan manual (`is_available`), stok bahan (`stock_quantity`), status siap beli (`is_in_stock`), `hpp_total`, dan advisory `warning_below_hpp` untuk harga tersimpan |
-| `PUT` | `/products/{product_id}` | Admin / Owner | Update data produk termasuk harga jual. Response mengembalikan `hpp_total` dan `warning_below_hpp`; harga di bawah HPP tetap boleh disimpan. Perubahan harga dicatat di riwayat beserta HPP saat penyimpanan dan ID user terautentikasi. |
+| `PUT` | `/products/{product_id}` | Admin / Owner | Update data produk termasuk harga jual. Deskripsi menerima `deskripsi_id` dan `deskripsi_en`; `deskripsi` lama tetap diterima sebagai Bahasa Indonesia. Response mengembalikan `deskripsi`, `deskripsi_id`, dan `deskripsi_en`; `deskripsi` selalu alias Bahasa Indonesia. |
 | `DELETE` | `/products/{product_id}` | Admin / Owner | Hapus produk beserta seluruh relasi resep dan riwayat harganya |
 | `POST` | `/products/{product_id}/images` | Admin / Owner | Upload multiple foto produk langsung ke Cloudinary (`toti-cakery/products`, maks 5MB per file, format JPEG/PNG/WEBP), simpan array secure URLs ke tabel `product_images`, dan set gambar pertama/pilihan sebagai primary image |
 | `POST` | `/products/{product_id}/image` | Admin / Owner | Upload gambar produk tunggal (Backward Compatibility) ke Cloudinary |
