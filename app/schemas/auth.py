@@ -211,6 +211,12 @@ class BuyerResetPasswordEmailRequest(BaseModel):
     new_password: str = Field(..., min_length=8)
 
 
+class BuyerVerifyResetOTPRequest(BaseModel):
+    """Verifikasi kode OTP reset password buyer."""
+    email: str = Field(..., max_length=100)
+    otp: str = Field(..., max_length=10)
+
+
 # ── WA DEEP LINK OTP SCHEMAS ────────────────────────────────────────────────
 
 class WAVerifyStartRequest(BaseModel):
