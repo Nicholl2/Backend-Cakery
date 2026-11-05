@@ -24,6 +24,9 @@ from app.utils.email_helper import send_otp_email  # top-level for testability
 # ── BUYER LOGIN ATTEMPT TRACKING ─────────────────────────────────────────────
 _MAX_BUYER_LOGIN_ATTEMPTS = 5
 _BUYER_LOCKOUT_SECONDS = 15 * 60  # 15 menit
+_BUYER_RESET_OTP_INVALID_DETAIL = (
+    "Kode OTP tidak valid atau kedaluwarsa. Silakan minta kode baru."
+)
 
 
 def _buyer_login_key(identifier: str) -> str:
@@ -802,6 +805,67 @@ async def reset_buyer_password(db: AsyncSession, verify_token: str, new_password
 
 # ── BUYER FORGOT/RESET PASSWORD VIA EMAIL ────────────────────────────────────
 
+async def _invalidate_active_buyer_reset_otps(db: AsyncSession, email: str) -> None:
+    await db.execute(
+        OTPCode.__table__.update()
+        .where(
+            OTPCode.target == email,
+            OTPCode.purpose == "buyer_reset_password",
+            OTPCode.is_used.is_(False),
+        )
+        .values(is_used=True)
+    )
+
+
+def _invalid_buyer_reset_otp() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=_BUYER_RESET_OTP_INVALID_DETAIL,
+    )
+
+
+async def _get_valid_buyer_reset_otp(
+    db: AsyncSession, email: str, otp_code: str
+) -> OTPCode:
+    stmt = (
+        select(OTPCode)
+        .where(
+            OTPCode.target == email,
+            OTPCode.purpose == "buyer_reset_password",
+            OTPCode.is_used.is_(False),
+        )
+        .order_by(OTPCode.created_at.desc(), OTPCode.id.desc())
+        .with_for_update()
+    )
+    res = await db.execute(stmt)
+    otp = res.scalars().first()
+
+    if not otp:
+        raise _invalid_buyer_reset_otp()
+
+    if (otp.attempt_count or 0) >= _MAX_OTP_VERIFY_ATTEMPTS:
+        await _invalidate_active_buyer_reset_otps(db, email)
+        await db.commit()
+        raise _invalid_buyer_reset_otp()
+
+    otp_expires = otp.expires_at
+    if otp_expires.tzinfo is None:
+        otp_expires = otp_expires.replace(tzinfo=timezone.utc)
+    if otp_expires < datetime.now(timezone.utc):
+        await _invalidate_active_buyer_reset_otps(db, email)
+        await db.commit()
+        raise _invalid_buyer_reset_otp()
+
+    if not verify_password(otp_code, otp.code_hash):
+        otp.attempt_count = (otp.attempt_count or 0) + 1
+        if otp.attempt_count >= _MAX_OTP_VERIFY_ATTEMPTS:
+            await _invalidate_active_buyer_reset_otps(db, email)
+        await db.commit()
+        raise _invalid_buyer_reset_otp()
+
+    return otp
+
+
 async def request_buyer_forgot_password(db: AsyncSession, email: str) -> dict:
     """
     Request password reset OTP via email for buyer.
@@ -819,6 +883,9 @@ async def request_buyer_forgot_password(db: AsyncSession, email: str) -> dict:
         otp_id = str(uuid.uuid4())
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
         code_hash = hash_password(code)
+
+        # A newly issued code replaces every older active reset code for this buyer.
+        await _invalidate_active_buyer_reset_otps(db, email)
 
         otp = OTPCode(
             id=otp_id,
@@ -853,60 +920,7 @@ async def verify_buyer_reset_otp(
     sehingga OTP tetap dapat digunakan saat step reset password.
     Memeriksa eksistensi, expiry, dan batas percobaan (attempt_count).
     """
-    stmt = (
-        select(OTPCode)
-        .where(
-            OTPCode.target == email,
-            OTPCode.purpose == "buyer_reset_password",
-            OTPCode.is_used == False,  # noqa: E712
-        )
-        .order_by(OTPCode.created_at.desc())
-        .with_for_update()
-    )
-    res = await db.execute(stmt)
-    otp = res.scalars().first()
-
-    if not otp:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Kode OTP tidak valid atau tidak ditemukan."
-        )
-
-    # Check max attempts — lock OTP if exceeded
-    if (otp.attempt_count or 0) >= _MAX_OTP_VERIFY_ATTEMPTS:
-        otp.is_used = True
-        await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Batas percobaan verifikasi OTP tercapai (maksimal 5 kali). Silakan minta kode baru."
-        )
-
-    # Check expiry
-    otp_expires = otp.expires_at
-    if otp_expires.tzinfo is None:
-        otp_expires = otp_expires.replace(tzinfo=timezone.utc)
-    if otp_expires < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Kode OTP telah kedaluwarsa."
-        )
-
-    # Verify OTP code against hash — increment attempts on failure
-    if not verify_password(otp_code, otp.code_hash):
-        otp.attempt_count = (otp.attempt_count or 0) + 1
-        await db.commit()
-        if otp.attempt_count >= _MAX_OTP_VERIFY_ATTEMPTS:
-            otp.is_used = True
-            await db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Batas percobaan verifikasi OTP tercapai (maksimal 5 kali). Silakan minta kode baru."
-            )
-        remaining = _MAX_OTP_VERIFY_ATTEMPTS - otp.attempt_count
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Kode OTP salah. Sisa percobaan: {remaining}."
-        )
+    await _get_valid_buyer_reset_otp(db, email, otp_code)
 
     return {"message": "Kode OTP valid."}
 
@@ -919,70 +933,13 @@ async def reset_buyer_password_email(
 
     validate_password_strength(new_password)
 
-    # Find the latest unused OTP for this email & purpose
-    stmt = (
-        select(OTPCode)
-        .where(
-            OTPCode.target == email,
-            OTPCode.purpose == "buyer_reset_password",
-            OTPCode.is_used == False,  # noqa: E712
-        )
-        .order_by(OTPCode.created_at.desc())
-        .with_for_update()
-    )
-    res = await db.execute(stmt)
-    otp = res.scalars().first()
-
-    if not otp:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Kode OTP tidak valid atau tidak ditemukan."
-        )
-
-    # Check max attempts — lock OTP if exceeded
-    if (otp.attempt_count or 0) >= _MAX_OTP_VERIFY_ATTEMPTS:
-        otp.is_used = True
-        await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Batas percobaan verifikasi OTP tercapai (maksimal 5 kali). Silakan minta kode baru."
-        )
-
-    # Check expiry
-    otp_expires = otp.expires_at
-    if otp_expires.tzinfo is None:
-        otp_expires = otp_expires.replace(tzinfo=timezone.utc)
-    if otp_expires < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Kode OTP telah kedaluwarsa."
-        )
-
-    # Verify OTP code against hash — increment attempts on failure
-    if not verify_password(otp_code, otp.code_hash):
-        otp.attempt_count = (otp.attempt_count or 0) + 1
-        await db.commit()
-        if otp.attempt_count >= _MAX_OTP_VERIFY_ATTEMPTS:
-            otp.is_used = True
-            await db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Batas percobaan verifikasi OTP tercapai (maksimal 5 kali). Silakan minta kode baru."
-            )
-        remaining = _MAX_OTP_VERIFY_ATTEMPTS - otp.attempt_count
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Kode OTP salah. Sisa percobaan: {remaining}."
-        )
+    otp = await _get_valid_buyer_reset_otp(db, email, otp_code)
 
     # ── Look up buyer BEFORE consuming the OTP ───────────────────────────────
     # This ensures the OTP is not burned if the buyer account doesn't exist.
     buyer = await buyer_repo.get_buyer_by_email(db, email)
     if not buyer:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Akun Buyer tidak ditemukan."
-        )
+        raise _invalid_buyer_reset_otp()
 
     # ── Atomically consume OTP + update password in a single commit ───────────
     otp.is_used = True

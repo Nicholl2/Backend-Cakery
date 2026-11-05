@@ -846,7 +846,7 @@ class TestResetPasswordAtomicity:
 
     @pytest.mark.asyncio
     async def test_verify_buyer_reset_otp_wrong_code_increments_attempts(self, db: AsyncSession):
-        """verify_buyer_reset_otp: Wrong code increments attempt_count and throws 400."""
+        """Wrong buyer reset OTP increments attempts without disclosing remaining tries."""
         from fastapi import HTTPException
         otp = OTPCode(
             id=str(uuid.uuid4()),
@@ -866,11 +866,119 @@ class TestResetPasswordAtomicity:
         with pytest.raises(HTTPException) as exc:
             await verify_buyer_reset_otp(db, "verifywrong@test.com", "999999")
         assert exc.value.status_code == 400
-        assert "sisa percobaan: 4" in exc.value.detail.lower()
+        assert exc.value.detail == "Kode OTP tidak valid atau kedaluwarsa. Silakan minta kode baru."
 
         await db.refresh(otp)
         assert otp.is_used is False
         assert otp.attempt_count == 1
+
+    @pytest.mark.asyncio
+    async def test_new_buyer_reset_otp_invalidates_previous_active_codes(self, db: AsyncSession):
+        buyer = await _seed_buyer(db, email="replaceotp@test.com", phone="+6281200000056")
+        old_otp = OTPCode(
+            id=str(uuid.uuid4()),
+            target=buyer.email,
+            channel="email",
+            purpose="buyer_reset_password",
+            code_hash=hash_password("111111"),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            is_used=False,
+            attempt_count=0,
+        )
+        db.add(old_otp)
+        await db.commit()
+
+        with patch(
+            "app.services.buyer_auth_service.send_otp_email",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            from app.services.buyer_auth_service import request_buyer_forgot_password
+            await request_buyer_forgot_password(db, buyer.email)
+
+        await db.refresh(old_otp)
+        assert old_otp.is_used is True
+
+        from sqlalchemy import select
+        active_otps = (await db.execute(
+            select(OTPCode).where(
+                OTPCode.target == buyer.email,
+                OTPCode.purpose == "buyer_reset_password",
+                OTPCode.is_used.is_(False),
+            )
+        )).scalars().all()
+        assert len(active_otps) == 1
+
+    @pytest.mark.asyncio
+    async def test_buyer_reset_otp_lockout_invalidates_all_active_codes(self, db: AsyncSession):
+        email = "lockout-reset@test.com"
+        now = datetime.now(timezone.utc)
+        older_otp = OTPCode(
+            id=str(uuid.uuid4()), target=email, channel="email",
+            purpose="buyer_reset_password", code_hash=hash_password("111111"),
+            expires_at=now + timedelta(minutes=10), is_used=False, attempt_count=0,
+            created_at=now - timedelta(minutes=1),
+        )
+        latest_otp = OTPCode(
+            id=str(uuid.uuid4()), target=email, channel="email",
+            purpose="buyer_reset_password", code_hash=hash_password("222222"),
+            expires_at=now + timedelta(minutes=10), is_used=False, attempt_count=0,
+            created_at=now,
+        )
+        db.add_all([older_otp, latest_otp])
+        await db.commit()
+
+        from app.services.buyer_auth_service import verify_buyer_reset_otp
+        for _ in range(5):
+            with pytest.raises(HTTPException) as exc:
+                await verify_buyer_reset_otp(db, email, "999999")
+            assert exc.value.status_code == 400
+            assert exc.value.detail == "Kode OTP tidak valid atau kedaluwarsa. Silakan minta kode baru."
+
+        await db.refresh(older_otp)
+        await db.refresh(latest_otp)
+        assert older_otp.is_used is True
+        assert latest_otp.is_used is True
+
+        with pytest.raises(HTTPException) as exc:
+            await verify_buyer_reset_otp(db, email, "111111")
+        assert exc.value.status_code == 400
+        assert exc.value.detail == "Kode OTP tidak valid atau kedaluwarsa. Silakan minta kode baru."
+
+    @pytest.mark.asyncio
+    async def test_buyer_reset_otp_failures_use_same_public_response(self, db: AsyncSession):
+        from app.services.buyer_auth_service import verify_buyer_reset_otp
+
+        async def get_failure(email: str, code: str) -> tuple[int, str]:
+            with pytest.raises(HTTPException) as exc:
+                await verify_buyer_reset_otp(db, email, code)
+            return exc.value.status_code, exc.value.detail
+
+        missing_response = await get_failure("missing-reset@test.com", "999999")
+
+        wrong_email = "wrong-reset@test.com"
+        expired_email = "expired-reset@test.com"
+        now = datetime.now(timezone.utc)
+        db.add_all([
+            OTPCode(
+                id=str(uuid.uuid4()), target=wrong_email, channel="email",
+                purpose="buyer_reset_password", code_hash=hash_password("123456"),
+                expires_at=now + timedelta(minutes=10), is_used=False, attempt_count=0,
+            ),
+            OTPCode(
+                id=str(uuid.uuid4()), target=expired_email, channel="email",
+                purpose="buyer_reset_password", code_hash=hash_password("123456"),
+                expires_at=now - timedelta(minutes=1), is_used=False, attempt_count=0,
+            ),
+        ])
+        await db.commit()
+
+        wrong_response = await get_failure(wrong_email, "999999")
+        expired_response = await get_failure(expired_email, "123456")
+        assert missing_response == wrong_response == expired_response == (
+            400,
+            "Kode OTP tidak valid atau kedaluwarsa. Silakan minta kode baru.",
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

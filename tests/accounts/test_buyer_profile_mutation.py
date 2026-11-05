@@ -287,6 +287,13 @@ async def run_tests():
                 check("OTP saved in DB", latest_otp is not None)
                 check("OTP hash matches sent code", verify_password(sent_otp, latest_otp.code_hash))
 
+            r = await client.post(
+                "/auth/buyer/forgot-password/verify",
+                json={"email": "buyer1@test.com", "otp": sent_otp},
+            )
+            check("Verify OTP status 200", r.status_code == 200, f"got {r.status_code}: {r.text}")
+            check("Verify OTP message", r.json().get("message") == "Kode OTP valid.", r.text)
+
         # ── 10. Forgot password — email not found (anti-enumeration) ─────────────
         print("\n── Test 10: Forgot Password (email not found) ──")
         with patch("app.services.buyer_auth_service.send_otp_email", new_callable=AsyncMock) as mock_send_email:
@@ -309,7 +316,11 @@ async def run_tests():
             json={"email": "buyer1@test.com", "otp": "000000", "new_password": "newpass-reset"}
         )
         check("Status 400", r.status_code == 400, f"got {r.status_code}: {r.text}")
-        check("Error detail", "Kode OTP salah" in r.json().get("detail", ""), r.text)
+        check(
+            "Generic error detail",
+            r.json().get("detail") == "Kode OTP tidak valid atau kedaluwarsa. Silakan minta kode baru.",
+            r.text,
+        )
 
         # ── 12. Reset password — expired OTP ─────────────────────────────────────
         print("\n── Test 12: Reset Password (expired OTP) ──")
@@ -337,7 +348,11 @@ async def run_tests():
             json={"email": "buyer2@test.com", "otp": "123456", "new_password": "newpass-reset"}
         )
         check("Status 400", r.status_code == 400, f"got {r.status_code}: {r.text}")
-        check("Error detail", "telah kedaluwarsa" in r.json().get("detail", ""), r.text)
+        check(
+            "Generic error detail",
+            r.json().get("detail") == "Kode OTP tidak valid atau kedaluwarsa. Silakan minta kode baru.",
+            r.text,
+        )
 
         # ── 13. Reset password — valid email + OTP + new_password ────────────────
         print("\n── Test 13: Reset Password (valid OTP) ──")

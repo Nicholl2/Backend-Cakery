@@ -45,7 +45,8 @@ Seluruh endpoint menerapkan perlindungan ketat (Hardening) pada level skema payl
 | `POST` | `/auth/buyer/register` | Public (`verify_token`) | Registrasi akun pembeli baru menggunakan token verifikasi WA dan nomor telepon valid |
 | `POST` | `/auth/buyer/login` | Public | Login pembeli via email/password atau phone/`verify_token` |
 | `POST` | `/auth/buyer/forgot-password` | Public | Request OTP reset password ke email buyer |
-| `POST` | `/auth/buyer/reset-password/email` | Public | Reset password buyer via email, kode OTP, dan password baru |
+| `POST` | `/auth/buyer/forgot-password/verify` / `/auth/buyer/verify-reset-otp` | Public | Verifikasi OTP buyer sebelum reset; maksimal 5 percobaan. OTP baru membatalkan OTP reset lama. OTP yang hilang, salah, kedaluwarsa, sudah dipakai, atau melewati batas percobaan memakai respons umum HTTP 400: `Kode OTP tidak valid atau kedaluwarsa. Silakan minta kode baru.` |
+| `POST` | `/auth/buyer/reset-password/email` | Public | Reset password buyer via email, kode OTP, dan password baru. OTP tidak valid/kedaluwarsa/terpakai/terkunci memakai respons umum HTTP 400 yang sama dengan endpoint verifikasi. |
 | `POST` | `/auth/buyer/login-phone` | Public | Login pembeli via nomor telepon (E.164 internasional) dan password |
 | `POST` | `/auth/buyer/login/otp` | Public (`verify_token`) | Login pembeli via nomor telepon dan token verifikasi WA |
 | `POST` | `/auth/buyer/reset-password` | Public (`verify_token`) | Reset password pembeli menggunakan token verifikasi |
