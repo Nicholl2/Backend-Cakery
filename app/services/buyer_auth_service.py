@@ -845,6 +845,72 @@ async def request_buyer_forgot_password(db: AsyncSession, email: str) -> dict:
     return {"message": "Kode OTP reset password telah dikirim ke email Anda."}
 
 
+async def verify_buyer_reset_otp(
+    db: AsyncSession, email: str, otp_code: str
+) -> dict:
+    """
+    Verifikasi kode OTP reset password buyer tanpa mengonsumsi (mark is_used) OTP,
+    sehingga OTP tetap dapat digunakan saat step reset password.
+    Memeriksa eksistensi, expiry, dan batas percobaan (attempt_count).
+    """
+    stmt = (
+        select(OTPCode)
+        .where(
+            OTPCode.target == email,
+            OTPCode.purpose == "buyer_reset_password",
+            OTPCode.is_used == False,  # noqa: E712
+        )
+        .order_by(OTPCode.created_at.desc())
+        .with_for_update()
+    )
+    res = await db.execute(stmt)
+    otp = res.scalars().first()
+
+    if not otp:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kode OTP tidak valid atau tidak ditemukan."
+        )
+
+    # Check max attempts — lock OTP if exceeded
+    if (otp.attempt_count or 0) >= _MAX_OTP_VERIFY_ATTEMPTS:
+        otp.is_used = True
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Batas percobaan verifikasi OTP tercapai (maksimal 5 kali). Silakan minta kode baru."
+        )
+
+    # Check expiry
+    otp_expires = otp.expires_at
+    if otp_expires.tzinfo is None:
+        otp_expires = otp_expires.replace(tzinfo=timezone.utc)
+    if otp_expires < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kode OTP telah kedaluwarsa."
+        )
+
+    # Verify OTP code against hash — increment attempts on failure
+    if not verify_password(otp_code, otp.code_hash):
+        otp.attempt_count = (otp.attempt_count or 0) + 1
+        await db.commit()
+        if otp.attempt_count >= _MAX_OTP_VERIFY_ATTEMPTS:
+            otp.is_used = True
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Batas percobaan verifikasi OTP tercapai (maksimal 5 kali). Silakan minta kode baru."
+            )
+        remaining = _MAX_OTP_VERIFY_ATTEMPTS - otp.attempt_count
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Kode OTP salah. Sisa percobaan: {remaining}."
+        )
+
+    return {"message": "Kode OTP valid."}
+
+
 async def reset_buyer_password_email(
     db: AsyncSession, email: str, otp_code: str, new_password: str
 ) -> dict:

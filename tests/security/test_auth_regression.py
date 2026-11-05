@@ -819,6 +819,59 @@ class TestResetPasswordAtomicity:
         from app.core.security import verify_password
         assert verify_password("NewPass12345!", buyer.password_hash)
 
+    @pytest.mark.asyncio
+    async def test_verify_buyer_reset_otp_success_does_not_consume(self, db: AsyncSession):
+        """verify_buyer_reset_otp: Valid OTP returns 200 without consuming OTP."""
+        otp = OTPCode(
+            id=str(uuid.uuid4()),
+            target="verifytest@test.com",
+            channel="email",
+            purpose="buyer_reset_password",
+            code_hash=hash_password("123456"),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            is_used=False,
+            is_verified=False,
+            attempt_count=0,
+        )
+        db.add(otp)
+        await db.commit()
+
+        from app.services.buyer_auth_service import verify_buyer_reset_otp
+        result = await verify_buyer_reset_otp(db, "verifytest@test.com", "123456")
+        assert "valid" in result["message"].lower()
+
+        await db.refresh(otp)
+        assert otp.is_used is False
+        assert otp.attempt_count == 0
+
+    @pytest.mark.asyncio
+    async def test_verify_buyer_reset_otp_wrong_code_increments_attempts(self, db: AsyncSession):
+        """verify_buyer_reset_otp: Wrong code increments attempt_count and throws 400."""
+        from fastapi import HTTPException
+        otp = OTPCode(
+            id=str(uuid.uuid4()),
+            target="verifywrong@test.com",
+            channel="email",
+            purpose="buyer_reset_password",
+            code_hash=hash_password("123456"),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            is_used=False,
+            is_verified=False,
+            attempt_count=0,
+        )
+        db.add(otp)
+        await db.commit()
+
+        from app.services.buyer_auth_service import verify_buyer_reset_otp
+        with pytest.raises(HTTPException) as exc:
+            await verify_buyer_reset_otp(db, "verifywrong@test.com", "999999")
+        assert exc.value.status_code == 400
+        assert "sisa percobaan: 4" in exc.value.detail.lower()
+
+        await db.refresh(otp)
+        assert otp.is_used is False
+        assert otp.attempt_count == 1
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 9: Bootstrap
