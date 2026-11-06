@@ -43,6 +43,16 @@ Thumbs.db
 *.swo
 *~
 
+# Local-only project notes and agent context
+/AGENTS.md
+/CONTEXT.md
+/LATEST_CHANGES.md
+/DATABASE_SCHEME.md
+/DATABASE_SCHEMA_DRIFT_RECONCILIATION.md
+/FEATURES_LOGIC.md
+/WORKFLOW_SCENARIOS.md
+/CHANGELOG_SECURITY_IMPROVEMENTS.md
+
 # Static Uploads / User-generated Media (preserve folder structure)
 static/products/*
 !static/products/.gitkeep

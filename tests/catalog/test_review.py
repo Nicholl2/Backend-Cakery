@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.core.database import Base, get_db
 from app.core.security import create_access_token
+from app.core.cache import app_cache
 from app.main import app
 from app.models.buyer import Buyer
 from app.models.customer import Customer
@@ -219,6 +220,50 @@ async def test_create_review_success_for_completed_order(test_env):
         prod = await session.get(Product, test_env["prod1_id"])
         assert prod.review_count == 1
         assert prod.rating == 5.0
+
+
+@pytest.mark.asyncio
+async def test_delete_review_invalidates_cached_product_review_totals(test_env):
+    app_cache.clear()
+    token = create_access_token(user_id=test_env["buyer1_id"], role_level=0, username="buyer1", role="buyer")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        created = await ac.post(
+            "/reviews/",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "order_id": test_env["order_completed_id"],
+                "product_id": test_env["prod1_id"],
+                "rating": 5,
+                "comment": "Delicious cake, thank you!",
+            },
+        )
+        assert created.status_code == 201, created.text
+
+        products_before_delete = await ac.get("/products/")
+        assert products_before_delete.status_code == 200, products_before_delete.text
+        reviewed_product = next(
+            product for product in products_before_delete.json()
+            if product["id"] == test_env["prod1_id"]
+        )
+        assert reviewed_product["review_count"] == 1
+
+        deleted = await ac.delete(
+            f"/reviews/{created.json()['id']}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert deleted.status_code == 200, deleted.text
+
+        products_after_delete = await ac.get("/products/")
+        assert products_after_delete.status_code == 200, products_after_delete.text
+        reviewed_product = next(
+            product for product in products_after_delete.json()
+            if product["id"] == test_env["prod1_id"]
+        )
+        assert reviewed_product["review_count"] == 0
+        assert reviewed_product["rating"] == 0.0
+
+    app_cache.clear()
 
 
 @pytest.mark.asyncio

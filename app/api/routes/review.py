@@ -216,5 +216,6 @@ async def delete_review(
         buyer_id=buyer_id,
         is_admin_or_owner=is_admin_or_owner
     )
+    app_cache.invalidate_prefix("products:")
     return {"deleted": True, "review_id": review_id}
 
