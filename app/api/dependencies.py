@@ -24,11 +24,26 @@ async def get_current_user_payload(
     return decode_token(token)
 
 
+def _is_buyer_token(payload: dict) -> bool:
+    role = payload.get("role")
+    try:
+        role_level = int(payload.get("role_level"))
+    except (TypeError, ValueError):
+        role_level = None
+    return (isinstance(role, str) and role.lower() == "buyer") or role_level == 0
+
+
 async def get_current_user_id(
     payload: dict = Depends(get_current_user_payload),
     db: AsyncSession = Depends(get_db)
 ) -> int:
-    """Get current user ID from token and verify user exists"""
+    """Get an active internal user ID; Buyer IDs are a separate identity space."""
+    if _is_buyer_token(payload):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Buyers are not allowed to access internal APIs",
+        )
+
     user_id = int(payload.get("sub"))
     is_active = await user_repo.is_user_active(db, user_id)
     
@@ -222,7 +237,7 @@ async def get_current_user_role_level(
     - If user exists in DB, inactive users are rejected and demotions are enforced.
     - If DB lookup is unavailable or user unseeded in unit tests, uses token role_level.
     """
-    if payload.get("role") == "buyer" or payload.get("role_level") == 0:
+    if _is_buyer_token(payload):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Buyers are not allowed to access internal APIs"

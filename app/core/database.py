@@ -345,6 +345,71 @@ async def ensure_faq(
     return faq
 
 
+def _production_bootstrap_owner_config() -> dict[str, str]:
+    """Return validated one-time Owner credentials for a fresh production DB."""
+    username = settings.bootstrap_owner_username.strip()
+    email = settings.bootstrap_owner_email.strip()
+    password = settings.bootstrap_owner_password.get_secret_value()
+    phone_number = settings.bootstrap_owner_phone_number.strip()
+    missing = [
+        name
+        for name, value in (
+            ("BOOTSTRAP_OWNER_USERNAME", username),
+            ("BOOTSTRAP_OWNER_EMAIL", email),
+            ("BOOTSTRAP_OWNER_PASSWORD", password),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "A production database with no roles requires private initial Owner "
+            f"credentials: {', '.join(missing)}. No default account was created."
+        )
+    if "@" not in email or any(character.isspace() for character in email):
+        raise RuntimeError("BOOTSTRAP_OWNER_EMAIL must be a valid email address.")
+    if len(password) < 12 or len(password.encode("utf-8")) > 72:
+        raise RuntimeError(
+            "BOOTSTRAP_OWNER_PASSWORD must contain 12–72 UTF-8 bytes."
+        )
+    return {
+        "username": username,
+        "email": email,
+        "password": password,
+        "phone_number": phone_number,
+    }
+
+
+async def _ensure_production_bootstrap_owner(
+    db: AsyncSession, owner_role, owner_config: dict[str, str]
+):
+    """Create the first production Owner once; never reset an existing password."""
+    from app.models.user import User
+
+    result = await db.execute(
+        select(User).where(User.username == owner_config["username"])
+    )
+    existing_user = result.scalars().first()
+    if existing_user:
+        if existing_user.role_id != owner_role.id or not existing_user.is_active:
+            raise RuntimeError(
+                "The configured bootstrap Owner username already belongs to an "
+                "inactive or non-Owner account. Resolve it before production bootstrap."
+            )
+        return existing_user
+
+    phone_number = owner_config["phone_number"] or None
+    return await ensure_user(
+        db,
+        username=owner_config["username"],
+        password_plain=owner_config["password"],
+        role_id=owner_role.id,
+        nomor_wa_admin=phone_number,
+        handles_takeover=True,
+        email=owner_config["email"],
+        phone_number=phone_number,
+    )
+
+
 async def seed_initial_data(db: AsyncSession) -> None:
     """
     Seed initial master data to database if empty.
@@ -353,12 +418,24 @@ async def seed_initial_data(db: AsyncSession) -> None:
     from app.models.stock_item import SatuanEnum, KategoriEnum
 
     logger.info("Checking & seeding initial database data...")
+    is_production = settings.environment.lower() == "production"
+    production_owner_config = (
+        _production_bootstrap_owner_config() if is_production else None
+    )
 
     # 1. Ensure Roles (Owner=1, Admin=2, Staff/Seller=3, Buyer=4)
     owner_role = await ensure_role(db, "Owner", 1)
     admin_role = await ensure_role(db, "Admin", 2)
     seller_role = await ensure_role(db, "Staff", 3)
     buyer_role = await ensure_role(db, "Buyer", 4)
+
+    if is_production:
+        # Production receives role records and its explicitly configured Owner
+        # only. Never create the known development accounts or sample business data.
+        await _ensure_production_bootstrap_owner(db, owner_role, production_owner_config)
+        await db.commit()
+        logger.info("Production bootstrap created roles and the configured Owner account.")
+        return
 
     # 2. Default Internal Users (Admin / Owner / Seller)
     owner_user = await ensure_user(

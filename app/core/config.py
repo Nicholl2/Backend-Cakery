@@ -1,5 +1,5 @@
 import logging
-from pydantic import Field, AliasChoices, model_validator
+from pydantic import Field, AliasChoices, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     service_owner_numbers_key: str = ""
     service_settlement_key: str = ""
     service_wa_verification_key: str = ""
+    # Used only when initializing an empty production database. Never fall back
+    # to the development/demo credentials from seed_initial_data.
+    bootstrap_owner_username: str = ""
+    bootstrap_owner_email: str = ""
+    bootstrap_owner_password: SecretStr = SecretStr("")
+    bootstrap_owner_phone_number: str = ""
     chatbot_url: str = "http://localhost:8000"
     chatbot_internal_key: str = ""
     midtrans_server_key: str = ""

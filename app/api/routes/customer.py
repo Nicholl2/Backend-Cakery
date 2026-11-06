@@ -8,7 +8,7 @@ from app.schemas.customer import CustomerUpsert, CustomerOut, TakeoverSet, Takeo
 from app.schemas.auth import BuyerProfileResponse
 from app.services import customer_service, buyer_auth_service
 from app.repositories import wishlist_repo
-from app.schemas.product import ProductOut
+from app.schemas.product import ProductPublicOut
 from fastapi import HTTPException
 
 router = APIRouter(
@@ -186,13 +186,13 @@ async def change_buyer_phone(
     return BuyerProfileResponse.model_validate(updated)
 # ── WISHLIST ENDPOINTS ───────────────────────────────────────────────────────
 
-@buyer_router.get("/me/wishlist", response_model=list[ProductOut], summary="Lihat daftar wishlist Buyer")
+@buyer_router.get("/me/wishlist", response_model=list[ProductPublicOut], summary="Lihat daftar wishlist Buyer")
 async def get_wishlist(
     buyer: Buyer = Depends(get_current_buyer),
     db: AsyncSession = Depends(get_db),
 ):
     products = await wishlist_repo.get_buyer_wishlist_products(db, buyer.id)
-    return [ProductOut.model_validate(p) for p in products]
+    return [ProductPublicOut.model_validate(p) for p in products]
 
 @buyer_router.post("/me/wishlist/{product_id}", summary="Tambah produk ke wishlist")
 async def add_to_wishlist(

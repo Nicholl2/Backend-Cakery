@@ -49,7 +49,7 @@ async def delete_stock(stock_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{stock_id}/adjustments", response_model=StockOut,
-             dependencies=[Depends(require_admin_or_owner)], status_code=201)
+             dependencies=[Depends(require_internal_user)], status_code=201)
 async def adjust_stock(stock_id: int, data: StockAdjustmentCreate,
                        user_id: int = Depends(get_current_user_id), db: AsyncSession = Depends(get_db)):
     return await stock_service.adjust_stock(db, stock_id, data, user_id)

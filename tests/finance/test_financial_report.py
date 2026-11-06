@@ -620,7 +620,7 @@ async def test_financial_report_endpoint_authorization_and_query():
     import httpx
     from app.main import app
     from app.core.database import get_db
-    from app.api.dependencies import require_internal_user
+    from app.api.dependencies import get_current_user_role_level
 
     test_engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
@@ -636,11 +636,13 @@ async def test_financial_report_endpoint_authorization_and_query():
         async with TestSessionLocal() as session:
             yield session
 
-    async def override_auth():
-        return 2  # Admin role
+    role_level = 2
+
+    async def override_role_level():
+        return role_level
 
     app.dependency_overrides[get_db] = override_get_db
-    app.dependency_overrides[require_internal_user] = override_auth
+    app.dependency_overrides[get_current_user_role_level] = override_role_level
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         res = await client.get("/reports/financial?start_date=2026-08-31&end_date=2026-09-29")
@@ -651,6 +653,15 @@ async def test_financial_report_endpoint_authorization_and_query():
         assert "net_profit" in data
         assert "gross_profit" in data
         assert "product_profitability" in data
+
+        # Staff can use operational dashboards but must not read financials.
+        role_level = 3
+        staff_res = await client.get(
+            "/reports/financial?start_date=2026-08-31&end_date=2026-09-29"
+        )
+        assert staff_res.status_code == 403
+        staff_trends_res = await client.get("/reports/sales-trends")
+        assert staff_trends_res.status_code == 403
 
     app.dependency_overrides.clear()
     await test_engine.dispose()

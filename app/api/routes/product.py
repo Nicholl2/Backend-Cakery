@@ -6,7 +6,7 @@ from app.core.database import get_db
 from app.core.cache import app_cache
 from app.api.dependencies import get_current_user_id, require_admin_or_owner
 from app.schemas.product import (
-    ProductCreate, ProductUpdate, ProductOut, ProductImageOut,
+    ProductCreate, ProductUpdate, ProductOut, ProductPublicOut, ProductImageOut,
     SetPriceRequest, SetPriceResponse,
     PricingResponse, PriceHistoryOut,
     CategoryCreate, CategoryUpdate, CategoryResponse,
@@ -50,7 +50,7 @@ async def create_product(data: ProductCreate, db: AsyncSession = Depends(get_db)
     return result
 
 
-@router.get("/", response_model=list[ProductOut],
+@router.get("/", response_model=list[ProductPublicOut],
             summary="List produk — filter by is_active / kategori / only_available")
 async def list_products(
     only_active: bool = Query(False, description="True = hanya produk aktif (untuk Buyer Site)"),
@@ -72,10 +72,36 @@ async def list_products(
     return result
 
 
-@router.get("/{product_id}", response_model=ProductOut)
+@router.get("/internal", response_model=list[ProductOut],
+            dependencies=[Depends(require_admin_or_owner)],
+            summary="Daftar produk internal termasuk HPP dan resep (Admin/Owner)")
+async def list_internal_products(
+    only_active: bool = Query(False),
+    kategori: Optional[str] = Query(None),
+    only_available: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    return await product_service.get_all_products(
+        db,
+        only_active=only_active,
+        kategori=kategori,
+        only_available=only_available,
+    )
+
+
+@router.get("/internal/{product_id}", response_model=ProductOut,
+            dependencies=[Depends(require_admin_or_owner)],
+            summary="Detail produk internal termasuk HPP dan resep (Admin/Owner)")
+async def get_internal_product(product_id: int, db: AsyncSession = Depends(get_db)):
+    return ProductOut.model_validate(
+        await product_service.get_product_or_404(db, product_id)
+    )
+
+
+@router.get("/{product_id}", response_model=ProductPublicOut)
 async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
     p = await product_service.get_product_or_404(db, product_id)
-    return ProductOut.model_validate(p)
+    return ProductPublicOut.model_validate(p)
 
 
 @router.put("/{product_id}", response_model=ProductOut,
@@ -172,12 +198,14 @@ async def set_price(
 
 
 @router.get("/{product_id}/pricing", response_model=PricingResponse,
+            dependencies=[Depends(require_admin_or_owner)],
             summary="Lihat HPP breakdown per bahan + margin vs harga jual saat ini")
 async def get_pricing(product_id: int, db: AsyncSession = Depends(get_db)):
     return await product_service.get_pricing_breakdown(db, product_id)
 
 
 @router.get("/{product_id}/price-history", response_model=list[PriceHistoryOut],
+            dependencies=[Depends(require_admin_or_owner)],
             summary="Riwayat perubahan harga jual oleh Owner — Use Case 6 (View Price History)")
 async def get_price_history(product_id: int, db: AsyncSession = Depends(get_db)):
     return await product_service.get_price_history(db, product_id)

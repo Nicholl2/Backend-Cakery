@@ -102,7 +102,7 @@ For a newly created, empty database, set `DATABASE_URL` in `.env` and initialize
 python -m app.db_bootstrap --confirm-empty
 ```
 
-This command refuses any database that already has tables or custom enum types. It creates the schema from the current SQLAlchemy models, applies extensions/indexes, and stamps Alembic at the current head (`20261015_01`). Do not run `alembic upgrade head` directly against a blank database: the historical migration chain starts from an existing application schema, not from a blank PostgreSQL database.
+This command refuses any database that already has tables or custom enum types. It creates the schema from the current SQLAlchemy models, applies extensions/indexes, and stamps Alembic at the current head (`20261106_02`). Do not run `alembic upgrade head` directly against a blank database: the historical migration chain starts from an existing application schema, not from a blank PostgreSQL database.
 
 For a database that already has an `alembic_version` row, back it up and use `alembic upgrade head` after reviewing the pending revisions. For an existing application database without an Alembic revision, do not run `upgrade head` or blindly stamp head. First take a verified backup and rehearse on a restored clone. The read-only preflight checks schema/data prerequisites, including the exact unique stock-name index and ledger balances. If the database already includes the refund migration, adopt that exact revision instead of replaying it:
 
@@ -122,7 +122,7 @@ alembic upgrade head
 
 The 20261008_01 audit requires the refund table, enum, indexes, foreign keys, and refund totals to match that migration, and rejects objects introduced by later revisions to prevent duplicate DDL. If the audit or baseline comparison fails, stop and prepare a database-specific reconciliation plan; never reset the existing database. After 20261014_03, reconcile pending Midtrans payments using exact trusted gateway references because `pg_order_id` is nullable and historical values are not backfilled automatically.
 
-API startup note: The API lifespan no longer performs runtime DDL migrations during startup. It verifies connectivity and schema presence, and only runs idempotent initial master data seeding if the `roles` table is empty. Critical initialization failures cause the API to fail fast rather than starting in a degraded state.
+API startup note: The API lifespan no longer performs runtime DDL migrations during startup. It verifies connectivity and schema presence, and only runs initial seeding if the `roles` table is empty. Development creates demo accounts and sample business data. Production creates role records and exactly one Owner account from `BOOTSTRAP_OWNER_USERNAME`, `BOOTSTRAP_OWNER_EMAIL`, and `BOOTSTRAP_OWNER_PASSWORD`; it fails closed if any are missing, and never creates the published demo accounts or sample business data. Set these values as deployment secrets before starting the API against a newly bootstrapped production database. Critical initialization failures cause the API to fail fast rather than starting in a degraded state.
 
 ---
 
@@ -161,7 +161,7 @@ Sistem akan otomatis melakukan seeding data dasar saat startup jika tabel `roles
 python -m app.seed_data
 ```
 
-Default credentials yang dibuat:
+Kredensial berikut hanya untuk development/demo lokal; jangan gunakan di production:
 - **Owner (Admin Site)**: `imeng` / `Admin_123` (Email: `imeng@toticakery.com` | HP/WA: `08111111111`)
 - **Admin (Admin Site)**: `ameng` / `Admin_123` (Email: `ameng@toticakery.com` | HP/WA: `08222222222`)
 - **Staff (Admin Site)**: `smeng` / `Staff_123` (Email: `smeng@toticakery.com` | HP/WA: `08333333333`)

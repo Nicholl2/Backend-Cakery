@@ -6,7 +6,12 @@ from datetime import datetime, time
 from typing import List, Optional, Literal
 
 from app.core.database import get_db
-from app.api.dependencies import require_internal_user, require_owner, require_service_scope
+from app.api.dependencies import (
+    require_admin_or_owner,
+    require_internal_user,
+    require_owner,
+    require_service_scope,
+)
 from app.schemas.report import (
     FinancialReportSummary,
     ReportSummary,
@@ -57,15 +62,15 @@ async def get_report_summary(
         )
 
 
-@router.get("/financial", response_model=FinancialReportResponse)
+@router.get("/financial", response_model=FinancialReportResponse,
+            dependencies=[Depends(require_admin_or_owner)])
 async def get_financial_report(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     db: AsyncSession = Depends(get_db),
-    _ = Depends(require_internal_user)
 ) -> FinancialReportResponse:
     """
-    Get internal financial report for internal users (Owner, Admin, Staff).
+    Get the internal financial report for Owner and Admin accounts.
     """
     try:
         return await report_service.get_financial_report(db, start_date, end_date)
@@ -130,7 +135,7 @@ async def get_sales_trends(
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     granularity: Literal["day", "week", "month"] = Query("day"),
     db: AsyncSession = Depends(get_db),
-    _ = Depends(require_internal_user),
+    _ = Depends(require_admin_or_owner),
 ) -> SalesTrendsResponse:
     """Revenue, HPP, gross profit, and paid-order count by settlement period."""
     try:

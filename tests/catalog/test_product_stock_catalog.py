@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from sqlalchemy import select
 
 from app.core.database import Base, get_db
+from app.api.dependencies import get_current_user_role_level
 from app.core.security import create_access_token
 from app.main import app
 from app.models.role import Role
@@ -421,6 +422,10 @@ async def test_api_products_endpoint_integration():
         p2 = next(x for x in data if x["id"] == 2)
         assert p1["stock_quantity"] == 3
         assert p1["is_in_stock"] is True
+        assert "hpp_total" not in p1
+        assert "warning_below_hpp" not in p1
+        assert "markup_percentage" not in p1
+        assert "recipes" not in p1
         assert p2["stock_quantity"] == 0
         assert p2["is_in_stock"] is False
 
@@ -438,6 +443,23 @@ async def test_api_products_endpoint_integration():
         assert detail_data["id"] == 2
         assert detail_data["stock_quantity"] == 0
         assert detail_data["is_in_stock"] is False
+        assert "hpp_total" not in detail_data
+        assert "warning_below_hpp" not in detail_data
+
+        async def override_admin_role():
+            return 2
+
+        app.dependency_overrides[get_current_user_role_level] = override_admin_role
+        internal_list = await client.get("/products/internal")
+        assert internal_list.status_code == 200
+        internal_product = next(
+            item for item in internal_list.json() if item["id"] == 1
+        )
+        assert Decimal(internal_product["hpp_total"]) == Decimal("15000.00")
+
+        internal_detail = await client.get("/products/internal/2")
+        assert internal_detail.status_code == 200
+        assert Decimal(internal_detail.json()["hpp_total"]) == Decimal("20000.00")
 
     app.dependency_overrides.clear()
     await test_engine.dispose()

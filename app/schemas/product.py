@@ -138,8 +138,8 @@ class ProductImageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ── OUT ──────────────────────────────────────────────────────────────────────
-class ProductOut(BaseModel):
+# ── PUBLIC CATALOG OUT ──────────────────────────────────────────────────────
+class ProductPublicOut(BaseModel):
     id: int
     nama_produk: str
     deskripsi: Optional[str] = None
@@ -148,13 +148,7 @@ class ProductOut(BaseModel):
     kategori: Optional[str] = None
     category_id: Optional[int] = None
     category: Optional[CategoryResponse] = Field(None, alias='category_rel')
-    hpp_total: Optional[Decimal] = Decimal("0.00")
     harga_jual: Optional[Decimal] = None
-    warning_below_hpp: bool = Field(
-        False,
-        description="True jika harga jual tersimpan di bawah HPP saat ini; advisory saja, bukan larangan jual.",
-    )
-    markup_percentage: Optional[Decimal] = None
     is_active: bool = True
     is_available: bool = True
     stock_quantity: int = 0
@@ -170,8 +164,6 @@ class ProductOut(BaseModel):
     is_featured: bool = False
     minimum_order: int = 1
     parent_category: Optional[str] = None
-    recipes: Optional[list[RecipeOut]] = None
-    
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -182,6 +174,29 @@ class ProductOut(BaseModel):
             if not data.get('parent_category') and data.get('kategori'):
                 data['parent_category'] = data['kategori']
         return data
+
+    @model_validator(mode='after')
+    def set_primary_image_fallback(self):
+        if self.images:
+            primary_img = next((img.image_url for img in self.images if img.is_primary), None)
+            if primary_img:
+                self.image_url = primary_img
+            elif not self.image_url:
+                self.image_url = self.images[0].image_url
+        return self
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── INTERNAL PRODUCT OUT ─────────────────────────────────────────────────────
+class ProductOut(ProductPublicOut):
+    hpp_total: Optional[Decimal] = Decimal("0.00")
+    warning_below_hpp: bool = Field(
+        False,
+        description="True jika harga jual tersimpan di bawah HPP saat ini; advisory saja, bukan larangan jual.",
+    )
+    markup_percentage: Optional[Decimal] = None
+    recipes: Optional[list[RecipeOut]] = None
 
     @model_validator(mode='after')
     def compute_fields_and_fallback(self):
