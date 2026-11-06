@@ -21,8 +21,9 @@ class ReviewCreate(BaseModel):
     @model_validator(mode="after")
     def validate_and_sync_comment(self):
         if not self.comment and not self.komentar:
-            raise ValueError("Ulasan / comment wajib diisi.")
-        if self.comment is None and self.komentar is not None:
+            self.comment = None
+            self.komentar = None
+        elif self.comment is None and self.komentar is not None:
             self.comment = self.komentar
         elif self.komentar is None and self.comment is not None:
             self.komentar = self.comment

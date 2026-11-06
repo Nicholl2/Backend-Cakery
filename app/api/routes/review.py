@@ -5,6 +5,7 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_buyer_id, security
 from app.schemas.review import ReviewCreate, ReviewUpdate, ReviewPublicOut
 from app.services import review_service
+from app.core.cache import app_cache
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,9 @@ async def create_review(
             raw_files = [v for k, v in form.multi_items() if hasattr(v, "filename") and getattr(v, "filename", None)]
 
         files = [f for f in raw_files if hasattr(f, "filename") and getattr(f, "filename", None)]
-        return await review_service.create_review(db, buyer_id, data, files=files)
+        result = await review_service.create_review(db, buyer_id, data, files=files)
+        app_cache.invalidate_prefix("products:")
+        return result
 
     else:
         try:
@@ -68,7 +71,9 @@ async def create_review(
             raise
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
-        return await review_service.create_review(db, buyer_id, data, files=None)
+        result = await review_service.create_review(db, buyer_id, data, files=None)
+        app_cache.invalidate_prefix("products:")
+        return result
 
 
 @router.get("/latest", response_model=list[ReviewPublicOut],
@@ -106,13 +111,15 @@ async def update_review(
     buyer_id: int = Depends(get_current_buyer_id),
     db: AsyncSession = Depends(get_db)
 ):
-    return await review_service.update_review(
+    result = await review_service.update_review(
         db=db,
         review_id=review_id,
         buyer_id=buyer_id,
         data=data,
         is_admin_or_owner=False
     )
+    app_cache.invalidate_prefix("products:")
+    return result
 
 
 @router.post("/{review_id}/images", response_model=ReviewPublicOut,
