@@ -22,6 +22,7 @@ class ExpenseCreate(BaseModel):
     tanggal: Optional[datetime] = None
     deskripsi: Optional[str] = Field(None, max_length=500)
     penerima: Optional[str] = Field(None, max_length=120)
+    supplier_id: Optional[int] = Field(None, ge=1)
     metode_pembayaran: Optional[PaymentMethod] = None
     bukti_url: Optional[str] = Field(None, max_length=2048)
 
@@ -57,6 +58,7 @@ class ExpenseUpdate(BaseModel):
     tanggal: Optional[datetime] = None
     deskripsi: Optional[str] = Field(None, max_length=500)
     penerima: Optional[str] = Field(None, max_length=120)
+    supplier_id: Optional[int] = Field(None, ge=1)
     metode_pembayaran: Optional[PaymentMethod] = None
     bukti_url: Optional[str] = Field(None, max_length=2048)
 
@@ -109,6 +111,8 @@ class ExpenseResponse(BaseModel):
     updated_at: Optional[datetime] = None
     deskripsi: Optional[str] = None
     penerima: Optional[str] = None
+    supplier_id: Optional[int] = None
+    supplier_name: Optional[str] = None
     metode_pembayaran: Optional[PaymentMethod] = None
     bukti_url: Optional[str] = None
     is_voided: bool = False

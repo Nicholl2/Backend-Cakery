@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import selectinload
 from app.models.purchasing import Supplier, Purchase, PurchaseItem
+from app.models.expense import Expense
 from app.models.stock_item import StockItem
 from app.schemas.purchasing import (
     SupplierCreate, SupplierUpdate,
@@ -67,18 +68,24 @@ async def update_supplier(
 
 
 async def delete_supplier(db: AsyncSession, supplier_id: int) -> bool:
-    """Delete a supplier. Check if it has purchases first."""
+    """Delete a supplier only when no purchase or expense references it."""
     supplier = await get_supplier_or_404(db, supplier_id)
     
-    # Check if supplier has any purchases
-    result = await db.execute(
+    purchase_result = await db.execute(
         select(func.count()).select_from(Purchase).where(Purchase.supplier_id == supplier_id)
     )
-    purchases = result.scalar_one()
-    if purchases > 0:
+    purchases = purchase_result.scalar_one()
+    expense_result = await db.execute(
+        select(func.count()).select_from(Expense).where(Expense.supplier_id == supplier_id)
+    )
+    expenses = expense_result.scalar_one()
+    if purchases or expenses:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Supplier memiliki {purchases} pemesanan. Hapus pemesanan terlebih dahulu.",
+            detail=(
+                f"Supplier masih digunakan oleh {purchases} pemesanan dan {expenses} expense. "
+                "Lepas relasi tersebut terlebih dahulu."
+            ),
         )
     
     await db.delete(supplier)

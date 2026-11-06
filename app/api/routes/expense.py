@@ -39,6 +39,7 @@ async def create_expense(
     - **kategori**: Expense category (e.g., 'electricity', 'salary', 'rent')
     - **jumlah**: Expense amount (must be positive decimal)
     - **tanggal**: Optional date (defaults to current date/time)
+    - **supplier_id**: Optional supplier link used in the financial supplier-spending breakdown
     """
     return await expense_service.create_expense(db, expense_data, recorded_by=user_id)
 
@@ -51,7 +52,7 @@ async def update_expense(
     role_level: int = Depends(require_admin_or_owner),
     db: AsyncSession = Depends(get_db),
 ) -> ExpenseDetailResponse:
-    """Edit an active expense. All changed fields are recorded in the audit trail."""
+    """Edit an active expense, including its optional supplier link; changes are audited."""
     return await expense_service.update_expense(db, expense_id, expense_data, updated_by=user_id)
 
 

@@ -21,6 +21,7 @@ class Supplier(Base):
     
     # Relationships
     purchases = relationship("Purchase", back_populates="supplier")
+    expenses = relationship("Expense", back_populates="supplier", passive_deletes="all")
 
 
 class Purchase(Base):

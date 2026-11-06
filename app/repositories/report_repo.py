@@ -226,22 +226,55 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
         })
 
     # ── 9. Supplier Spending (Pengeluaran per Supplier) ─────────────────────────
+    purchase_spending = (
+        select(
+            Purchase.supplier_id.label("supplier_id"),
+            func.sum(Purchase.total_harga).label("po_spending"),
+            func.count(Purchase.id).label("purchase_count"),
+        )
+        .where(
+            Purchase.is_cancelled.is_(False),
+            func.coalesce(Purchase.tanggal_pemesanan, Purchase.created_at) >= start_dt,
+            func.coalesce(Purchase.tanggal_pemesanan, Purchase.created_at) <= end_dt,
+        )
+        .group_by(Purchase.supplier_id)
+        .subquery()
+    )
+    expense_spending = (
+        select(
+            Expense.supplier_id.label("supplier_id"),
+            func.sum(Expense.jumlah).label("expense_spending"),
+            func.count(Expense.id).label("expense_count"),
+        )
+        .where(
+            Expense.supplier_id.is_not(None),
+            Expense.is_voided.is_(False),
+            Expense.tanggal >= start_dt,
+            Expense.tanggal <= end_dt,
+        )
+        .group_by(Expense.supplier_id)
+        .subquery()
+    )
+    po_amount = func.coalesce(purchase_spending.c.po_spending, Decimal("0.00"))
+    expense_amount = func.coalesce(expense_spending.c.expense_spending, Decimal("0.00"))
     supplier_spending_query = await _execute_readonly(
         db,
         select(
             Supplier.id.label("supplier_id"),
             Supplier.nama_supplier,
-            func.sum(Purchase.total_harga).label("total_spending"),
-            func.count(Purchase.id).label("purchase_count")
+            (po_amount + expense_amount).label("total_spending"),
+            po_amount.label("po_spending"),
+            expense_amount.label("expense_spending"),
+            func.coalesce(purchase_spending.c.purchase_count, 0).label("purchase_count"),
+            func.coalesce(expense_spending.c.expense_count, 0).label("expense_count"),
         )
-        .join(Purchase, Purchase.supplier_id == Supplier.id)
-        .where(
-            Purchase.is_cancelled.is_(False),
-            func.coalesce(Purchase.tanggal_pemesanan, Purchase.created_at) >= start_dt,
-            func.coalesce(Purchase.tanggal_pemesanan, Purchase.created_at) <= end_dt
-        )
-        .group_by(Supplier.id, Supplier.nama_supplier)
-        .order_by(func.sum(Purchase.total_harga).desc())
+        .outerjoin(purchase_spending, purchase_spending.c.supplier_id == Supplier.id)
+        .outerjoin(expense_spending, expense_spending.c.supplier_id == Supplier.id)
+        .where(or_(
+            purchase_spending.c.supplier_id.is_not(None),
+            expense_spending.c.supplier_id.is_not(None),
+        ))
+        .order_by((po_amount + expense_amount).desc(), Supplier.nama_supplier.asc())
     )
     supplier_rows = supplier_spending_query.all()
 
@@ -250,7 +283,10 @@ async def get_financial_report_data(db: AsyncSession, start_dt: datetime, end_dt
             "supplier_id": int(row.supplier_id),
             "nama_supplier": str(row.nama_supplier),
             "total_spending": Decimal(str(row.total_spending or 0)),
+            "po_spending": Decimal(str(row.po_spending or 0)),
+            "expense_spending": Decimal(str(row.expense_spending or 0)),
             "purchase_count": int(row.purchase_count or 0),
+            "expense_count": int(row.expense_count or 0),
         }
         for row in supplier_rows
     ]

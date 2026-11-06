@@ -19,6 +19,7 @@ EDITABLE_FIELDS = (
     "tanggal",
     "deskripsi",
     "penerima",
+    "supplier_id",
     "metode_pembayaran",
     "bukti_url",
 )
@@ -36,7 +37,19 @@ def _expense_detail(expense) -> ExpenseDetailResponse:
     return ExpenseDetailResponse(
         **expense.__dict__,
         recorded_by_username=expense.recorded_by_user.username if expense.recorded_by_user else "Unknown",
+        supplier_name=expense.supplier.nama_supplier if expense.supplier else None,
     )
+
+
+async def _validated_supplier_id(db: AsyncSession, supplier_id: Optional[int]) -> Optional[int]:
+    if supplier_id is None:
+        return None
+    from app.services.purchasing_service import get_supplier_or_404
+
+    supplier = await get_supplier_or_404(db, supplier_id)
+    if not supplier.is_active:
+        raise HTTPException(status_code=422, detail="Supplier tidak aktif.")
+    return supplier.id
 
 
 async def create_expense(
@@ -45,6 +58,7 @@ async def create_expense(
     recorded_by: int
 ) -> ExpenseDetailResponse:
     """Create new expense (RBAC: Owner/Admin only)"""
+    supplier_id = await _validated_supplier_id(db, expense_data.supplier_id)
     expense = await expense_repo.create_expense(
         db,
         kategori=expense_data.kategori,
@@ -53,6 +67,7 @@ async def create_expense(
         tanggal=expense_data.tanggal,
         deskripsi=expense_data.deskripsi,
         penerima=expense_data.penerima,
+        supplier_id=supplier_id,
         metode_pembayaran=expense_data.metode_pembayaran,
         bukti_url=expense_data.bukti_url,
     )
@@ -87,6 +102,8 @@ async def update_expense(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Expense yang dibatalkan tidak dapat diedit")
 
     changes = expense_data.model_dump(exclude_unset=True)
+    if "supplier_id" in changes:
+        changes["supplier_id"] = await _validated_supplier_id(db, changes["supplier_id"])
     audit_changes = {}
     for field, new_value in changes.items():
         old_value = getattr(expense, field)

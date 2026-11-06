@@ -18,6 +18,7 @@ class Expense(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     deskripsi = Column(String(500), nullable=True)
     penerima = Column(String(120), nullable=True)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=True, index=True)
     metode_pembayaran = Column(String(20), nullable=True)
     bukti_url = Column(String(2048), nullable=True)
     is_voided = Column(Boolean, nullable=False, default=False, server_default="false")
@@ -28,6 +29,7 @@ class Expense(Base):
 
     # Relationships
     recorded_by_user = relationship("User", back_populates="expenses", foreign_keys=[recorded_by])
+    supplier = relationship("Supplier", back_populates="expenses")
     audit_events = relationship("ExpenseAudit", back_populates="expense", cascade="all, delete-orphan")
 
     def __repr__(self):

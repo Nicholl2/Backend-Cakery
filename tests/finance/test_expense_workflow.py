@@ -22,10 +22,11 @@ from app.models.order import (
     OrderStatusEnum,
 )
 from app.models.payment import Payment, PaymentStatusEnum, PaymentTypeEnum
+from app.models.purchasing import Purchase, Supplier
 from app.models.role import Role
 from app.models.user import User
 from app.schemas.expense import ExpenseCancel, ExpenseCreate, ExpenseUpdate
-from app.services import expense_service, report_service
+from app.services import expense_service, purchasing_service, report_service
 
 
 @pytest.fixture
@@ -54,6 +55,7 @@ def test_expense_create_validation_and_normalization():
     assert payload.kategori == "Listrik"
     assert payload.deskripsi == "Tagihan dapur"
     assert payload.jumlah == Decimal("125000.50")
+    assert payload.supplier_id is None
 
     with pytest.raises(ValidationError):
         ExpenseCreate(kategori="AB", jumlah="1")
@@ -70,6 +72,7 @@ def test_expense_create_validation_and_normalization():
 def test_expense_update_requires_real_editable_fields():
     assert ExpenseUpdate(jumlah="20").jumlah == Decimal("20")
     assert ExpenseUpdate(deskripsi=None).model_fields_set == {"deskripsi"}
+    assert ExpenseUpdate(supplier_id=None).model_fields_set == {"supplier_id"}
     with pytest.raises(ValidationError):
         ExpenseUpdate()
     with pytest.raises(ValidationError):
@@ -147,6 +150,109 @@ async def test_expense_create_edit_void_audit_and_summary(db_session):
 
     audit_rows = await db_session.execute(select(ExpenseAudit).where(ExpenseAudit.expense_id == created.id))
     assert len(audit_rows.scalars().all()) == 3
+
+
+@pytest.mark.asyncio
+async def test_linked_expenses_appear_in_supplier_spending_report(db_session):
+    role = Role(nama_role="Owner", level=1)
+    db_session.add(role)
+    await db_session.flush()
+    user = User(username="supplier-expense-owner", password_hash="not-used", role_id=role.id)
+    supplier = Supplier(nama_supplier="Supplier Terhubung")
+    inactive_supplier = Supplier(nama_supplier="Supplier Tidak Aktif", is_active=False)
+    db_session.add_all([user, supplier, inactive_supplier])
+    await db_session.flush()
+
+    with pytest.raises(HTTPException) as inactive_supplier_error:
+        await expense_service.create_expense(
+            db_session,
+            ExpenseCreate(
+                kategori="Bahan baku",
+                jumlah="1000",
+                supplier_id=inactive_supplier.id,
+            ),
+            recorded_by=user.id,
+        )
+    assert inactive_supplier_error.value.status_code == 422
+    with pytest.raises(HTTPException) as missing_supplier_error:
+        await expense_service.create_expense(
+            db_session,
+            ExpenseCreate(kategori="Bahan baku", jumlah="1000", supplier_id=999),
+            recorded_by=user.id,
+        )
+    assert missing_supplier_error.value.status_code == 404
+
+    db_session.add_all([
+        Purchase(
+            supplier_id=supplier.id,
+            created_by=user.id,
+            nomor_po="PO-LINK-001",
+            tanggal_pemesanan=datetime(2026, 11, 5, tzinfo=timezone.utc),
+            total_harga=Decimal("100000.00"),
+        ),
+        Purchase(
+            supplier_id=supplier.id,
+            created_by=user.id,
+            nomor_po="PO-LINK-002",
+            tanggal_pemesanan=datetime(2026, 11, 6, tzinfo=timezone.utc),
+            total_harga=Decimal("200000.00"),
+        ),
+    ])
+    await db_session.flush()
+
+    expense_a = await expense_service.create_expense(
+        db_session,
+        ExpenseCreate(
+            kategori="Bahan baku",
+            jumlah="20000",
+            tanggal=datetime(2026, 11, 7, tzinfo=timezone.utc),
+            supplier_id=supplier.id,
+        ),
+        recorded_by=user.id,
+    )
+    assert expense_a.supplier_id == supplier.id
+    assert expense_a.supplier_name == supplier.nama_supplier
+    expense_b = await expense_service.create_expense(
+        db_session,
+        ExpenseCreate(
+            kategori="Jasa supplier",
+            jumlah="30000",
+            tanggal=datetime(2026, 11, 8, tzinfo=timezone.utc),
+            supplier_id=supplier.id,
+        ),
+        recorded_by=user.id,
+    )
+    await expense_service.void_expense(db_session, expense_b.id, "Duplikat", user.id)
+
+    report = await report_service.get_financial_report(db_session, "2026-11-01", "2026-11-30")
+
+    assert len(report.supplier_spending) == 1
+    row = report.supplier_spending[0]
+    assert row.supplier_id == supplier.id
+    assert row.nama_supplier == "Supplier Terhubung"
+    assert row.total_spending == Decimal("320000.00")
+    assert row.po_spending == Decimal("300000.00")
+    assert row.expense_spending == Decimal("20000.00")
+    assert row.purchase_count == 2
+    assert row.expense_count == 1
+    assert report.total_expenses == Decimal("20000.00")
+
+    expense_only_supplier = Supplier(nama_supplier="Supplier Hanya Expense")
+    db_session.add(expense_only_supplier)
+    await db_session.flush()
+    await expense_service.create_expense(
+        db_session,
+        ExpenseCreate(
+            kategori="Konsultasi supplier",
+            jumlah="10000",
+            tanggal=datetime(2026, 11, 9, tzinfo=timezone.utc),
+            supplier_id=expense_only_supplier.id,
+        ),
+        recorded_by=user.id,
+    )
+    with pytest.raises(HTTPException) as linked_supplier_delete:
+        await purchasing_service.delete_supplier(db_session, expense_only_supplier.id)
+    assert linked_supplier_delete.value.status_code == 409
 
 
 @pytest.mark.asyncio

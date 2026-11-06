@@ -104,7 +104,10 @@ class SupplierSpendingItem(BaseModel):
     supplier_id: int
     nama_supplier: str
     total_spending: Decimal
+    po_spending: Decimal = Decimal("0.00")
+    expense_spending: Decimal = Decimal("0.00")
     purchase_count: int
+    expense_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -16,6 +16,7 @@ async def create_expense(
     tanggal: Optional[datetime] = None,
     deskripsi: Optional[str] = None,
     penerima: Optional[str] = None,
+    supplier_id: Optional[int] = None,
     metode_pembayaran: Optional[str] = None,
     bukti_url: Optional[str] = None,
 ) -> Expense:
@@ -27,6 +28,7 @@ async def create_expense(
         tanggal=tanggal or datetime.now(timezone.utc),
         deskripsi=deskripsi,
         penerima=penerima,
+        supplier_id=supplier_id,
         metode_pembayaran=metode_pembayaran,
         bukti_url=bukti_url,
     )
@@ -40,7 +42,7 @@ async def get_expense_by_id(db: AsyncSession, expense_id: int) -> Optional[Expen
     result = await db.execute(
         select(Expense)
         .where(Expense.id == expense_id)
-        .options(selectinload(Expense.recorded_by_user))
+        .options(selectinload(Expense.recorded_by_user), selectinload(Expense.supplier))
     )
     return result.scalars().first()
 
@@ -50,7 +52,7 @@ async def get_expense_for_update(db: AsyncSession, expense_id: int) -> Optional[
         select(Expense)
         .where(Expense.id == expense_id)
         .with_for_update()
-        .options(selectinload(Expense.recorded_by_user))
+        .options(selectinload(Expense.recorded_by_user), selectinload(Expense.supplier))
     )
     return result.scalars().first()
 
@@ -91,7 +93,10 @@ async def get_all_expenses(
     end_date: Optional[datetime] = None
 ) -> List[Expense]:
     """Get expenses with optional filters"""
-    query = select(Expense).options(selectinload(Expense.recorded_by_user))
+    query = select(Expense).options(
+        selectinload(Expense.recorded_by_user),
+        selectinload(Expense.supplier),
+    )
 
     filters = []
     if kategori:
