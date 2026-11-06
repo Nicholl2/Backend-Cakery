@@ -47,7 +47,7 @@ async def get_all(
     if only_active:
         q = q.where(Product.is_active == True)
     if kategori:
-        q = q.where(Product.kategori == kategori)
+        q = q.where(func.lower(Product.kategori) == kategori.lower())
     result = await db.execute(q.order_by(Product.nama_produk))
     return result.scalars().all()
 
@@ -66,7 +66,7 @@ async def search(
     if only_active:
         q = q.where(Product.is_active == True)
     if kategori:
-        q = q.where(Product.kategori == kategori)
+        q = q.where(func.lower(Product.kategori) == kategori.lower())
     if query_str:
         q = q.where(Product.nama_produk.ilike(f"%{query_str}%"))
     result = await db.execute(q.order_by(Product.nama_produk))
