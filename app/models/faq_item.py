@@ -11,6 +11,8 @@ class FaqItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     pertanyaan = Column(Text, nullable=False)
     jawaban = Column(Text, nullable=False)
+    pertanyaan_en = Column(Text, nullable=True)
+    jawaban_en = Column(Text, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     is_active = Column(Boolean, default=True, server_default="true", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

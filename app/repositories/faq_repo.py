@@ -12,12 +12,16 @@ async def create_faq(
     pertanyaan: str,
     jawaban: str,
     created_by: int,
+    pertanyaan_en: Optional[str] = None,
+    jawaban_en: Optional[str] = None,
     is_active: bool = True
 ) -> FaqItem:
     """Create new FAQ item"""
     faq = FaqItem(
         pertanyaan=pertanyaan,
         jawaban=jawaban,
+        pertanyaan_en=pertanyaan_en,
+        jawaban_en=jawaban_en,
         created_by=created_by,
         is_active=is_active
     )
@@ -56,22 +60,12 @@ async def get_all_faqs(
 async def update_faq(
     db: AsyncSession,
     faq_id: int,
-    pertanyaan: Optional[str] = None,
-    jawaban: Optional[str] = None,
-    is_active: Optional[bool] = None
+    changes: dict
 ) -> Optional[FaqItem]:
     """Update FAQ item"""
-    update_data = {}
-    if pertanyaan is not None:
-        update_data["pertanyaan"] = pertanyaan
-    if jawaban is not None:
-        update_data["jawaban"] = jawaban
-    if is_active is not None:
-        update_data["is_active"] = is_active
-
-    if update_data:
+    if changes:
         await db.execute(
-            update(FaqItem).where(FaqItem.id == faq_id).values(**update_data)
+            update(FaqItem).where(FaqItem.id == faq_id).values(**changes)
         )
         await db.flush()
 

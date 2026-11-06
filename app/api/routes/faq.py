@@ -69,6 +69,7 @@ async def get_faq(
 
 
 @router.put("/{faq_id}", response_model=FaqDetailResponse, status_code=status.HTTP_200_OK)
+@router.patch("/{faq_id}", response_model=FaqDetailResponse, status_code=status.HTTP_200_OK)
 async def update_faq(
     faq_id: int,
     faq_data: FaqUpdate,

@@ -15,6 +15,8 @@ async def create_faq(
         db,
         pertanyaan=faq_data.pertanyaan,
         jawaban=faq_data.jawaban,
+        pertanyaan_en=faq_data.pertanyaan_en,
+        jawaban_en=faq_data.jawaban_en,
         created_by=created_by,
         is_active=faq_data.is_active
     )
@@ -82,13 +84,14 @@ async def update_faq(
         )
 
     # Update FAQ
-    updated_faq = await faq_repo.update_faq(
-        db,
-        faq_id,
-        pertanyaan=faq_data.pertanyaan,
-        jawaban=faq_data.jawaban,
-        is_active=faq_data.is_active
-    )
+    changes = faq_data.model_dump(exclude_unset=True)
+    # Required Indonesian fields and the active flag cannot be cleared with null.
+    # English fields are nullable by design, so explicit null clears them.
+    for field_name in ("pertanyaan", "jawaban", "is_active"):
+        if field_name in changes and changes[field_name] is None:
+            changes.pop(field_name)
+
+    updated_faq = await faq_repo.update_faq(db, faq_id, changes=changes)
 
     await db.commit()
 
