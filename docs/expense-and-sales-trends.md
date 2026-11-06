@@ -16,7 +16,7 @@ Only Owner/Admin can create, edit, or void expenses. Creation records the user a
 
 List/detail endpoints may show voided records with their status. Existing date/category filters and pagination remain available. Summary totals, category breakdown, and count must all use the same date window and exclude voided rows.
 
-Inventory purchases are not operating expenses. Supplier spending remains a separate procurement metric, and HPP is recognized through sold-order snapshots in the financial report.
+Inventory purchases remain purchase records, not operating expenses. Supplier spending is a separate breakdown that combines non-cancelled PO totals (including POs not yet received) with active expenses explicitly linked through `supplier_id`. The report exposes the PO and expense subtotals separately. Linked expenses are already included in `expenses_total` and `net_profit`; do not add supplier spending again to P&L totals. Existing free-text `penerima` values are not auto-mapped to suppliers.
 
 ## Sales trends
 
@@ -39,12 +39,13 @@ Add nullable expense metadata and void/audit columns with safe defaults for exis
 
 ## Frontend contract
 
-- `POST /expenses`: `{kategori, jumlah, tanggal?, deskripsi?, penerima?, metode_pembayaran?, bukti_url?}`.
-- `PATCH /expenses/{id}`: partial update of editable expense fields.
+- `POST /expenses`: `{kategori, jumlah, tanggal?, deskripsi?, penerima?, supplier_id?, metode_pembayaran?, bukti_url?}`. Supplier linkage is optional and accepts active supplier IDs.
+- `PATCH /expenses/{id}`: partial update of editable expense fields. Omit `supplier_id` to leave the link unchanged or send `null` to remove it.
 - `POST /expenses/{id}/cancel`: `{reason}`; display canceled state and reason.
 - `GET /expenses` and `GET /expenses/{id}` expose expense metadata and void status.
 - `GET /expenses/{id}/audit` exposes immutable audit events to Owner/Admin.
 - `GET /expenses/summary/dashboard` returns period-consistent total, category breakdown, and count.
+- `GET /reports/financial` returns `supplier_spending` entries with `total_spending`, `po_spending`, `expense_spending`, `purchase_count`, and `expense_count` per supplier.
 - `GET /reports/sales-trends?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&granularity=day|week|month` returns the chart series.
 
 Receipt storage is represented by an optional HTTPS URL. This backend change does not add binary receipt upload; the frontend should only submit a URL from an existing trusted upload flow or leave it empty.

@@ -30,6 +30,7 @@ ENV/
 vercel.json
 procfile
 Procfile
+catalog_draft/
 .vercel/
 api/
 
