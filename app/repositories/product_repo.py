@@ -15,8 +15,13 @@ async def create(db: AsyncSession, data: ProductCreate) -> Product:
     product = Product(**values)
     db.add(product)
     await db.commit()
-    await db.refresh(product)
-    return product
+    # ProductOut reads category_rel, recipes, images, and price history from
+    # ORM attributes. Reload with eager options so Pydantic serialization does
+    # not trigger implicit async lazy loads after the product has been committed.
+    created_product = await get_by_id(db, product.id)
+    if created_product is None:
+        raise RuntimeError("Produk baru tersimpan tetapi tidak dapat dimuat kembali.")
+    return created_product
 
 
 async def get_by_id(db: AsyncSession, product_id: int) -> Optional[Product]:

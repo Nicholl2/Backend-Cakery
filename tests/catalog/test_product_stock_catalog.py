@@ -16,7 +16,7 @@ from app.main import app
 from app.models.role import Role
 from app.models.user import User
 from app.models.buyer import Buyer
-from app.models.product import Product
+from app.models.product import Product, Category
 from app.models.stock_item import StockItem, SatuanEnum, KategoriEnum
 from app.models.recipe import Recipe
 from app.models.price_history import PriceHistory
@@ -122,6 +122,33 @@ async def test_pydantic_schema_aliases_and_computed_in_stock():
     )
     assert p4.is_available is False
     assert p4.is_in_stock is False
+
+
+@pytest.mark.asyncio
+async def test_create_product_response_eagerly_loads_category_relationship(test_session: AsyncSession):
+    db = test_session
+    db.add(Category(id=5, name="Kue Kering"))
+    await db.commit()
+
+    product = await product_service.create_product(
+        db,
+        ProductCreate(
+            nama_produk="Kue Puff Isi 1",
+            deskripsi_id="Lezat",
+            deskripsi_en="Delicious",
+            category_id=5,
+            kategori="Kue Kering",
+            harga_jual=Decimal("10000"),
+            is_active=True,
+            is_available=True,
+            minimum_order=1,
+        ),
+    )
+
+    assert product.category is not None
+    assert product.category.id == 5
+    assert product.recipes == []
+    assert product.images == []
 
 
 @pytest.mark.asyncio
