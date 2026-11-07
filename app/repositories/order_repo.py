@@ -2,11 +2,12 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func, cast, String
+from sqlalchemy import select, and_, func, cast, String, or_
 from sqlalchemy.orm import selectinload
 
 from app.models.order import Order, OrderItem, Invoice, OrderStatusEnum, InvoiceStatusEnum
 from app.models.customer import Customer
+from app.models.product import Product
 
 
 async def create_order(db: AsyncSession, order_obj: Order) -> Order:
@@ -182,10 +183,11 @@ async def get_all_orders(
     offset: int = 0,
     status: Optional[str] = None,
     created_via: Optional[str] = None,
+    search: Optional[str] = None,
 ) -> list[Order]:
     query = (
         select(Order)
-        .order_by(Order.created_at.desc())
+        .order_by(Order.created_at.desc(), Order.id.desc())
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
@@ -200,6 +202,23 @@ async def get_all_orders(
     if created_via:
         created_via_val = created_via.value if hasattr(created_via, "value") else str(created_via)
         query = query.where(func.lower(cast(Order.created_via, String)) == created_via_val.lower())
+
+    if search:
+        # Treat SQL LIKE metacharacters as literal user input. All values remain
+        # bound parameters; this prevents wildcard broadening and SQL injection.
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        matches = [
+            cast(Order.id, String).ilike(pattern, escape="\\"),
+            Customer.nama.ilike(pattern, escape="\\"),
+            Customer.nomor_wa.ilike(pattern, escape="\\"),
+            Order.order_items.any(or_(
+                OrderItem.product_name_snapshot.ilike(pattern, escape="\\"),
+                OrderItem.custom_product_name.ilike(pattern, escape="\\"),
+                OrderItem.product.has(Product.nama_produk.ilike(pattern, escape="\\")),
+            )),
+        ]
+        query = query.join(Customer, Customer.id == Order.customer_id).where(or_(*matches))
     
     query = query.limit(limit).offset(offset)
     result = await db.execute(query)

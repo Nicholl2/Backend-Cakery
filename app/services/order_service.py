@@ -686,9 +686,12 @@ async def get_seller_orders(
     limit: int = 100,
     offset: int = 0,
     status: Optional[str] = None,
+    search: Optional[str] = None,
 ) -> list[Order]:
     try:
-        orders = await order_repo.get_all_orders(db, limit=limit, offset=offset, status=status)
+        orders = await order_repo.get_all_orders(
+            db, limit=limit, offset=offset, status=status, search=search
+        )
         for o in orders:
             await _attach_payment_amounts(db, o)
         return orders

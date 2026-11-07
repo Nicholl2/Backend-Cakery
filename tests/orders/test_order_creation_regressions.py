@@ -11,12 +11,13 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base
 from app.models.customer import Customer
 from app.models.buyer import Buyer
-from app.models.order import Invoice, Order
+from app.models.order import Invoice, Order, OrderItem, OrderStatusEnum, MetodePengirimanEnum
 from app.models.product import Product
 from app.models.recipe import Recipe
 from app.models.stock_item import KategoriEnum, SatuanEnum, StockItem
 from app.schemas.order import BuyerOrderCreate, OrderItemCreate, OrderOut
 from app.services import order_service
+from app.repositories import order_repo
 from app.services.buyer_auth_service import change_buyer_phone
 from app.core.security import hash_password
 
@@ -60,6 +61,41 @@ async def make_order(db, *, customer_id=1, quantity=1, key=None):
         metode_pengiriman="pickup", fulfillment_date=None,
         email_seller_on_commit=False, idempotency_key=key,
     )
+
+
+@pytest.mark.asyncio
+async def test_seller_order_search_matches_customer_product_id_and_escapes_wildcards(order_db):
+    db, _ = order_db
+    matching = Order(
+        id=214, customer_id=1, status=OrderStatusEnum.pending,
+        metode_pengiriman=MetodePengirimanEnum.pickup,
+        total_harga_pesanan=Decimal("10000"), created_via="seller",
+    )
+    other = Order(
+        id=215, customer_id=2, status=OrderStatusEnum.in_process,
+        metode_pengiriman=MetodePengirimanEnum.delivery,
+        total_harga_pesanan=Decimal("10000"), created_via="seller",
+    )
+    db.add_all([matching, other])
+    await db.flush()
+    db.add_all([
+        OrderItem(order_id=matching.id, product_id=1, product_name_snapshot="Chocolate Cake",
+                  jumlah=1, subtotal=Decimal("10000"), hpp_snapshot=Decimal("1000")),
+        OrderItem(order_id=other.id, custom_product_name="100% Cocoa Cake",
+                  jumlah=1, subtotal=Decimal("10000"), hpp_snapshot=Decimal("1000")),
+    ])
+    await db.commit()
+
+    assert [o.id for o in await order_repo.get_all_orders(db, search="Order Buyer")] == [214]
+    assert [o.id for o in await order_repo.get_all_orders(db, search="081299900001")] == [214]
+    assert [o.id for o in await order_repo.get_all_orders(db, search="Chocolate")] == [214]
+    assert [o.id for o in await order_repo.get_all_orders(db, search="21")] == [215, 214]
+    # Percent is literal, so this does not behave like a match-all wildcard.
+    assert [o.id for o in await order_repo.get_all_orders(db, search="100%")] == [215]
+    assert [o.id for o in await order_repo.get_all_orders(
+        db, status=OrderStatusEnum.pending.value, search="Cake"
+    )] == [214]
+    assert await order_repo.get_all_orders(db, search="no matching order") == []
 
 
 @pytest.mark.asyncio

@@ -151,6 +151,7 @@ async def cancel_buyer_order(
             summary="List seluruh pesanan toko (Khusus Staff/Admin/Owner)")
 async def list_seller_orders(
     order_status: Optional[OrderStatusEnum] = Query(None, alias="status", description="Filter status pesanan"),
+    search: Optional[str] = Query(None, min_length=1, max_length=100, description="Cari ID order, nama/nomor WhatsApp customer, atau nama produk"),
     limit: int = Query(100, ge=1, le=500, description="Jumlah data per halaman"),
     offset: int = Query(0, ge=0, description="Offset pagination"),
     db: AsyncSession = Depends(get_db),
@@ -159,11 +160,18 @@ async def list_seller_orders(
     Mengambil daftar seluruh pesanan untuk Seller (Staff/Admin/Owner) dengan relasi lengkap (Customer, OrderItems, Invoice, Payments).
     """
     try:
+        if search is not None:
+            search = search.strip()
+            if search and any(ord(char) < 32 or ord(char) == 127 for char in search):
+                raise HTTPException(status_code=422, detail="Parameter search mengandung karakter yang tidak valid.")
+            if not search:
+                search = None
         orders = await order_service.get_seller_orders(
             db,
             limit=limit,
             offset=offset,
             status=order_status.value if order_status else None,
+            search=search,
         )
         return [OrderOut.model_validate(o) for o in orders]
     except HTTPException:
