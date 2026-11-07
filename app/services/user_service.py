@@ -355,7 +355,9 @@ async def admin_update_user(
             )
         user.phone_number = data.phone_number
 
-    if data.nomor_wa_admin is not None:
+    # Explicit null/blank means the Owner is clearing this WhatsApp recipient;
+    # omitted field means leave the existing value unchanged.
+    if "nomor_wa_admin" in data.model_fields_set:
         user.nomor_wa_admin = data.nomor_wa_admin
 
     # Update role jika disediakan

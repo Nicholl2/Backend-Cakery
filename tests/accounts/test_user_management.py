@@ -13,7 +13,8 @@ from app.core.database import Base, get_db
 from app.main import app
 from app.models.user import User
 from app.models.role import Role
-from app.core.security import create_access_token, hash_password
+from app.repositories.user_repo import get_takeover_handlers
+from app.core.security import create_access_token, hash_password, verify_password
 from app.schemas.user import UserCreate, UserOut
 from app.services import user_service
 
@@ -136,6 +137,38 @@ async def test_user_creation_and_eager_loading():
         assert edit_data["role_id"] == 2
         assert edit_data["role_name"] == "Admin"
         assert edit_data["handles_takeover"] is True
+
+        # Empty password from the edit form means "do not reset password".
+        # The same request can turn off takeover and clear the WhatsApp recipient.
+        res_disable_takeover = await client.put(
+            f"/api/users/{new_admin_id}",
+            json={"password": "", "handles_takeover": False, "nomor_wa_admin": ""},
+            headers=owner_headers,
+        )
+        assert res_disable_takeover.status_code == 200, res_disable_takeover.text
+        disabled_data = res_disable_takeover.json()
+        assert disabled_data["handles_takeover"] is False
+        assert disabled_data["nomor_wa_admin"] is None
+        async with test_session_local() as db:
+            unchanged_user = await db.get(User, new_admin_id)
+            assert unchanged_user is not None
+            assert verify_password("Password_123", unchanged_user.password_hash)
+
+        # Non-empty passwords shorter than the policy remain rejected.
+        res_short_password = await client.put(
+            f"/api/users/{new_admin_id}",
+            json={"password": "short", "handles_takeover": True},
+            headers=owner_headers,
+        )
+        assert res_short_password.status_code == 422
+        async with test_session_local() as db:
+            unchanged_user = await db.get(User, new_admin_id)
+            assert unchanged_user is not None
+            assert unchanged_user.handles_takeover is False
+            assert unchanged_user.nomor_wa_admin is None
+            assert verify_password("Password_123", unchanged_user.password_hash)
+            handlers = await get_takeover_handlers(db)
+            assert new_admin_id not in {handler.id for handler in handlers}
 
         # (g) PATCH /users/{id}/deactivate - Deactivate user
         res_deact = await client.patch(

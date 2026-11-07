@@ -108,6 +108,16 @@ class UserAdminUpdate(BaseModel):
     is_active: Optional[bool] = None
     password: Optional[str] = Field(None, min_length=8, description="Reset password baru oleh Owner")
 
+    @field_validator("password", mode="before")
+    @classmethod
+    def empty_password_means_unchanged(cls, value):
+        # Edit forms may submit an empty password input when no reset is requested.
+        # Treat whitespace-only input the same way, without weakening validation
+        # for any non-empty password.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("nomor_wa_admin", mode="before")
     @classmethod
     def validate_nomor_wa(cls, v):
