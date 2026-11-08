@@ -426,8 +426,8 @@ async def create_custom_order(
     """
     Membuat pesanan manual seller dari produk katalog dan aksesoris stok:
     1. Upsert Customer berdasarkan customer_phone dan customer_name.
-    2. Hitung harga produk dari katalog dan harga aksesoris dari biaya stok saat order.
-    3. Kunci dan kurangi stok resep serta aksesoris dalam transaksi yang sama.
+    2. Hitung harga produk dan biaya tambahan manual per baris.
+    3. Kunci dan kurangi stok resep, customisasi baris, dan aksesori order atomik.
     4. Simpan snapshot pemakaian, harga, dan nama untuk histori/reversal.
     5. Buat Invoice otomatis dengan status 'unpaid'.
     """
@@ -468,6 +468,7 @@ async def create_custom_order(
             # locked and checked below, in sorted ID order, before any write.
             total_harga_pesanan = Decimal("0.00")
             item_objects = []
+            accessory_objects = []
             stock_item_requirements: dict[int, dict] = {}
 
             for item in data.items:
@@ -516,21 +517,39 @@ async def create_custom_order(
                     })
                     req["total_needed"] += needed
 
-            # Accessory prices use the stock item's current unit cost, captured
-            # once for this order; no caller-supplied price is trusted.
-            accessory_objects = []
+                # Product-line customizations consume inventory but their
+                # stock cost is internal COGS, not a customer charge. The
+                # manual custom_decoration_charge above is the line's sale
+                # surcharge. Quantities are totals for this product line.
+                for accessory in item.customizations:
+                    qty = Decimal(str(accessory.quantity))
+                    accessory_objects_item = {
+                        "stock_item_id": accessory.stock_item_id,
+                        "quantity": qty,
+                        "order_item_index": len(item_objects) - 1,
+                    }
+                    accessory_objects.append(accessory_objects_item)
+                    req = stock_item_requirements.setdefault(accessory.stock_item_id, {
+                        "total_needed": Decimal("0"), "stock_item": None,
+                        "reason": "Pemakaian resep produk dan customisasi produk",
+                    })
+                    req["reason"] = "Pemakaian resep/customisasi/aksesori pesanan"
+                    req["total_needed"] += qty
+
+            # Capture shared accessory quantities; unit costs are resolved
+            # from the locked stock rows below, never from caller input.
             for accessory in data.accessories:
                 qty = Decimal(str(accessory.quantity))
                 accessory_objects.append({
                     "stock_item_id": accessory.stock_item_id,
                     "quantity": qty,
+                    "order_item_index": None,
                 })
                 req = stock_item_requirements.setdefault(accessory.stock_item_id, {
                     "total_needed": Decimal("0"), "stock_item": None,
                     "reason": "Pemakaian aksesoris pesanan",
                 })
-                if req["reason"] == "Pemakaian resep produk":
-                    req["reason"] = "Pemakaian resep produk dan aksesoris pesanan"
+                req["reason"] = "Pemakaian resep/customisasi/aksesori pesanan"
                 req["total_needed"] += qty
 
             # Serialize inventory deductions and prevent overselling across
@@ -550,8 +569,9 @@ async def create_custom_order(
                     raise HTTPException(status_code=400, detail=f"Stok '{stock_item.nama_item}' tidak mencukupi.")
                 req["stock_item"] = stock_item
 
-            # Price accessories from locked, current unit costs and save a
-            # historical snapshot. Decimal rounding uses standard rupiah cents.
+            # Snapshot current stock costs for reporting. Only shared order
+            # accessories are charged at stock cost; line customizations are
+            # customer-priced by custom_decoration_charge.
             from decimal import ROUND_HALF_UP
             for accessory_data in accessory_objects:
                 stock_item = locked_items.get(accessory_data["stock_item_id"])
@@ -567,7 +587,11 @@ async def create_custom_order(
                     "unit_cost_snapshot": unit_cost,
                     "subtotal": subtotal,
                 })
-                total_harga_pesanan += subtotal
+                # Shared order accessories keep legacy cost-based charging.
+                # A line customization is charged only via that line's
+                # manually entered custom_decoration_charge.
+                if accessory_data["order_item_index"] is None:
+                    total_harga_pesanan += subtotal
 
             if total_harga_pesanan > MAX_ORDER_AMOUNT:
                 raise HTTPException(
@@ -603,8 +627,9 @@ async def create_custom_order(
                     reason=req["reason"],
                 ))
 
+            order_items = []
             for item_data in item_objects:
-                await order_repo.create_order_item(
+                order_item = await order_repo.create_order_item(
                     db,
                     OrderItem(
                         order_id=order_obj.id,
@@ -617,9 +642,19 @@ async def create_custom_order(
                         hpp_snapshot=item_data.get("hpp_snapshot", Decimal("0.00")),
                     ),
                 )
+                order_items.append(order_item)
 
             for accessory_data in accessory_objects:
-                db.add(OrderAccessory(order_id=order_obj.id, **accessory_data))
+                accessory_fields = {
+                    key: value for key, value in accessory_data.items()
+                    if key != "order_item_index"
+                }
+                line_index = accessory_data["order_item_index"]
+                db.add(OrderAccessory(
+                    order_id=order_obj.id,
+                    order_item_id=order_items[line_index].id if line_index is not None else None,
+                    **accessory_fields,
+                ))
 
             # Buat Invoice otomatis
             unique_suffix = secrets.token_hex(3).upper()

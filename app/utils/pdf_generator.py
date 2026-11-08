@@ -2,6 +2,7 @@ import io
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
+from xml.sax.saxutils import escape
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -371,6 +372,18 @@ def generate_order_invoice_pdf(order: Order, store_whatsapp: str = "") -> io.Byt
         unit_price = (subtotal_val - custom_charge) / qty if qty > 0 else subtotal_val
 
         desc_cell = [Paragraph(f"<b>{item_name}</b>", table_cell_style)]
+        for customization in getattr(item, "accessories", []) or []:
+            quantity = Decimal(str(customization.quantity))
+            quantity_text = format(quantity.normalize(), "f")
+            customization_name = escape(str(customization.stock_item_name))
+            unit = escape(str(customization.unit))
+            desc_cell.append(
+                Paragraph(
+                    f"<font color='#8C4A2F'><i>+ Tambahan: {customization_name} "
+                    f"({quantity_text} {unit})</i></font>",
+                    table_cell_style,
+                )
+            )
         if custom_charge > 0:
             desc_cell.append(
                 Paragraph(f"<font color='#8C4A2F'><i>+ Biaya Custom/Dekorasi: {format_rupiah(custom_charge)}</i></font>", table_cell_style)

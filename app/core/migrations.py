@@ -300,6 +300,7 @@ async def ensure_order_accessories_table(conn: AsyncConnection):
         CREATE TABLE IF NOT EXISTS order_accessories (
             id SERIAL PRIMARY KEY,
             order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+            order_item_id INTEGER REFERENCES order_items(id) ON DELETE CASCADE,
             stock_item_id INTEGER NOT NULL REFERENCES stock_items(id),
             stock_item_name VARCHAR(100) NOT NULL,
             unit VARCHAR(20) NOT NULL,
@@ -309,6 +310,8 @@ async def ensure_order_accessories_table(conn: AsyncConnection):
         )
     """))
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_order_accessories_order_id ON order_accessories(order_id);"))
+    await conn.execute(text("ALTER TABLE order_accessories ADD COLUMN IF NOT EXISTS order_item_id INTEGER REFERENCES order_items(id) ON DELETE CASCADE;"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_order_accessories_order_item_id ON order_accessories(order_item_id);"))
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_order_accessories_stock_item_id ON order_accessories(stock_item_id);"))
 
 

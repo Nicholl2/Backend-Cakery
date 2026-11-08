@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import AliasChoices, BaseModel, Field, field_validator, ConfigDict
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from datetime import datetime
@@ -75,15 +75,25 @@ class BuyerOrderCancelResponse(BaseModel):
     message: str
 
 
+class CustomOrderAccessoryCreate(BaseModel):
+    stock_item_id: int = Field(..., gt=0)
+    quantity: Decimal = Field(..., gt=0, max_digits=10, decimal_places=4)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class CustomOrderItemCreate(BaseModel):
     product_id: int = Field(..., gt=0)
     qty: int = Field(default=1, gt=0)
-    custom_decoration_charge: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
-
-
-class CustomOrderAccessoryCreate(BaseModel):
-    stock_item_id: int = Field(..., gt=0)
-    quantity: Decimal = Field(..., gt=0, decimal_places=4)
+    custom_decoration_charge: Decimal = Field(
+        default=Decimal("0.00"), ge=0, max_digits=10, decimal_places=2,
+        description="Biaya tambahan manual untuk seluruh baris produk ini",
+    )
+    customizations: list[CustomOrderAccessoryCreate] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Pemakaian stok untuk baris produk ini; quantity adalah total pemakaian seluruh qty baris.",
+    )
 
 
 class CustomOrderCreate(BaseModel):
@@ -96,7 +106,10 @@ class CustomOrderCreate(BaseModel):
     fulfillment_date: datetime
     payment_method_preference: Optional[str] = Field(None, max_length=50)
     items: list[CustomOrderItemCreate] = Field(..., min_length=1)
-    accessories: list[CustomOrderAccessoryCreate] = Field(default_factory=list)
+    accessories: list[CustomOrderAccessoryCreate] = Field(
+        default_factory=list, max_length=20,
+        description="Aksesori stok yang berlaku sekali untuk seluruh order.",
+    )
 
     @field_validator("customer_name", mode="after")
     @classmethod
@@ -194,6 +207,17 @@ class InvoiceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OrderLineAccessoryOut(BaseModel):
+    """Customer-facing line customization usage; omits inventory unit costs."""
+    id: int
+    stock_item_id: int
+    stock_item_name: str
+    unit: str
+    quantity: Decimal
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class OrderItemOut(BaseModel):
     id: int
     product_id: Optional[int] = None
@@ -204,6 +228,9 @@ class OrderItemOut(BaseModel):
     custom_decoration_charge: Optional[Decimal] = Decimal("0.00")
     subtotal: Optional[Decimal] = Decimal("0.00")
     hpp_snapshot: Optional[Decimal] = Decimal("0.00")
+    customizations: list[OrderLineAccessoryOut] = Field(
+        default_factory=list, validation_alias="accessories"
+    )
 
     @field_validator("jumlah", mode="before")
     @classmethod
@@ -264,7 +291,10 @@ class OrderOut(BaseModel):
     customer: Optional[CustomerOrderOut] = None
     order_items: list[OrderItemOut] = Field(default_factory=list)
     items: Optional[list[OrderItemOut]] = Field(default=None, validation_alias="order_items")
-    accessories: list[OrderAccessoryOut] = Field(default_factory=list)
+    accessories: list[OrderAccessoryOut] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("shared_accessories", "accessories"),
+    )
     invoice: Optional[InvoiceOut] = None
     amount_paid: Optional[Decimal] = None
     amount_due: Optional[Decimal] = None

@@ -69,6 +69,11 @@ class Order(Base):
     invoice = relationship("Invoice", back_populates="order", uselist=False, cascade="all, delete-orphan", lazy="selectin")
 
     @property
+    def shared_accessories(self):
+        """Accessories applied once to the whole order, excluding line customizations."""
+        return [accessory for accessory in self.accessories if accessory.order_item_id is None]
+
+    @property
     def payment_status(self) -> str:
         if self.status == OrderStatusEnum.refunded:
             return "refunded"
@@ -101,6 +106,9 @@ class OrderItem(Base):
 
     order = relationship("Order", back_populates="order_items")
     product = relationship("Product")
+    accessories = relationship(
+        "OrderAccessory", back_populates="order_item", lazy="selectin"
+    )
 
     @property
     def product_name(self) -> Optional[str]:
@@ -124,11 +132,12 @@ class OrderItem(Base):
 
 
 class OrderAccessory(Base):
-    """Inventory accessories recorded and priced at their cost when a seller saves an order."""
+    """Stock used for a product-line customization or a shared order accessory."""
     __tablename__ = "order_accessories"
 
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    order_item_id = Column(Integer, ForeignKey("order_items.id", ondelete="CASCADE"), nullable=True, index=True)
     stock_item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False, index=True)
     stock_item_name = Column(String(100), nullable=False)
     unit = Column(String(20), nullable=False)
@@ -137,6 +146,7 @@ class OrderAccessory(Base):
     subtotal = Column(Numeric(10, 2), nullable=False)
 
     order = relationship("Order", back_populates="accessories")
+    order_item = relationship("OrderItem", back_populates="accessories")
     stock_item = relationship("StockItem")
 
 

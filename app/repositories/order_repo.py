@@ -67,6 +67,7 @@ async def get_order_with_details(db: AsyncSession, order_id: int) -> Optional[Or
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.order_items).selectinload(OrderItem.accessories),
             selectinload(Order.accessories),
             selectinload(Order.invoice).selectinload(Invoice.payments),
         )
@@ -84,6 +85,7 @@ async def get_latest_order_by_wa(db: AsyncSession, nomor_wa: str) -> Optional[Or
             selectinload(Order.customer),
             selectinload(Order.invoice),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.order_items).selectinload(OrderItem.accessories),
             selectinload(Order.accessories),
         )
         .limit(1)
@@ -98,6 +100,7 @@ async def get_order_by_id(db: AsyncSession, order_id: int) -> Optional[Order]:
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.order_items).selectinload(OrderItem.accessories),
             selectinload(Order.accessories),
             selectinload(Order.invoice),
         )
@@ -113,6 +116,7 @@ async def update_order_status(db: AsyncSession, order_id: int, status: str) -> O
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.order_items).selectinload(OrderItem.accessories),
             selectinload(Order.accessories),
             selectinload(Order.invoice),
         )
@@ -140,6 +144,7 @@ async def get_orders_by_customer_id(
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.order_items).selectinload(OrderItem.accessories),
             selectinload(Order.accessories),
             selectinload(Order.invoice),
         )
@@ -169,6 +174,7 @@ async def get_order_by_id_and_customer(db: AsyncSession, order_id: int, customer
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.order_items).selectinload(OrderItem.accessories),
             selectinload(Order.accessories),
             selectinload(Order.invoice),
         )
@@ -191,6 +197,7 @@ async def get_all_orders(
         .options(
             selectinload(Order.customer),
             selectinload(Order.order_items).selectinload(OrderItem.product),
+            selectinload(Order.order_items).selectinload(OrderItem.accessories),
             selectinload(Order.accessories),
             selectinload(Order.invoice),
         )

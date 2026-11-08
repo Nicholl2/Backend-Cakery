@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 import hashlib
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -15,11 +16,15 @@ from app.models.order import Invoice, Order, OrderItem, OrderStatusEnum, MetodeP
 from app.models.product import Product
 from app.models.recipe import Recipe
 from app.models.stock_item import KategoriEnum, SatuanEnum, StockItem
-from app.schemas.order import BuyerOrderCreate, OrderItemCreate, OrderOut
+from app.schemas.order import (
+    BuyerOrderCreate, CustomOrderCreate, CustomOrderItemCreate,
+    OrderItemCreate, OrderOut,
+)
 from app.services import order_service
 from app.repositories import order_repo
 from app.services.buyer_auth_service import change_buyer_phone
 from app.core.security import hash_password
+from app.utils.pdf_generator import generate_order_invoice_pdf
 
 
 @pytest.fixture
@@ -96,6 +101,118 @@ async def test_seller_order_search_matches_customer_product_id_and_escapes_wildc
         db, status=OrderStatusEnum.pending.value, search="Cake"
     )] == [214]
     assert await order_repo.get_all_orders(db, search="no matching order") == []
+
+
+@pytest.mark.asyncio
+async def test_custom_order_line_customization_is_not_charged_at_stock_cost(order_db):
+    db, _ = order_db
+    topping = StockItem(
+        id=2, nama_item="Meses Cokelat", satuan=SatuanEnum.gram,
+        kategori=KategoriEnum.bahan_baku, harga_per_satuan=Decimal("70"),
+        stok_tersedia=Decimal("100"), version=0,
+    )
+    flour = await db.get(StockItem, 1)
+    flour.stok_tersedia = Decimal("100")
+    shared_candle = StockItem(
+        id=3, nama_item="Lilin", satuan=SatuanEnum.pcs,
+        kategori=KategoriEnum.kemasan, harga_per_satuan=Decimal("1500"),
+        stok_tersedia=Decimal("10"), version=0,
+    )
+    db.add_all([topping, shared_candle])
+    await db.commit()
+
+    order = await order_service.create_custom_order(
+        db,
+        CustomOrderCreate(
+            customer_name="Custom Buyer",
+            customer_phone="081299900003",
+            fulfillment_date=datetime.now(timezone.utc) + timedelta(days=2),
+            items=[{
+                "product_id": 1,
+                "qty": 2,
+                "custom_decoration_charge": "5000.00",
+                "customizations": [{"stock_item_id": 2, "quantity": "20"}],
+            }],
+            accessories=[{"stock_item_id": 3, "quantity": "1"}],
+        ),
+    )
+
+    order_out = OrderOut.model_validate(order)
+    assert order.total_harga_pesanan == Decimal("26500.00")
+    assert len(order_out.order_items[0].customizations) == 1
+    customization = order_out.order_items[0].customizations[0]
+    assert customization.stock_item_name == "Meses Cokelat"
+    assert customization.quantity == Decimal("20.0000")
+    assert not hasattr(customization, "unit_cost_snapshot")
+    assert len(order_out.accessories) == 1
+    assert order_out.accessories[0].stock_item_name == "Lilin"
+    assert generate_order_invoice_pdf(order).getvalue().startswith(b"%PDF")
+
+    await db.refresh(topping)
+    await db.refresh(shared_candle)
+    assert topping.stok_tersedia == Decimal("80.00")
+    assert shared_candle.stok_tersedia == Decimal("9.00")
+
+
+def test_custom_order_line_customization_quantity_is_bounded_and_positive():
+    with pytest.raises(ValidationError):
+        CustomOrderItemCreate(
+            product_id=1,
+            customizations=[{"stock_item_id": 2, "quantity": "0"}],
+        )
+    with pytest.raises(ValidationError):
+        CustomOrderItemCreate(
+            product_id=1,
+            customizations=[{"stock_item_id": 2, "quantity": "10000000"}],
+        )
+    with pytest.raises(ValidationError):
+        CustomOrderItemCreate(
+            product_id=1,
+            customizations=[{"stock_item_id": 2, "quantity": "1"}] * 21,
+        )
+    with pytest.raises(ValidationError):
+        CustomOrderItemCreate(
+            product_id=1,
+            customizations=[{
+                "stock_item_id": 2,
+                "quantity": "1",
+                "unit_cost_snapshot": "0",
+            }],
+        )
+
+
+@pytest.mark.asyncio
+async def test_custom_order_combines_line_and_shared_stock_before_deduction(order_db):
+    db, _ = order_db
+    topping = StockItem(
+        id=2, nama_item="Meses Cokelat", satuan=SatuanEnum.gram,
+        kategori=KategoriEnum.bahan_baku, harga_per_satuan=Decimal("70"),
+        stok_tersedia=Decimal("100"), version=0,
+    )
+    flour = await db.get(StockItem, 1)
+    flour.stok_tersedia = Decimal("100")
+    db.add(topping)
+    await db.commit()
+
+    with pytest.raises(HTTPException) as error:
+        await order_service.create_custom_order(
+            db,
+            CustomOrderCreate(
+                customer_name="Custom Buyer",
+                customer_phone="081299900003",
+                fulfillment_date=datetime.now(timezone.utc) + timedelta(days=2),
+                items=[{
+                    "product_id": 1,
+                    "customizations": [{"stock_item_id": 2, "quantity": "20"}],
+                }],
+                accessories=[{"stock_item_id": 2, "quantity": "90"}],
+            ),
+        )
+
+    assert error.value.status_code == 400
+    await db.refresh(topping)
+    assert topping.stok_tersedia == Decimal("100.00")
+    assert (await db.execute(select(func.count(Order.id)))).scalar_one() == 0
 
 
 @pytest.mark.asyncio
