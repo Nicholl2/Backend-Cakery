@@ -228,13 +228,37 @@ pytest tests/quality/test_imports.py
 
 ## 📚 API Documentation
 
-FastAPI automatically generates interactive API documentation.
+FastAPI generates the OpenAPI schema and interactive docs, but they are no
+longer public in production.
 
-* **Swagger UI**
-  `http://127.0.0.1:8000/docs`
+* `DOCS_ENABLED=true` registers the docs routes. Set `DOCS_ACCESS_TOKEN` to
+  require a token.
+* In production, docs are disabled automatically when `DOCS_ACCESS_TOKEN` is
+  empty (fail safe).
+* Browser: open `https://<host>/api/docs?token=<DOCS_ACCESS_TOKEN>` once. The
+  backend stores an `HttpOnly` cookie and redirects to the clean URL, so
+  Swagger UI and ReDoc keep working.
+* Scripts / client generation: send `X-Docs-Token: <DOCS_ACCESS_TOKEN>` when
+  fetching `/api/openapi.json`.
 
-* **ReDoc**
-  `http://127.0.0.1:8000/redoc`
+Local development (no token configured) keeps the classic URLs:
+
+* **Swagger UI** `http://127.0.0.1:8000/docs`
+* **ReDoc** `http://127.0.0.1:8000/redoc`
+
+### HTTP hardening
+
+Every response carries `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
+`Permissions-Policy`, and a `Content-Security-Policy` (`default-src 'none'`
+for API responses, framing-only for docs pages). `Strict-Transport-Security`
+is added only when the request is served over HTTPS.
+
+The global rate limit (`SlowAPIMiddleware`, 60 requests/minute per IP per path)
+applies to undecorated routes; routes with `@limiter.limit(...)` keep their
+stricter limits. Static files are not counted. Set
+`TRUSTED_CLIENT_IP_HEADER` only when the edge proxy overwrites a single header
+with the real client IP (for example `CF-Connecting-IP`).
 
 ---
 

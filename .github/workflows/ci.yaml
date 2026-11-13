@@ -147,15 +147,15 @@ jobs:
             -e SERVICE_API_KEY=dummy \
             "$TAG"
           for _ in $(seq 1 30); do
-            if curl -fsS http://localhost:8000/openapi.json > /dev/null; then
-              echo "app menjawab /openapi.json"
+            if curl -fsS http://localhost:8000/health > /dev/null; then
+              echo "app menjawab /health"
               curl -fsS http://localhost:8000/products/ | head -c 200; echo
               docker rm -f api > /dev/null
               exit 0
             fi
             sleep 2
           done
-          echo "::error::container tidak melayani /openapi.json dalam 60 detik"
+          echo "::error::container tidak melayani /health dalam 60 detik"
           docker logs api
           exit 1
 

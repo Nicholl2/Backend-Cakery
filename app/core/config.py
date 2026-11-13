@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     cloudinary_api_key: str = ""
     cloudinary_api_secret: str = ""
 
+    # HTTP hardening
+    # Docs stay available to the team but are token-protected. In production,
+    # docs are disabled when DOCS_ACCESS_TOKEN is empty (fail safe).
+    docs_enabled: bool = True
+    docs_access_token: str = ""
+    # Optional: single header written by the edge proxy with the real client IP
+    # (e.g. "CF-Connecting-IP"). Leave empty unless the proxy overwrites it.
+    trusted_client_ip_header: str = ""
+
     # SMTP / Email configuration
     smtp_host: str = ""
     smtp_port: int = 587

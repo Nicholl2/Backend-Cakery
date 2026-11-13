@@ -7,6 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
+from slowapi.middleware import SlowAPIMiddleware
 
 # ── Upload Size Limit Middleware ──────────────────────────────────────────────
 MAX_BODY_SIZE = 5 * 1024 * 1024  # 5 MB
@@ -127,12 +128,25 @@ async def lifespan(app: FastAPI):
             await asyncio.gather(order_lifecycle_worker_task, return_exceptions=True)
 
 
+from app.core.http_security import (
+    DocsProtectionMiddleware,
+    SecurityHeadersMiddleware,
+    resolve_docs_config,
+)
+
+# Docs remain available to the team but are token-protected. Production fails
+# safe: without DOCS_ACCESS_TOKEN the docs routes are not registered at all.
+_docs_enabled, _docs_token = resolve_docs_config(settings)
+
 app = FastAPI(
     title="Toti Cakery API",
     description="Bakery management system with inventory, products, and financial tracking",
     version="1.0.0",
     lifespan=lifespan,
     root_path="/api",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 # ── RATE LIMITER (SlowAPI) ───────────────────────────────────────────────────
@@ -150,6 +164,19 @@ origins = [
     if origin.strip()
 ]
 
+# ── MIDDLEWARE ORDER ─────────────────────────────────────────────────────────
+# `add_middleware` prepends, so the last call is the outermost layer and the
+# first one is the innermost. Resulting order (outermost → innermost):
+#   SecurityHeaders → CORS → RateLimit → DocsProtection → MaxBodySize → routes
+# CORS stays outside the limiter so browser clients can read 429 responses,
+# and the limiter stays outside the docs gate so token brute force is throttled.
+app.add_middleware(MaxBodySizeMiddleware)
+
+if _docs_enabled and _docs_token:
+    app.add_middleware(DocsProtectionMiddleware, token=_docs_token)
+
+app.add_middleware(SlowAPIMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -158,8 +185,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── UPLOAD SIZE LIMIT ────────────────────────────────────────────────────────
-app.add_middleware(MaxBodySizeMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 from app.api.routes.notification import router as notification_router
 
