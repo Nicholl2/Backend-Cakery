@@ -15,7 +15,7 @@ Configure SMTP/application values in the API container's restricted environment 
 | `SECRET_KEY`, `SERVICE_API_KEY` | Required non-default application secrets because app settings are loaded at process start |
 | `SMTP_HOST`, `SMTP_PORT` | SMTP server and port; workflow defaults port to 587 |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | SMTP authentication |
-| `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` | Sender identity; production requires sender email |
+| `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` | Fallback sender identity; production requires sender email. Owner-managed `email_sender_settings` values take precedence for outbox and OTP emails |
 | `SMTP_USE_TLS` | Whether SMTP STARTTLS is enabled; defaults to true |
 | `SMTP_OPERATIONAL_INBOX` | Optional operational seller inbox where configured by the existing event producer |
 | `EMAIL_WORKER_ENABLED` | Set to `true` on the lab Docker API deployment to start the background worker; defaults to `false` |

@@ -15,7 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.email_outbox import EmailOutbox
-from app.models.email_sender_settings import EmailSenderSettings
+from app.utils.email_identity import (
+    format_mailbox,
+    resolve_sender_identity,
+    sanitize_header_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +64,17 @@ def _render_email(event: EmailOutbox) -> tuple[str, str]:
 async def _send(event: EmailOutbox) -> None:
     sender_email = getattr(event, "_sender_email", None) or settings.smtp_from_email
     sender_name = getattr(event, "_sender_name", None) or settings.smtp_from_name
-    if not settings.smtp_host or not sender_email:
+    if not settings.smtp_host:
         raise RuntimeError("SMTP is not configured")
+    if not sender_email:
+        raise RuntimeError("SMTP sender is not configured")
     import aiosmtplib
 
     subject, body = _render_email(event)
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"{sender_name} <{sender_email}>"
-    msg["To"] = event.recipient
+    msg["From"] = format_mailbox(sender_name, sender_email)
+    msg["To"] = sanitize_header_value(event.recipient)
     msg["Message-ID"] = _message_id(event.event_key)
     msg.attach(MIMEText(body, "html", "utf-8"))
     await aiosmtplib.send(
@@ -170,16 +176,13 @@ async def _process_one_email(db: AsyncSession) -> tuple[bool, bool | None]:
     """Return (did_work, delivery_succeeded); None means there was no event."""
     sender_factory = async_sessionmaker(bind=db.bind, class_=AsyncSession, expire_on_commit=False)
     async with sender_factory() as sender_db:
-        sender = await sender_db.get(EmailSenderSettings, 1)
-    sender_email = sender.from_email if sender else None
-    sender_name = sender.from_name if sender else None
+        sender = await resolve_sender_identity(sender_db)
     claimed = await _claim_email(db)
     if claimed is None:
         return False, None
     event, token = claimed
-    if sender_email:
-        event._sender_email = sender_email
-        event._sender_name = sender_name
+    event._sender_email = sender.from_email
+    event._sender_name = sender.from_name
     try:
         await _send(event)
     except Exception as exc:

@@ -85,7 +85,7 @@ async def send_otp(db: AsyncSession, target: str, channel: str, purpose: str) ->
     )
 
     if channel == "email":
-        sent = await send_otp_email(target, code)
+        sent = await send_otp_email(target, code, db=db)
         if not sent:
             # OTP saved; caller may retry — do not expose the code
             raise HTTPException(
@@ -900,7 +900,7 @@ async def request_buyer_forgot_password(db: AsyncSession, email: str) -> dict:
         db.add(otp)
         await db.commit()
 
-        sent = await send_otp_email(email, code)
+        sent = await send_otp_email(email, code, db=db)
         if not sent:
             # OTP is persisted; log failure without exposing code/email details
             _logger.warning(

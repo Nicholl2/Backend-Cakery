@@ -1,7 +1,8 @@
+import logging
 from datetime import timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id, require_owner
@@ -17,22 +18,58 @@ from app.schemas.store_customization import (
 )
 from app.services import store_customization_service
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
 
 async def _get_sender(db: AsyncSession) -> EmailSenderSettingsOut:
     row = await db.get(EmailSenderSettings, 1)
-    if row:
-        updated = row.updated_at
-        if updated and updated.tzinfo is None:
-            updated = updated.replace(tzinfo=timezone.utc)
-        return EmailSenderSettingsOut(
-            from_email=row.from_email,
-            from_name=row.from_name,
-            updated_at=updated.astimezone(timezone.utc).isoformat() if updated else None,
+    updated = row.updated_at if row else None
+    if updated and updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    return EmailSenderSettingsOut(
+        from_email=(row.from_email if row and row.from_email else app_settings.smtp_from_email),
+        from_name=(row.from_name if row and row.from_name else app_settings.smtp_from_name),
+        updated_at=updated.astimezone(timezone.utc).isoformat() if updated else None,
+    )
+
+
+async def _persist_sender(
+    db: AsyncSession,
+    data: EmailSenderSettingsUpdate,
+    user_id: int,
+) -> None:
+    """Create or update the singleton row, tolerating concurrent first writes."""
+    row = await db.get(EmailSenderSettings, 1, with_for_update=True)
+    if row is None:
+        row = EmailSenderSettings(
+            id=1,
+            from_email=data.from_email,
+            from_name=data.from_name,
+            updated_by=user_id,
         )
-    return EmailSenderSettingsOut(from_email=app_settings.smtp_from_email,
-                                  from_name=app_settings.smtp_from_name)
+        db.add(row)
+    else:
+        row.from_email = data.from_email
+        row.from_name = data.from_name
+        row.updated_by = user_id
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Another owner request inserted the singleton row first. Roll back the
+        # failed insert and update the winning row instead of returning a 500.
+        await db.rollback()
+        row = await db.get(EmailSenderSettings, 1, with_for_update=True)
+        if row is None:
+            raise
+        row.from_email = data.from_email
+        row.from_name = data.from_name
+        row.updated_by = user_id
+        await db.commit()
+
+    await db.refresh(row)
 
 
 @router.get("/email-sender", response_model=EmailSenderSettingsOut,
@@ -53,17 +90,12 @@ async def update_email_sender_settings(
     if not app_settings.smtp_host:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail="Pengiriman email belum dikonfigurasi.")
-    row = await db.get(EmailSenderSettings, 1, with_for_update=True)
-    if row is None:
-        row = EmailSenderSettings(id=1, from_email=data.from_email,
-                                  from_name=data.from_name, updated_by=user_id)
-        db.add(row)
-    else:
-        row.from_email = data.from_email
-        row.from_name = data.from_name
-        row.updated_by = user_id
-    await db.commit()
-    await db.refresh(row)
+    await _persist_sender(db, data, user_id)
+    logger.info(
+        "Email sender settings updated by user_id=%s (from=%s)",
+        user_id,
+        data.from_email,
+    )
     return await _get_sender(db)
 
 
