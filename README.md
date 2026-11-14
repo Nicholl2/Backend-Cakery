@@ -264,15 +264,24 @@ service credential** (`X-Service-Key` or `service_key`) uses its own
 the chatbot call the API from one container address: keying them by IP would
 make every one of their customers share a single quota. Routes that are called
 by services use `service_aware(default, service)` to give them a larger quota
-(orders and payments: 60/minute instead of 5/minute; payment status polling:
-240/minute instead of 60/minute). A forged or unknown key does **not** get a
-service bucket; it stays on the IP bucket, so it cannot be used to bypass
-limits.
+(orders and payments: 60/minute instead of 5/minute; `GET /orders/latest` and
+`GET /payments/{id}/status` polling: 240/minute instead of 60/minute). A forged
+or unknown key does **not** get a service bucket; it stays on the IP bucket, so
+it cannot be used to bypass limits.
+
+429 responses from the limiter carry `X-RateLimit-Scope: ip|service` plus
+`Retry-After` and `X-RateLimit-Limit/Remaining/Reset` (all exposed to browsers
+through CORS). **Business 429s** (for example an exhausted OTP attempt counter,
+which is also returned as 429) never carry `X-RateLimit-Scope`, so clients can
+branch on that header instead of on the message body. The JSON body keeps
+SlowAPI's default shape.
 
 429 responses carry `X-RateLimit-Scope: ip|service` plus `Retry-After`,
 `X-RateLimit-Limit/Remaining/Reset` (all exposed to browsers through CORS).
-The JSON body keeps SlowAPI's default shape, so clients should branch on the
-scope header rather than on the message text.
+**Business 429s** (for example an exhausted OTP attempt counter, which is also
+returned as 429) never carry `X-RateLimit-Scope`, so clients can branch on that
+header instead of on the message body. The JSON body keeps SlowAPI's default
+shape.
 
 `TRUSTED_CLIENT_IP_HEADER` is only needed when the edge proxy overwrites a
 single header with the real client IP. **With Cloudflare Tunnel, leave it

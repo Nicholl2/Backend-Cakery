@@ -14,9 +14,19 @@ limit only covered routes declared directly on the app (``/health``,
 
 This middleware resolves the endpoint from ``effective_route_contexts()`` when
 available (the ``_IncludedRouter`` shape), falls back to ``routes`` for plain
-routers, and otherwise behaves exactly like SlowAPI's own middleware: routes
-that carry their own ``@limiter.limit`` decorator are left to the decorator so
-quotas and headers are not counted or emitted twice.
+routers, and otherwise behaves exactly like SlowAPI's own middleware, with two
+deliberate refinements:
+
+* Routes with their own ``@limiter.limit`` decorator still get the default
+  quota applied for **IP** buckets. The decorator refuses requests that fail an
+  authentication dependency before it runs, so without this a flood of 401s on
+  a decorated route would be uncounted.
+* **Service** buckets skip the default quota for decorated routes, because the
+  decorator is what defines the (larger) service quota. Applying the 60/min
+  default there would silently cap it.
+
+Headers are emitted once: from the decorator for decorated routes, from here
+otherwise.
 """
 
 import logging
@@ -28,6 +38,9 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Mount
+
+from app.core.http_security import get_rate_limit_key
+from app.core.service_keys import SERVICE_BUCKET_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +123,13 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         endpoint = resolve_endpoint(self._table(request.app.routes), request.scope)
-        if endpoint is None or _has_own_limit(limiter, endpoint):
+        if endpoint is None:
+            return await call_next(request)
+
+        owns_limit = _has_own_limit(limiter, endpoint)
+        if owns_limit and get_rate_limit_key(request).startswith(SERVICE_BUCKET_PREFIX):
+            # The decorator already defines the service quota for this route and
+            # emits its own headers; applying the default here would cap it.
             return await call_next(request)
 
         try:
@@ -122,4 +141,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             return handler(request, exc)
 
         response = await call_next(request)
+        if owns_limit:
+            # Decorated routes already injected their own headers.
+            return response
         return limiter._inject_headers(response, request.state.view_rate_limit)

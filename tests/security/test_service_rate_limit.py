@@ -121,6 +121,116 @@ async def test_429_keeps_slowapi_body_and_exposes_scope_to_browsers(live_limiter
     assert blocked.json() == {"error": "Rate limit exceeded: 60 per 1 minute"}
 
 
+# ── SERVICE QUOTAS ───────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_order_read_quota_matches_payment_status_polling(live_limiter, monkeypatch):
+    """The chatbot polls /orders/latest per pending order, like payment status."""
+    from fastapi import HTTPException
+
+    from app.api.routes import order as order_route
+
+    monkeypatch.setattr(settings, "service_orders_read_key", "test-orders-read-key")
+
+    async def fake_latest_order(db, nomor_wa):
+        raise HTTPException(status_code=404, detail="Order tidak ditemukan")
+
+    monkeypatch.setattr(
+        order_route.order_service, "get_customer_latest_order", fake_latest_order
+    )
+
+    async with _client("203.0.113.74") as client:
+        headers = {"X-Service-Key": "test-orders-read-key"}
+        for _ in range(240):
+            response = await client.get(
+                "/orders/latest", params={"nomor_wa": "628123"}, headers=headers
+            )
+            assert response.status_code == 404
+
+        blocked = await client.get(
+            "/orders/latest", params={"nomor_wa": "628123"}, headers=headers
+        )
+
+    assert blocked.status_code == 429
+    assert blocked.headers["x-ratelimit-scope"] == "service"
+
+
+@pytest.mark.asyncio
+async def test_decorated_route_still_counts_unauthenticated_ip_requests(live_limiter):
+    """401s raised by a route dependency must not escape the default quota."""
+    async with _client("203.0.113.75") as client:
+        statuses = []
+        for _ in range(61):
+            response = await client.get("/orders/latest", params={"nomor_wa": "628123"})
+            statuses.append(response.status_code)
+
+    assert statuses[:60] == [401] * 60
+    assert statuses[60] == 429
+    assert response.headers["x-ratelimit-scope"] == "ip"
+
+
+# ── BUSINESS 429 ─────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_business_429_has_no_scope_header(live_limiter, monkeypatch):
+    """X-RateLimit-Scope marks limiter refusals only, so clients can branch on it."""
+    from fastapi import HTTPException
+
+    from app.api.routes import auth as auth_route
+
+    async def fake_authenticate(db, login_data):
+        raise HTTPException(
+            status_code=429,
+            detail="Terlalu banyak percobaan login gagal. Akun dikunci sementara.",
+        )
+
+    monkeypatch.setattr(auth_route.auth_service, "authenticate_user", fake_authenticate)
+
+    async with _client("203.0.113.76") as client:
+        response = await client.post(
+            "/auth/login", json={"username": "tester", "password": "secret123"}
+        )
+
+    assert response.status_code == 429
+    assert "x-ratelimit-scope" not in response.headers
+    assert response.json()["detail"].startswith("Terlalu banyak percobaan login")
+
+
+@pytest.mark.asyncio
+async def test_business_429_on_undecorated_route_has_no_scope_header(
+    live_limiter, monkeypatch
+):
+    """The OTP confirm flow returns 429 without a limiter, and must stay distinguishable."""
+    from fastapi import HTTPException
+
+    from app.api.routes import auth as auth_route
+
+    monkeypatch.setattr(settings, "chatbot_internal_key", "test-internal-key")
+
+    async def fake_confirm(db, nonce, sender_phone):
+        raise HTTPException(
+            status_code=429,
+            detail="Batas percobaan verifikasi tercapai (maksimal 3 kali).",
+        )
+
+    monkeypatch.setattr(
+        auth_route.buyer_auth_service, "confirm_wa_verification", fake_confirm
+    )
+
+    async with _client("203.0.113.77") as client:
+        response = await client.post(
+            "/auth/verify/wa/confirm",
+            json={"nonce": "abc", "sender_phone": "628123456789"},
+            headers={"X-Internal-Key": "test-internal-key"},
+        )
+
+    assert response.status_code == 429
+    assert "x-ratelimit-scope" not in response.headers
+    # Undecorated routes still get the default-quota counters, which is exactly
+    # why presence of X-RateLimit-* is not a reliable discriminator.
+    assert response.headers.get("x-ratelimit-limit") == "60"
+
+
 # ── QUOTA SELECTION ──────────────────────────────────────────────────────────
 
 def test_service_aware_switches_quota_on_bucket_prefix():

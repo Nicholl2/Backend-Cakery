@@ -9,8 +9,10 @@ logger = logging.getLogger(__name__)
 from app.core.rate_limiter import (
     limiter,
     RATE_ORDER_CREATE,
+    RATE_ORDER_READ,
     RATE_ORDER_STATUS_UPDATE,
     RATE_SERVICE_ORDER_CREATE,
+    RATE_SERVICE_ORDER_READ,
     service_aware,
 )
 
@@ -237,7 +239,9 @@ async def create_custom_order(
 
 @router.get("/latest", response_model=OrderOut, dependencies=[Depends(require_service_scope("orders:read"))],
             summary="Ambil order terbaru customer berdasarkan nomor WA")
+@limiter.limit(service_aware(RATE_ORDER_READ, RATE_SERVICE_ORDER_READ))
 async def get_latest_order(
+    request: Request,
     nomor_wa: str = Query(..., description="Nomor WhatsApp customer"),
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:

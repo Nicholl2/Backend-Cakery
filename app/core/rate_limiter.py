@@ -33,6 +33,7 @@ RATE_AUTH_LOGIN = "10/minute"             # POST /auth/login, /auth/buyer/*
 RATE_AUTH_VERIFY = "6/minute"             # POST /auth/verify/*
 RATE_WEBHOOK = "30/minute"               # POST /payments/notify (global, bukan per-IP)
 RATE_PAYMENT_STATUS = "60/minute"         # GET /payments/{order_id}/status
+RATE_ORDER_READ = "60/minute"             # GET /orders/latest
 
 # ── QUOTA UNTUK INTERNAL SERVICE ─────────────────────────────────────────────
 # Chatbot memanggil backend dari satu alamat container, jadi semua pelanggan
@@ -46,6 +47,7 @@ RATE_PAYMENT_STATUS = "60/minute"         # GET /payments/{order_id}/status
 RATE_SERVICE_ORDER_CREATE = "60/minute"
 RATE_SERVICE_PAYMENT_CREATE = "60/minute"
 RATE_SERVICE_PAYMENT_STATUS = "240/minute"
+RATE_SERVICE_ORDER_READ = "240/minute"
 
 
 def service_aware(default: str, service: str):
