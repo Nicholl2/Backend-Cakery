@@ -6,8 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 from slowapi.errors import RateLimitExceeded
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.middleware import SlowAPIMiddleware
+from slowapi import _rate_limit_exceeded_handler as slowapi_rate_limit_handler
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+from app.core.rate_limit_middleware import GlobalRateLimitMiddleware
 
 # ── Upload Size Limit Middleware ──────────────────────────────────────────────
 MAX_BODY_SIZE = 5 * 1024 * 1024  # 5 MB
@@ -63,6 +65,7 @@ async def lifespan(app: FastAPI):
     import asyncio
     import logging
     main_logger = logging.getLogger(__name__)
+    main_logger.info("Allowed Host header values: %s", ", ".join(settings.ALLOWED_HOSTS))
 
     from sqlalchemy import select, text
     from sqlalchemy.exc import ProgrammingError, OperationalError
@@ -151,7 +154,23 @@ app = FastAPI(
 
 # ── RATE LIMITER (SlowAPI) ───────────────────────────────────────────────────
 from app.core.rate_limiter import limiter
+from app.core.http_security import get_rate_limit_scope
+
 app.state.limiter = limiter
+
+
+def _rate_limit_exceeded_handler(request: StarletteRequest, exc: RateLimitExceeded):
+    """Keep SlowAPI's body unchanged and add a stable scope marker.
+
+    Clients (the chatbot in particular) distinguish a limiter 429 from a
+    business 429 by ``X-RateLimit-Scope`` instead of parsing the message, so the
+    body format is not a compatibility contract.
+    """
+    response = slowapi_rate_limit_handler(request, exc)
+    response.headers["X-RateLimit-Scope"] = get_rate_limit_scope(request)
+    return response
+
+
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Hanya mount static jika direktori static benar-benar ada
@@ -167,7 +186,8 @@ origins = [
 # ── MIDDLEWARE ORDER ─────────────────────────────────────────────────────────
 # `add_middleware` prepends, so the last call is the outermost layer and the
 # first one is the innermost. Resulting order (outermost → innermost):
-#   SecurityHeaders → CORS → RateLimit → DocsProtection → MaxBodySize → routes
+#   SecurityHeaders → TrustedHost → CORS → RateLimit → DocsProtection
+#   → MaxBodySize → routes
 # CORS stays outside the limiter so browser clients can read 429 responses,
 # and the limiter stays outside the docs gate so token brute force is throttled.
 app.add_middleware(MaxBodySizeMiddleware)
@@ -175,7 +195,10 @@ app.add_middleware(MaxBodySizeMiddleware)
 if _docs_enabled and _docs_token:
     app.add_middleware(DocsProtectionMiddleware, token=_docs_token)
 
-app.add_middleware(SlowAPIMiddleware)
+# SlowAPIMiddleware cannot resolve routes registered through include_router on
+# this FastAPI/Starlette version, so the default quota is enforced by a
+# middleware that flattens the route tree first (see the module docstring).
+app.add_middleware(GlobalRateLimitMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -183,6 +206,23 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Browser clients must be told these exist before they can read them.
+    expose_headers=[
+        "Retry-After",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "X-RateLimit-Scope",
+    ],
+)
+
+# Reject requests whose Host header is not a known deployment host. This blocks
+# host-header poisoning of absolute URLs (for example FastAPI's trailing-slash
+# redirects) while still allowing Vercel preview domains and local health checks.
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=settings.ALLOWED_HOSTS,
+    www_redirect=False,
 )
 
 app.add_middleware(SecurityHeadersMiddleware)

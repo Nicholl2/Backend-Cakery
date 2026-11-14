@@ -24,6 +24,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.core.service_keys import SERVICE_BUCKET_PREFIX, service_bucket_from_request
+
 logger = logging.getLogger(__name__)
 
 # ── API DOCS ─────────────────────────────────────────────────────────────────
@@ -232,11 +234,24 @@ class DocsProtectionMiddleware:
 def get_rate_limit_key(request: Request) -> str:
     """Return the rate-limit bucket key for a request.
 
-    By default the connecting peer address is used (Uvicorn rewrites it from
-    ``X-Forwarded-For`` for trusted proxies). ``TRUSTED_CLIENT_IP_HEADER`` is an
-    explicit opt-in for deployments where the edge proxy overwrites a single
-    header with the real client IP (for example ``CF-Connecting-IP``).
+    Precedence:
+
+    1. A valid internal service credential (``X-Service-Key`` / ``service_key``
+       / ``X-Internal-Key``) gets its own ``service:<name>`` bucket. Internal
+       services call the API from a single container address, so keying them by
+       IP would make every customer of that service share one quota.
+    2. ``TRUSTED_CLIENT_IP_HEADER`` when the edge proxy overwrites a single
+       header with the real client IP (for example ``CF-Connecting-IP``).
+    3. The connecting peer address (Uvicorn rewrites it from
+       ``X-Forwarded-For`` for trusted proxies).
+
+    Invalid credentials never reach step 1, so a forged key cannot obtain a
+    fresh bucket.
     """
+    service_bucket = service_bucket_from_request(request)
+    if service_bucket:
+        return service_bucket
+
     header_name = (getattr(_settings(), "trusted_client_ip_header", "") or "").strip().lower()
     if header_name:
         values = request.headers.getlist(header_name)
@@ -249,6 +264,15 @@ def get_rate_limit_key(request: Request) -> str:
     if client and client.host:
         return str(client.host)
     return "unknown"
+
+
+def get_rate_limit_scope(request: Request) -> str:
+    """Return ``"service"`` or ``"ip"`` for the bucket this request uses.
+
+    Exposed as ``X-RateLimit-Scope`` on 429 responses so clients can tell the
+    limiter apart from business-level 429s without parsing the message text.
+    """
+    return "service" if get_rate_limit_key(request).startswith(SERVICE_BUCKET_PREFIX) else "ip"
 
 
 def _settings():

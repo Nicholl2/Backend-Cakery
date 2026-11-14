@@ -6,7 +6,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-from app.core.rate_limiter import limiter, RATE_ORDER_CREATE, RATE_ORDER_STATUS_UPDATE
+from app.core.rate_limiter import (
+    limiter,
+    RATE_ORDER_CREATE,
+    RATE_ORDER_STATUS_UPDATE,
+    RATE_SERVICE_ORDER_CREATE,
+    service_aware,
+)
 
 from app.core.database import get_db
 from app.api.dependencies import (
@@ -187,7 +193,7 @@ async def list_seller_orders(
 @router.post("", response_model=OrderOut, status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_service_scope("orders:create"))],
              summary="Buat order baru — dipanggil oleh chatbot")
-@limiter.limit(RATE_ORDER_CREATE)
+@limiter.limit(service_aware(RATE_ORDER_CREATE, RATE_SERVICE_ORDER_CREATE))
 async def create_order(
     request: Request,
     data: OrderCreate,

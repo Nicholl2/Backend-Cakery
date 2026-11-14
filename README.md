@@ -254,11 +254,44 @@ Every response carries `X-Content-Type-Options: nosniff`,
 for API responses, framing-only for docs pages). `Strict-Transport-Security`
 is added only when the request is served over HTTPS.
 
-The global rate limit (`SlowAPIMiddleware`, 60 requests/minute per IP per path)
-applies to undecorated routes; routes with `@limiter.limit(...)` keep their
-stricter limits. Static files are not counted. Set
-`TRUSTED_CLIENT_IP_HEADER` only when the edge proxy overwrites a single header
-with the real client IP (for example `CF-Connecting-IP`).
+The global rate limit (`SlowAPIMiddleware`, 60 requests/minute per bucket per
+path) applies to undecorated routes; routes with `@limiter.limit(...)` keep
+their stricter limits. Static files are not counted.
+
+A bucket is normally the client IP, but a request carrying a **valid internal
+service credential** (`X-Service-Key` or `service_key`) uses its own
+`service:<name>` bucket instead. This matters because internal services such as
+the chatbot call the API from one container address: keying them by IP would
+make every one of their customers share a single quota. Routes that are called
+by services use `service_aware(default, service)` to give them a larger quota
+(orders and payments: 60/minute instead of 5/minute; payment status polling:
+240/minute instead of 60/minute). A forged or unknown key does **not** get a
+service bucket; it stays on the IP bucket, so it cannot be used to bypass
+limits.
+
+429 responses carry `X-RateLimit-Scope: ip|service` plus `Retry-After`,
+`X-RateLimit-Limit/Remaining/Reset` (all exposed to browsers through CORS).
+The JSON body keeps SlowAPI's default shape, so clients should branch on the
+scope header rather than on the message text.
+
+`TRUSTED_CLIENT_IP_HEADER` is only needed when the edge proxy overwrites a
+single header with the real client IP. **With Cloudflare Tunnel, leave it
+empty**: `cloudflared` is the trusted proxy, nginx appends its container address
+to `X-Forwarded-For`, and Uvicorn (started with
+`--forwarded-allow-ips=172.16.0.0/12`) then picks the real client address from
+the rightmost untrusted entry. Configuring `set_real_ip_from` with Cloudflare's
+public ranges behind a tunnel does not match `cloudflared` and would overwrite
+`X-Forwarded-For` with the container address, collapsing every visitor into one
+quota.
+
+Every request must also carry a known `Host` header
+(`TrustedHostMiddleware`): requests for other hosts get `400 Invalid host
+header`. The defaults cover `toticakery.web.id`, `*.toticakery.web.id`,
+`backend-cakery.vercel.app`, `*.vercel.app` (preview deployments),
+`localhost`, `127.0.0.1`, `test`, `testserver`, `backend`, and
+`host.docker.internal`. Override with `ALLOWED_HOSTS` when a monitor, internal
+service, or extra domain calls the API through a different host name. Entries
+are host names only (no port) and support a leading `*.` wildcard.
 
 ---
 

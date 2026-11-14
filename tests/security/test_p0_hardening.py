@@ -21,6 +21,12 @@ from app.core.rate_limiter import limiter
 from app.main import app
 
 
+def _docs_headers() -> dict[str, str]:
+    """Docs are token-protected when DOCS_ACCESS_TOKEN is configured."""
+    token = (settings.docs_access_token or "").strip()
+    return {"X-Docs-Token": token} if token else {}
+
+
 async def _page(request):
     return PlainTextResponse("ok")
 
@@ -62,7 +68,7 @@ async def test_security_headers_present_on_api_response():
 async def test_security_headers_are_present_on_docs_and_rate_limit_responses():
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/docs")
+        response = await client.get("/docs", headers=_docs_headers())
 
     assert response.status_code == 200
     assert response.headers["x-frame-options"] == "DENY"
@@ -197,9 +203,9 @@ def test_rate_limit_key_trusted_header_is_opt_in_and_validated(monkeypatch):
 # ── GLOBAL RATE LIMITING ─────────────────────────────────────────────────────
 
 def test_rate_limit_middleware_is_registered():
-    from slowapi.middleware import SlowAPIMiddleware
+    from app.core.rate_limit_middleware import GlobalRateLimitMiddleware
 
-    assert SlowAPIMiddleware in [middleware.cls for middleware in app.user_middleware]
+    assert GlobalRateLimitMiddleware in [middleware.cls for middleware in app.user_middleware]
     assert SecurityHeadersMiddleware in [middleware.cls for middleware in app.user_middleware]
 
 
@@ -212,7 +218,7 @@ async def test_undecorated_route_is_rate_limited():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             statuses = []
             for _ in range(66):
-                response = await client.get("/openapi.json")
+                response = await client.get("/openapi.json", headers=_docs_headers())
                 statuses.append(response.status_code)
 
         assert statuses[0] == 200
@@ -222,7 +228,7 @@ async def test_undecorated_route_is_rate_limited():
 
         transport = httpx.ASGITransport(app=app, client=("203.0.113.210", 4321))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            blocked = await client.get("/openapi.json")
+            blocked = await client.get("/openapi.json", headers=_docs_headers())
         assert blocked.status_code == 429
         assert "retry-after" in blocked.headers
         # Error responses must keep the hardening headers too.

@@ -6,10 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 from app.core.database import get_db
 from app.core.security import decode_token
+from app.core.service_keys import internal_key_matches, service_scopes_for_key
 from app.repositories import user_repo
 from typing import Optional
 import logging
-import hmac
 
 logger = logging.getLogger(__name__)
 
@@ -120,30 +120,8 @@ class AuthIdentity:
         return scope in self.service_scopes
 
 
-_SERVICE_SCOPE_KEYS = {
-    "service_api_key": {"orders:create", "payments:create"},
-    "service_orders_read_key": {"orders:read"},
-    "service_orders_cancel_key": {"orders:cancel"},
-    "service_customers_key": {"customers:manage"},
-    "service_refund_key": {"refunds:request"},
-    "service_payment_status_key": {"payments:read"},
-    "service_financial_summary_key": {"reports:summary"},
-    "service_owner_numbers_key": {"owners:read"},
-    "service_settlement_key": {"settlements:check"},
-    "service_wa_verification_key": {"identity:verify"},
-}
-
-
 def _service_scopes_for_key(candidate: Optional[str]) -> set[str]:
-    if not candidate:
-        return set()
-    matched = []
-    for setting_name, configured_scopes in _SERVICE_SCOPE_KEYS.items():
-        configured = getattr(settings, setting_name, "")
-        if configured and hmac.compare_digest(candidate, configured):
-            matched.append(configured_scopes)
-    # Duplicated secrets fail closed instead of silently combining capabilities.
-    return set(matched[0]) if len(matched) == 1 else set()
+    return service_scopes_for_key(candidate)
 
 
 def require_service_scope(scope: str):
@@ -274,12 +252,7 @@ async def require_wa_internal_key(
 ) -> None:
     """Validate chatbot/internal-service identity. Accepts X-Service-Key or X-Internal-Key."""
     is_service_ok = "identity:verify" in _service_scopes_for_key(x_service_key)
-    is_internal_ok = bool(
-        x_internal_key
-        and settings.chatbot_internal_key  # guard: reject if config is blank
-        and hmac.compare_digest(x_internal_key, settings.chatbot_internal_key)
-    )
-    if not (is_service_ok or is_internal_ok):
+    if not (is_service_ok or internal_key_matches(x_internal_key)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid service or internal key"

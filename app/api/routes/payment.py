@@ -10,7 +10,15 @@ logger = logging.getLogger(__name__)
 
 from app.core.database import get_db
 from app.core.security import decode_token
-from app.core.rate_limiter import limiter, RATE_PAYMENT_CREATE, RATE_WEBHOOK
+from app.core.rate_limiter import (
+    limiter,
+    RATE_PAYMENT_CREATE,
+    RATE_PAYMENT_STATUS,
+    RATE_SERVICE_PAYMENT_CREATE,
+    RATE_SERVICE_PAYMENT_STATUS,
+    RATE_WEBHOOK,
+    service_aware,
+)
 from app.api.dependencies import (
     get_auth_identity_optional_service_or_jwt,
     AuthIdentity,
@@ -43,7 +51,7 @@ class PaymentChargeRequest(BaseModel):
 # 1. Endpoint POST /payments (secured via Service Key OR Buyer JWT)
 @router.post("", status_code=status.HTTP_201_CREATED,
              summary="Charge payment via Midtrans Core API (Service Key / Buyer JWT)")
-@limiter.limit(RATE_PAYMENT_CREATE)
+@limiter.limit(service_aware(RATE_PAYMENT_CREATE, RATE_SERVICE_PAYMENT_CREATE))
 async def create_midtrans_payment(
     request: Request,
     data: PaymentChargeRequest,
@@ -122,7 +130,9 @@ async def create_manual_payment(
 # 2. Endpoint GET /payments/{order_id}/status (secured via Service Key OR Buyer JWT)
 @router.get("/{order_id}/status",
             summary="Get latest payment status of an order")
+@limiter.limit(service_aware(RATE_PAYMENT_STATUS, RATE_SERVICE_PAYMENT_STATUS))
 async def get_order_payment_status(
+    request: Request,
     order_id: int,
     nomor_wa: Optional[str] = Query(None, description="Required for service requests"),
     auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),

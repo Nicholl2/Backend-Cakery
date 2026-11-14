@@ -4,6 +4,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
+# Host header allowlist used by TrustedHostMiddleware. Ports are not included;
+# Starlette strips the request port before matching. A leading "*." wildcard is
+# supported (e.g. "*.toticakery.web.id").
+DEFAULT_ALLOWED_HOSTS = (
+    "toticakery.web.id,*.toticakery.web.id,"
+    "backend-cakery.vercel.app,*.vercel.app,"
+    "localhost,127.0.0.1,test,testserver,"
+    "backend,host.docker.internal"
+)
+
 
 class Settings(BaseSettings):
     """Application settings from environment variables"""
@@ -48,6 +58,9 @@ class Settings(BaseSettings):
     # Optional: single header written by the edge proxy with the real client IP
     # (e.g. "CF-Connecting-IP"). Leave empty unless the proxy overwrites it.
     trusted_client_ip_header: str = ""
+    # Host header allowlist (comma-separated, no ports). Leading "*." wildcards
+    # are supported. Empty falls back to DEFAULT_ALLOWED_HOSTS.
+    allowed_hosts: str = DEFAULT_ALLOWED_HOSTS
 
     # SMTP / Email configuration
     smtp_host: str = ""
@@ -120,6 +133,13 @@ class Settings(BaseSettings):
     @property
     def midtrans_api_url(self) -> str:
         return "https://api.midtrans.com/v2" if self.midtrans_is_production else "https://api.sandbox.midtrans.com/v2"
+
+    @property
+    def ALLOWED_HOSTS(self) -> list[str]:
+        hosts = [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
+        if hosts:
+            return hosts
+        return [host.strip() for host in DEFAULT_ALLOWED_HOSTS.split(",") if host.strip()]
 
     # Menggunakan model_config (Standar Pydantic v2 untuk membaca .env)
     model_config = SettingsConfigDict(
