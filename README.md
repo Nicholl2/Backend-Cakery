@@ -254,9 +254,19 @@ Every response carries `X-Content-Type-Options: nosniff`,
 for API responses, framing-only for docs pages). `Strict-Transport-Security`
 is added only when the request is served over HTTPS.
 
-The global rate limit (`SlowAPIMiddleware`, 60 requests/minute per bucket per
-path) applies to undecorated routes; routes with `@limiter.limit(...)` keep
-their stricter limits. Static files are not counted.
+The global rate limit (60 requests/minute per bucket per path) is enforced by
+`GlobalRateLimitMiddleware`, which also sees routes registered through
+`include_router`. Undecorated routes use it directly; routes with
+`@limiter.limit(...)` keep their stricter limits, and their **IP** bucket still
+counts requests rejected by an auth dependency (for example a 401 flood), while
+service buckets keep the decorator's larger quota. Static files are not counted.
+
+Because the limiter emits `X-RateLimit-*` headers, every handler decorated with
+`@limiter.limit(...)` **must declare `response: Response`** as a parameter.
+SlowAPI injects the headers into that object after the handler returns; without
+it, a handler that returns a model or dict raises *after* completing its work
+and the client receives `500`. `tests/security/test_p0_hardening.py` fails when
+a decorated endpoint is missing the parameter.
 
 A bucket is normally the client IP, but a request carrying a **valid internal
 service credential** (`X-Service-Key` or `service_key`) uses its own
@@ -275,13 +285,6 @@ through CORS). **Business 429s** (for example an exhausted OTP attempt counter,
 which is also returned as 429) never carry `X-RateLimit-Scope`, so clients can
 branch on that header instead of on the message body. The JSON body keeps
 SlowAPI's default shape.
-
-429 responses carry `X-RateLimit-Scope: ip|service` plus `Retry-After`,
-`X-RateLimit-Limit/Remaining/Reset` (all exposed to browsers through CORS).
-**Business 429s** (for example an exhausted OTP attempt counter, which is also
-returned as 429) never carry `X-RateLimit-Scope`, so clients can branch on that
-header instead of on the message body. The JSON body keeps SlowAPI's default
-shape.
 
 `TRUSTED_CLIENT_IP_HEADER` is only needed when the edge proxy overwrites a
 single header with the real client IP. **With Cloudflare Tunnel, leave it

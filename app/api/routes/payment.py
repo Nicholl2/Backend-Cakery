@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Optional
 import logging
-from fastapi import APIRouter, Depends, Request, status, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, Request, Response, status, HTTPException, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
@@ -54,6 +54,7 @@ class PaymentChargeRequest(BaseModel):
 @limiter.limit(service_aware(RATE_PAYMENT_CREATE, RATE_SERVICE_PAYMENT_CREATE))
 async def create_midtrans_payment(
     request: Request,
+    response: Response,
     data: PaymentChargeRequest,
     auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
     db: AsyncSession = Depends(get_db)
@@ -133,6 +134,7 @@ async def create_manual_payment(
 @limiter.limit(service_aware(RATE_PAYMENT_STATUS, RATE_SERVICE_PAYMENT_STATUS))
 async def get_order_payment_status(
     request: Request,
+    response: Response,
     order_id: int,
     nomor_wa: Optional[str] = Query(None, description="Required for service requests"),
     auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
@@ -247,6 +249,7 @@ async def get_order_payment_status(
 @limiter.limit(RATE_WEBHOOK)
 async def handle_midtrans_notification(
     request: Request,
+    response: Response,
     payload: dict,
     db: AsyncSession = Depends(get_db)
 ):

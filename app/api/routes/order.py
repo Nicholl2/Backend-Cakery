@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request, status, HTTPException, Header
+from fastapi import APIRouter, Depends, Query, Request, Response, status, HTTPException, Header
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
@@ -61,6 +61,7 @@ router = APIRouter(
 @limiter.limit(RATE_ORDER_CREATE)
 async def create_order_for_buyer(
     request: Request,
+    response: Response,
     data: BuyerOrderCreate,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", min_length=1, max_length=200),
     buyer: Buyer = Depends(get_current_buyer),
@@ -198,6 +199,7 @@ async def list_seller_orders(
 @limiter.limit(service_aware(RATE_ORDER_CREATE, RATE_SERVICE_ORDER_CREATE))
 async def create_order(
     request: Request,
+    response: Response,
     data: OrderCreate,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", min_length=1, max_length=200),
     db: AsyncSession = Depends(get_db),
@@ -223,6 +225,7 @@ async def create_order(
 @limiter.limit(RATE_ORDER_CREATE)
 async def create_custom_order(
     request: Request,
+    response: Response,
     data: CustomOrderCreate,
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
@@ -242,6 +245,7 @@ async def create_custom_order(
 @limiter.limit(service_aware(RATE_ORDER_READ, RATE_SERVICE_ORDER_READ))
 async def get_latest_order(
     request: Request,
+    response: Response,
     nomor_wa: str = Query(..., description="Nomor WhatsApp customer"),
     db: AsyncSession = Depends(get_db),
 ) -> OrderOut:
@@ -311,6 +315,7 @@ async def get_seller_order_detail(
 async def update_order_status(
     order_id: int,
     request: Request,
+    response: Response,
     data: OrderStatusUpdate,
     auth: AuthIdentity = Depends(get_auth_identity_optional_service_or_jwt),
     db: AsyncSession = Depends(get_db),

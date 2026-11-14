@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request, status, HTTPException
+from fastapi import APIRouter, Depends, Request, Response, status, HTTPException
 from fastapi.security.http import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
@@ -34,6 +34,7 @@ router = APIRouter(
 @limiter.limit(RATE_AUTH_LOGIN)
 async def bootstrap(
     request: Request,
+    response: Response,
     data: UserBootstrap,
     db: AsyncSession = Depends(get_db)
 ) -> UserOut:
@@ -48,6 +49,7 @@ async def bootstrap(
 @limiter.limit(RATE_AUTH_LOGIN)
 async def login(
     request: Request,
+    response: Response,
     login_data: UserLogin,
     db: AsyncSession = Depends(get_db)
 ) -> Token:
@@ -89,6 +91,7 @@ async def logout(
 @limiter.limit(RATE_AUTH_VERIFY)
 async def verify_wa_start(
     request: Request,
+    response: Response,
     data: WAVerifyStartRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -121,6 +124,7 @@ async def verify_wa_status(
 @limiter.limit(RATE_AUTH_LOGIN)
 async def buyer_register(
     request: Request,
+    response: Response,
     data: BuyerRegisterRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -145,6 +149,7 @@ async def buyer_register(
 @limiter.limit(RATE_AUTH_LOGIN)
 async def buyer_login(
     request: Request,
+    response: Response,
     data: BuyerLoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -170,6 +175,7 @@ async def buyer_login(
 @limiter.limit(RATE_AUTH_LOGIN)
 async def buyer_login_phone(
     request: Request,
+    response: Response,
     data: BuyerLoginPhoneRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -181,6 +187,7 @@ async def buyer_login_phone(
 @limiter.limit(RATE_AUTH_LOGIN)
 async def buyer_login_otp(
     request: Request,
+    response: Response,
     data: BuyerLoginOTPRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -198,6 +205,7 @@ async def buyer_login_otp(
 @limiter.limit(RATE_AUTH_VERIFY)
 async def buyer_reset_password(
     request: Request,
+    response: Response,
     data: BuyerResetPasswordRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -209,6 +217,7 @@ async def buyer_reset_password(
 @limiter.limit(RATE_AUTH_VERIFY)
 async def buyer_forgot_password(
     request: Request,
+    response: Response,
     data: BuyerForgotPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ):
@@ -225,6 +234,7 @@ async def buyer_forgot_password(
 @limiter.limit(RATE_AUTH_VERIFY)
 async def buyer_verify_reset_otp(
     request: Request,
+    response: Response,
     data: BuyerVerifyResetOTPRequest,
     db: AsyncSession = Depends(get_db),
 ):
@@ -239,6 +249,7 @@ async def buyer_verify_reset_otp(
 @limiter.limit(RATE_AUTH_VERIFY)
 async def buyer_reset_password_email(
     request: Request,
+    response: Response,
     data: BuyerResetPasswordEmailRequest,
     db: AsyncSession = Depends(get_db),
 ):
@@ -257,6 +268,7 @@ async def buyer_reset_password_email(
 @limiter.limit(RATE_AUTH_VERIFY)
 async def seller_forgot_password_request(
     request: Request,
+    response: Response,
     data: SellerForgotPasswordRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -268,6 +280,7 @@ async def seller_forgot_password_request(
 @limiter.limit(RATE_AUTH_VERIFY)
 async def seller_forgot_password_verify(
     request: Request,
+    response: Response,
     data: SellerForgotPasswordVerifyRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -279,6 +292,7 @@ async def seller_forgot_password_verify(
 @limiter.limit(RATE_AUTH_VERIFY)
 async def seller_reset_password(
     request: Request,
+    response: Response,
     data: SellerResetPasswordRequest,
     db: AsyncSession = Depends(get_db)
 ):

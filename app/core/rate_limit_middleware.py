@@ -44,18 +44,29 @@ from app.core.service_keys import SERVICE_BUCKET_PREFIX
 
 logger = logging.getLogger(__name__)
 
-RouteTable = list[tuple[object, object]]
+RouteTable = list[tuple[object, Optional[frozenset[str]], object]]
+
+
+def _methods_of(route: object) -> Optional[frozenset[str]]:
+    """HTTP methods handled by a route, or ``None`` when it handles them all."""
+    methods = getattr(route, "methods", None)
+    if not methods:
+        return None
+    return frozenset(str(method).upper() for method in methods)
 
 
 def _collect_routes(routes: Iterable) -> RouteTable:
-    """Flatten the route tree into ``(path_regex, endpoint)`` pairs."""
+    """Flatten the route tree into ``(path_regex, methods, endpoint)`` triples."""
     table: RouteTable = []
     for route in routes:
         contexts = getattr(route, "effective_route_contexts", None)
         if callable(contexts):
             # FastAPI ``_IncludedRouter``: one wrapper, many real routes.
             try:
-                table.extend((ctx.path_regex, ctx.endpoint) for ctx in contexts())
+                table.extend(
+                    (ctx.path_regex, _methods_of(ctx), ctx.endpoint)
+                    for ctx in contexts()
+                )
             except Exception:  # pragma: no cover - defensive, see fallback below
                 logger.warning("Could not flatten included router for rate limiting")
             continue
@@ -63,7 +74,7 @@ def _collect_routes(routes: Iterable) -> RouteTable:
         endpoint = getattr(route, "endpoint", None)
         path_regex = getattr(route, "path_regex", None)
         if endpoint is not None and path_regex is not None:
-            table.append((path_regex, endpoint))
+            table.append((path_regex, _methods_of(route), endpoint))
             continue
 
         if isinstance(route, Mount):
@@ -81,14 +92,26 @@ def _collect_routes(routes: Iterable) -> RouteTable:
 def resolve_endpoint(table: RouteTable, scope: dict) -> Optional[object]:
     """Return the endpoint that will handle ``scope``, or ``None``.
 
-    Method is intentionally ignored: a request to the wrong method on a known
-    path still costs the server work and should share the path's bucket.
+    Several routes can share one path (``GET /orders`` and ``POST /orders``).
+    Matching on the method first picks the handler that will actually run, so
+    its own limits and service bucket are honoured; a method that no route
+    accepts falls back to the first path match, so wrong-method requests still
+    share the path's bucket. ``HEAD`` is served by ``GET`` routes.
     """
     path = scope.get("path") or ""
-    for path_regex, endpoint in table:
-        if path_regex.match(path):
+    method = str(scope.get("method") or "").upper()
+    if method == "HEAD":
+        method = "GET"
+
+    fallback: Optional[object] = None
+    for path_regex, methods, endpoint in table:
+        if not path_regex.match(path):
+            continue
+        if methods is None or method in methods:
             return endpoint
-    return None
+        if fallback is None:
+            fallback = endpoint
+    return fallback
 
 
 def _endpoint_name(endpoint: object) -> str:

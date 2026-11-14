@@ -1,6 +1,6 @@
 import logging
 import re
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -40,6 +40,7 @@ async def read_store_customization(
 @limiter.limit("30/minute")
 async def search_public(
     request: Request,
+    response: Response,
     q: str = Query(..., min_length=1, max_length=80),
     db: AsyncSession = Depends(get_db),
 ) -> PublicSearchResponse:

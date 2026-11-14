@@ -1,7 +1,7 @@
 import logging
 from datetime import timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,6 +83,7 @@ async def get_email_sender_settings(db: AsyncSession = Depends(get_db)) -> Email
 @limiter.limit("5/minute")
 async def update_email_sender_settings(
     request: Request,
+    response: Response,
     data: EmailSenderSettingsUpdate,
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
@@ -108,6 +109,7 @@ async def update_email_sender_settings(
 @limiter.limit("5/minute")
 async def update_store_customization_settings(
     request: Request,
+    response: Response,
     data: StoreCustomizationPatch,
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
@@ -128,6 +130,7 @@ async def update_store_customization_settings(
 @limiter.limit("5/minute")
 async def upload_store_customization_hero_image(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
 ) -> StoreHeroImageOut:
     secure_url = await store_customization_service.upload_hero_image(file)
