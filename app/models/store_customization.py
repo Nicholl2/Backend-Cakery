@@ -1,4 +1,4 @@
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, Text
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, JSON, Text
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -18,6 +18,9 @@ class StoreCustomization(Base):
     hero_subtitle_id = Column(Text, nullable=True)
     hero_subtitle_en = Column(Text, nullable=True)
     hero_image_url = Column(Text, nullable=True)
+    # Ordered homepage banner URLs. ``hero_image_url`` mirrors the first entry
+    # so clients that only know the single-image field keep working.
+    hero_image_urls = Column(JSON, nullable=True)
     about_title_id = Column(Text, nullable=True)
     about_title_en = Column(Text, nullable=True)
     about_description_id = Column(Text, nullable=True)

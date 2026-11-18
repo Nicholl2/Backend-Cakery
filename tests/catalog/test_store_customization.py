@@ -218,3 +218,141 @@ async def test_owner_banner_upload_returns_secure_cloudinary_url(store_customiza
     assert response.json() == {
         "hero_image_url": "https://res.cloudinary.com/mrje22up/image/upload/new-banner.jpg"
     }
+
+
+# ── MULTI-IMAGE HERO CAROUSEL ────────────────────────────────────────────────
+
+CLOUDINARY_BASE = "https://res.cloudinary.com/mrje22up/image/upload"
+
+
+def _banner(name: str) -> str:
+    return f"{CLOUDINARY_BASE}/{name}"
+
+
+@pytest.mark.asyncio
+async def test_public_response_exposes_legacy_image_as_single_item_list(store_customization_client):
+    """Rows written before the JSON column keep rendering as a one-item carousel."""
+    response = await store_customization_client["client"].get("/public/store-customization")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hero_image_url"] == f"{CLOUDINARY_BASE}/test-banner.jpg"
+    assert body["hero_image_urls"] == [f"{CLOUDINARY_BASE}/test-banner.jpg"]
+
+
+@pytest.mark.asyncio
+async def test_owner_can_save_ordered_hero_images(store_customization_client):
+    urls = [_banner("banner-c.jpg"), _banner("banner-a.jpg"), _banner("banner-b.jpg")]
+
+    response = await store_customization_client["client"].patch(
+        "/settings/store-customization",
+        json={"hero_image_urls": urls},
+        headers=store_customization_client["owner_headers"],
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hero_image_urls"] == urls
+    assert body["hero_image_url"] == urls[0]
+
+    # The public endpoint and the legacy column agree with the stored order.
+    public = await store_customization_client["client"].get("/public/store-customization")
+    assert public.json()["hero_image_urls"] == urls
+
+    async with store_customization_client["session_factory"]() as db:
+        row = await db.get(StoreCustomization, 1)
+        assert row.hero_image_urls == urls
+        assert row.hero_image_url == urls[0]
+
+
+@pytest.mark.asyncio
+async def test_hero_image_duplicates_are_collapsed(store_customization_client):
+    first, second = _banner("banner-a.jpg"), _banner("banner-b.jpg")
+
+    response = await store_customization_client["client"].patch(
+        "/settings/store-customization",
+        json={"hero_image_urls": [first, first, second]},
+        headers=store_customization_client["owner_headers"],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["hero_image_urls"] == [first, second]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty_value", [[], None])
+async def test_owner_can_clear_hero_images(store_customization_client, empty_value):
+    response = await store_customization_client["client"].patch(
+        "/settings/store-customization",
+        json={"hero_image_urls": empty_value},
+        headers=store_customization_client["owner_headers"],
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hero_image_urls"] == []
+    assert body["hero_image_url"] is None
+
+    async with store_customization_client["session_factory"]() as db:
+        row = await db.get(StoreCustomization, 1)
+        assert row.hero_image_urls == []
+        assert row.hero_image_url is None
+
+
+@pytest.mark.asyncio
+async def test_hero_image_limit_allows_five(store_customization_client):
+    urls = [_banner(f"banner-{i}.jpg") for i in range(5)]
+
+    response = await store_customization_client["client"].patch(
+        "/settings/store-customization",
+        json={"hero_image_urls": urls},
+        headers=store_customization_client["owner_headers"],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["hero_image_urls"] == urls
+
+
+@pytest.mark.asyncio
+async def test_legacy_single_image_patch_updates_the_list(store_customization_client):
+    url = _banner("replacement.jpg")
+
+    response = await store_customization_client["client"].patch(
+        "/settings/store-customization",
+        json={"hero_image_url": url},
+        headers=store_customization_client["owner_headers"],
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hero_image_url"] == url
+    assert body["hero_image_urls"] == [url]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # More than the backend cap.
+        {"hero_image_urls": [_banner(f"banner-{i}.jpg") for i in range(6)]},
+        # A bare string is not a list.
+        {"hero_image_urls": _banner("banner.jpg")},
+        # Non-Cloudinary and script URLs are refused item by item.
+        {"hero_image_urls": ["https://example.test/banner.jpg"]},
+        {"hero_image_urls": ["javascript:alert(1)"]},
+        {"hero_image_urls": [{"url": _banner("banner.jpg")}]},
+        # Per-item length limit still applies.
+        {"hero_image_urls": [f"{CLOUDINARY_BASE}/{'a' * 2050}.jpg"]},
+        # Sending both shapes is ambiguous.
+        {"hero_image_urls": [_banner("banner.jpg")], "hero_image_url": None},
+        {"hero_image_urls": [_banner("banner.jpg")], "hero_image_url": _banner("banner.jpg")},
+    ],
+)
+async def test_hero_image_list_rejects_invalid_input(store_customization_client, payload):
+    response = await store_customization_client["client"].patch(
+        "/settings/store-customization",
+        json=payload,
+        headers=store_customization_client["owner_headers"],
+    )
+
+    assert response.status_code == 422

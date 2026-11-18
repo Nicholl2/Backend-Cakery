@@ -1,9 +1,12 @@
 import re
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.config import settings
+
+MAX_HERO_IMAGES = 5
+MAX_HERO_IMAGE_URL_LENGTH = 2048
 
 
 class _StrictSchema(BaseModel):
@@ -28,7 +31,7 @@ def _plain_text(value: str | None, *, field_name: str) -> str | None:
 def _validate_cloudinary_image(value: str | None) -> str | None:
     if value is None:
         return None
-    if not isinstance(value, str) or len(value) > 2048:
+    if not isinstance(value, str) or len(value) > MAX_HERO_IMAGE_URL_LENGTH:
         raise ValueError("hero_image_url tidak valid.")
     parsed = urlsplit(value.strip())
     if (
@@ -44,6 +47,25 @@ def _validate_cloudinary_image(value: str | None) -> str | None:
     if cloud_name and not parsed.path.startswith(f"/{cloud_name}/image/upload/"):
         raise ValueError("URL gambar harus berasal dari akun Cloudinary toko.")
     return value.strip()
+
+
+def _validate_hero_images(value: list[str] | None) -> list[str] | None:
+    """Validate every carousel entry and keep the first occurrence of each URL."""
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError("hero_image_urls harus berupa daftar URL gambar.")
+    if len(value) > MAX_HERO_IMAGES:
+        raise ValueError(f"Maksimal {MAX_HERO_IMAGES} gambar banner.")
+
+    urls: list[str] = []
+    for item in value:
+        validated = _validate_cloudinary_image(item)
+        if validated is None:
+            raise ValueError("Setiap item hero_image_urls harus berupa URL gambar.")
+        if validated not in urls:
+            urls.append(validated)
+    return urls
 
 
 def _validate_google_maps_embed(value: str | None) -> str | None:
@@ -85,7 +107,8 @@ class StoreCustomizationContentPatch(_StrictSchema):
 
 class StoreCustomizationPatch(_StrictSchema):
     content: StoreCustomizationContentPatch | None = None
-    hero_image_url: str | None = Field(None, max_length=2048)
+    hero_image_url: str | None = Field(None, max_length=MAX_HERO_IMAGE_URL_LENGTH)
+    hero_image_urls: list[str] | None = Field(None, max_length=MAX_HERO_IMAGES)
     store_address: str | None = Field(None, max_length=500)
     maps_embed_url: str | None = Field(None, max_length=2048)
 
@@ -93,6 +116,18 @@ class StoreCustomizationPatch(_StrictSchema):
     @classmethod
     def validate_hero_image(cls, value):
         return _validate_cloudinary_image(value)
+
+    @field_validator("hero_image_urls", mode="before")
+    @classmethod
+    def validate_hero_image_list(cls, value):
+        return _validate_hero_images(value)
+
+    @model_validator(mode="after")
+    def reject_ambiguous_hero_images(self):
+        # Presence, not truthiness: an explicit null is still a choice.
+        if "hero_image_url" in self.model_fields_set and "hero_image_urls" in self.model_fields_set:
+            raise ValueError("Kirim hero_image_urls atau hero_image_url, bukan keduanya.")
+        return self
 
     @field_validator("maps_embed_url", mode="before")
     @classmethod
@@ -120,6 +155,7 @@ class StoreCustomizationContentOut(BaseModel):
 class StoreCustomizationOut(BaseModel):
     content: StoreCustomizationContentOut
     hero_image_url: str | None
+    hero_image_urls: list[str] = Field(default_factory=list)
     store_address: str | None
     maps_embed_url: str | None
     updated_at: str

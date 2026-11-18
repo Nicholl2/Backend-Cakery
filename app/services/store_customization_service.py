@@ -17,7 +17,22 @@ MAX_HERO_IMAGE_SIZE = 5 * 1024 * 1024
 ALLOWED_HERO_IMAGE_EXTENSIONS = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".webp": "webp"}
 
 
+def _hero_image_urls(row: StoreCustomization) -> list[str]:
+    """Ordered banner URLs, tolerating rows written before the JSON column."""
+    stored = row.hero_image_urls
+    if isinstance(stored, list):
+        urls = [url for url in stored if isinstance(url, str) and url]
+        if urls:
+            return urls
+    # Pre-migration rows only have the single-image field. Reading it as a
+    # one-item list keeps them rendering until the owner saves again.
+    if isinstance(row.hero_image_url, str) and row.hero_image_url:
+        return [row.hero_image_url]
+    return []
+
+
 def _to_response(row: StoreCustomization) -> StoreCustomizationOut:
+    hero_urls = _hero_image_urls(row)
     return StoreCustomizationOut(
         content=StoreCustomizationContentOut(
             id=StoreCustomizationLocaleOut(
@@ -33,7 +48,8 @@ def _to_response(row: StoreCustomization) -> StoreCustomizationOut:
                 about_description=row.about_description_en,
             ),
         ),
-        hero_image_url=row.hero_image_url,
+        hero_image_url=hero_urls[0] if hero_urls else None,
+        hero_image_urls=hero_urls,
         store_address=row.store_address,
         maps_embed_url=row.maps_embed_url,
         updated_at=row.updated_at.isoformat(),
@@ -76,12 +92,27 @@ async def update_store_customization(
         )
 
     content_changes = changes.pop("content", None)
+    hero_images_changed = "hero_image_urls" in changes
+    legacy_hero_changed = "hero_image_url" in changes
+    hero_image_urls = changes.pop("hero_image_urls", None)
+    legacy_hero_url = changes.pop("hero_image_url", None)
     if content_changes:
         for locale, fields in content_changes.items():
             if fields is None:
                 continue
             for field_name, value in fields.items():
                 setattr(row, f"{field_name}_{locale}", value)
+
+    if hero_images_changed:
+        normalized = list(hero_image_urls or [])
+        row.hero_image_urls = normalized
+        # Keep the legacy column as a write-through copy of the first image so
+        # an older client (or a rollback) still renders one banner.
+        row.hero_image_url = normalized[0] if normalized else None
+    elif legacy_hero_changed:
+        normalized = [legacy_hero_url] if legacy_hero_url else []
+        row.hero_image_urls = normalized
+        row.hero_image_url = normalized[0] if normalized else None
 
     for field_name, value in changes.items():
         setattr(row, field_name, value)
